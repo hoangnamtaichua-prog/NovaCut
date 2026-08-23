@@ -397,6 +397,8 @@ def start_generation():
             if not v_filters:
                 v_filters.append("[0:v]null[v_final]")
             else:
+                v_filters[-1] = re.sub(r'\[[a-zA-Z0-9_]+\]$', '[v_final]', v_filters[-1])
+
             # 3.6 AI Stem & Vocal Separation (Lọc bỏ giọng thoại cũ, giữ lại hiệu ứng SFX)
             stem_enabled = bool(dubbing.get('remove_original_vocals', False) or (isinstance(dubbing.get('stem_separation'), dict) and dubbing.get('stem_separation', {}).get('enabled')))
             stem_mode = 'ai_neural'
