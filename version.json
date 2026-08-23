@@ -1,7 +1,7 @@
 {
-  "version": "1.0.4",
+  "version": "1.0.5",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Bản cập nhật v1.0.4: Hiển thị trực quan cụm điều khiển Tách & Lọc Âm Gốc AI (Stem Separator) ngay trên giao diện Biên tập phim",
+  "changelog": "Bản cập nhật v1.0.5: Tối ưu hóa giao diện Tách Âm Thanh AI & Đèn báo cập nhật tự động",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 02:19:06"
+  "updated_at": "2026-08-24 02:26:56"
 }

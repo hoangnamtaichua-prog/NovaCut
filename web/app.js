@@ -10805,6 +10805,11 @@ const appUpdater = {
 
             if (data.has_update) {
                 // Có bản cập nhật mới
+                if (btnHeaderCheck) {
+                    btnHeaderCheck.style.borderColor = '#38bdf8';
+                    btnHeaderCheck.style.boxShadow = '0 0 12px rgba(56, 189, 248, 0.6)';
+                    btnHeaderCheck.innerHTML = `<span style="font-size: 13px;">🚀</span><span style="font-weight: 700; color: #38bdf8;">Cập nhật (v${data.latest_version})</span>`;
+                }
                 this.showUpdateModal(data);
             } else {
                 if (!silent) {
@@ -10816,7 +10821,7 @@ const appUpdater = {
                 showToast('Lỗi kiểm tra cập nhật: ' + err.message, 'error');
             }
         } finally {
-            if (!silent && btnHeaderCheck) {
+            if (!silent && btnHeaderCheck && !this.currentUpdateInfo?.has_update) {
                 btnHeaderCheck.disabled = false;
                 btnHeaderCheck.innerHTML = `<span style="font-size: 13px;">🚀</span><span style="font-weight: 600;">Cập nhật</span>`;
             }
