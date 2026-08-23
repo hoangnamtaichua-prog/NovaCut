@@ -7,8 +7,12 @@
 #include <stdbool.h>
 
 #ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #define NOGDI
+  #define NOUSER
   #include <windows.h>
-  #include <shellapi.h>
+  #include <direct.h>
+  #include "platform_open.h"
   static CRITICAL_SECTION g_log_lock;
   static void log_lock_init(void) { InitializeCriticalSection(&g_log_lock); }
   static void log_lock(void) { EnterCriticalSection(&g_log_lock); }
@@ -16,6 +20,7 @@
 #else
   #include <pthread.h>
   #include <unistd.h>   // getcwd
+  #include "platform_open.h"
   static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
   static void log_lock_init(void) { /* nothing */ }
   static void log_lock(void) { pthread_mutex_lock(&g_log_lock); }
@@ -49,8 +54,7 @@ static void ui_log_hook(const char *line) {
 static void get_working_dir(char *out, size_t outsz) {
   if (!out || outsz == 0) return;
 #ifdef _WIN32
-  DWORD n = GetCurrentDirectoryA((DWORD)outsz, out);
-  if (n == 0 || n >= (DWORD)outsz) { out[0] = '.'; out[1] = 0; }
+  if (!_getcwd(out, (int)outsz)) { out[0] = '.'; out[1] = 0; }
 #else
   if (!getcwd(out, outsz)) { out[0] = '.'; out[1] = 0; }
 #endif
@@ -64,18 +68,10 @@ static void open_folder_rel(const char *rel) {
 
 #ifdef _WIN32
   snprintf(full, sizeof(full), "%s\\%s", cwd, rel);
-  ShellExecuteA(NULL, "open", full, NULL, NULL, SW_SHOWNORMAL);
-#elif defined(__APPLE__)
-  snprintf(full, sizeof(full), "%s/%s", cwd, rel);
-  char cmd[4096];
-  snprintf(cmd, sizeof(cmd), "open \"%s\"", full);
-  system(cmd);
 #else
   snprintf(full, sizeof(full), "%s/%s", cwd, rel);
-  char cmd[4096];
-  snprintf(cmd, sizeof(cmd), "xdg-open \"%s\"", full);
-  system(cmd);
 #endif
+  platform_open_folder(full);
 }
 
 static bool draw_button(Font font, Rectangle r, const char *label, bool enabled, float fontSize) {
@@ -112,7 +108,7 @@ static DWORD WINAPI worker_thread(LPVOID p) {
   (void)p;
   g_running = 1;
   generator_set_log_hook(ui_log_hook);
-  g_last_rc = run_generation();
+  g_last_rc = run_generation(0, NULL);
   generator_set_log_hook(NULL);
   g_running = 0;
   return 0;
@@ -127,7 +123,7 @@ static void *worker_thread(void *p) {
   (void)p;
   g_running = 1;
   generator_set_log_hook(ui_log_hook);
-  g_last_rc = run_generation();
+  g_last_rc = run_generation(0, NULL);
   generator_set_log_hook(NULL);
   g_running = 0;
   return NULL;

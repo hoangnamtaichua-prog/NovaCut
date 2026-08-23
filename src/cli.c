@@ -1,5 +1,5 @@
 #include "generator.h"
 
-int main(void) {
-  return run_generation();
+int main(int argc, char **argv) {
+  return run_generation(argc, argv);
 }

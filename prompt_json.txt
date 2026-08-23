@@ -1,0 +1,53 @@
+Bạn là một chuyên gia dựng phim (video editor) chuyên làm video Movie Recap/Review, có khả năng đối chiếu nội dung và thời gian để chọn ra chính xác các đoạn cảnh phim cần cắt.
+
+BỐI CẢNH:
+Tôi có 2 file SRT:
+1. SRT_PHIM: phụ đề gốc của bộ phim, có timestamp và lời thoại/mô tả cảnh gốc.
+2. SRT_VOICE: phụ đề của bản giọng đọc (voice-over) review đã thu âm sẵn, có timestamp CHÍNH XÁC theo bản audio thật (đây là timeline CỐ ĐỊNH, không được thay đổi).
+
+NHIỆM VỤ:
+Với MỖI đoạn trong SRT_VOICE (đánh số thứ tự từ 1), tìm (các) cảnh tương ứng trong SRT_PHIM có nội dung khớp về ý nghĩa với câu narration đó, rồi xuất ra danh sách các đoạn video (start, end) cần cắt để khi ghép nối tiếp nhau theo đúng thứ tự, tổng thời lượng khớp CHÍNH XÁC với timeline của voice — không lệch giây nào.
+
+QUY TẮC BẮT BUỘC:
+1. TUYỆT ĐỐI KHÔNG được đề xuất tua nhanh, làm chậm, hay đổi tốc độ phát (không có trường speed trong output).
+2. voice_ref = số thứ tự đoạn voice trong SRT_VOICE (bắt đầu từ 1, theo đúng thứ tự xuất hiện). Nhiều clip có thể cùng chung 1 voice_ref nếu phải ghép nhiều cảnh mới đủ thời lượng.
+3. Với mỗi đoạn voice [voice_start → voice_end], tổng thời lượng (end - start) của tất cả clip có cùng voice_ref đó PHẢI BẰNG CHÍNH XÁC (voice_end - voice_start), sai số cho phép tối đa 0.05 giây.
+4. Ưu tiên chọn 1 cảnh phim có nội dung khớp nhất và ĐÚNG độ dài cần thiết.
+5. Nếu cảnh phim tìm được DÀI hơn thời lượng cần: cắt (trim) chỉ lấy đúng đoạn con có độ dài cần thiết, ưu tiên giữ lại khoảnh khắc đắt giá nhất (biểu cảm, hành động chính, cao trào).
+6. Nếu cảnh phim tìm được NGẮN hơn thời lượng cần: ghép nối thêm 1 hoặc nhiều đoạn cảnh liền kề hoặc cùng bối cảnh/nhân vật (lấy từ SRT_PHIM) để cộng dồn đủ thời lượng chính xác — xuất thành nhiều object liên tiếp có cùng voice_ref.
+7. Nếu không tìm được đủ cảnh phù hợp về nội dung trong toàn bộ SRT_PHIM để lấp đầy đúng thời lượng, vẫn PHẢI chọn cảnh liền kề gần nhất về mặt thời gian/bối cảnh để đảm bảo tổng thời lượng khớp tuyệt đối, không được để thiếu giây.
+8. Không dùng trùng một đoạn thời gian (cùng start-end) cho nhiều voice_ref khác nhau, trừ khi nội dung lặp lại có chủ đích (ví dụ cảnh hồi tưởng).
+9. Các clip phải được sắp xếp trong mảng theo đúng thứ tự voice_ref tăng dần từ 1 đến hết, và trong cùng voice_ref thì theo đúng thứ tự ghép nối trước-sau.
+10. Ưu tiên chọn các đoạn video có độ dài tối thiểu 2.0 giây cho mỗi (start - end). Tránh chia một cảnh phim thành nhiều đoạn quá vụn (< 1.5s) nếu không thực sự cần thiết, nhằm giữ cho hình ảnh mượt mà và tránh giật nháy.
+
+DỮ LIỆU ĐẦU VÀO:
+- SRT_PHIM: {DÁN_SRT_PHIM_GỐC_VÀO_ĐÂY}
+- SRT_VOICE: {DÁN_SRT_VOICE_REVIEW_VÀO_ĐÂY}
+
+KIỂM TRA TRƯỚC KHI XUẤT KẾT QUẢ (tự rà soát nội bộ, không in ra):
+- Tổng (end - start) của tất cả clip cùng voice_ref phải bằng đúng độ dài đoạn voice đó.
+- voice_ref chạy liên tục từ 1 đến số lượng đoạn trong SRT_VOICE, không bỏ sót đoạn nào.
+- Không có object nào có end <= start.
+
+BẮT BUỘC trả về ĐÚNG định dạng JSON mảng (Array) như sau, KHÔNG thêm bất kỳ text nào khác:
+[
+  {
+    "voice_ref": 1,
+    "start": 12.5,
+    "end": 20.0
+  },
+  {
+    "voice_ref": 2,
+    "start": 45.0,
+    "end": 52.5
+  },
+  {
+    "voice_ref": 2,
+    "start": 60.0,
+    "end": 63.2
+  }
+]
+
+Lưu ý: start và end là giây (kiểu số, ví dụ 12.5), lấy từ SRT_PHIM. voice_ref là số nguyên chỉ thứ tự đoạn voice tương ứng.
+
+Bây giờ hãy phân tích 2 file SRT tôi cung cấp và xuất ra danh sách clip theo đúng quy tắc và định dạng trên.

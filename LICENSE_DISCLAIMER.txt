@@ -1,0 +1,28 @@
+CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+Độc lập - Tự do - Hạnh phúc
+-----------------------------------------------------------------------------
+ĐIỀU KHOẢN SỬ DỤNG VÀ CAM KẾT MIỄN TRỪ TRÁCH NHIỆM BẢN QUYỀN
+ỨNG DỤNG: NOVACUT - AI VIDEO & REVIEW EDITOR (PHIÊN BẢN 1.0.0)
+-----------------------------------------------------------------------------
+
+1. GIỚI THIỆU CHUNG
+Ứng dụng NovaCut cung cấp các công cụ được hỗ trợ bởi trí tuệ nhân tạo (AI) nhằm mục đích:
+- Tự động chỉnh sửa, cắt ghép, xử lý video do người dùng tải lên hoặc lựa chọn;
+- Tạo nội dung review, tóm tắt, bình luận về phim ảnh, chương trình truyền hình và các tác phẩm nghe nhìn khác.
+
+Trước khi cài đặt và sử dụng Ứng dụng, người dùng ("Bạn") bắt buộc phải đọc, hiểu rõ và đồng ý với toàn bộ các điều khoản, cảnh báo và cam kết dưới đây.
+
+2. ĐỊNH NGHĨA VÀ PHẠM VI ÁP DỤNG
+- "Nội dung gốc": Là bất kỳ phim, video, chương trình truyền hình, đoạn trích, hình ảnh, âm thanh, nhạc nền, phụ đề, kịch bản được tạo ra bởi bên thứ ba (hãng phim, nhà sản xuất...).
+- "Sử dụng phi thương mại, cá nhân": Là việc sử dụng nội dung chỉ để xem, lưu trữ, học tập, nghiên cứu riêng tư của cá nhân Bạn, không đăng tải công khai lên mạng xã hội nhằm mục đích thương mại hóa trái phép.
+
+3. CẢNH BÁO VỀ HÀNH VI VI PHẠM BẢN QUYỀN
+- Phim ảnh, video và âm thanh được bảo hộ bởi luật bản quyền (Luật Sở hữu trí tuệ Việt Nam, Đạo luật DMCA Hoa Kỳ...).
+- Việc sao chép, cắt ghép, phát lại mà không có sự cho phép của chủ sở hữu bản quyền có thể dẫn đến trách nhiệm dân sự và hình sự.
+
+4. CAM KẾT CỦA NGƯỜI DÙNG
+- Bạn cam đoan có quyền hợp pháp đối với mọi dữ liệu video tải lên ứng dụng.
+- Bạn là người chịu trách nhiệm pháp lý duy nhất đối với mọi hậu quả phát sinh từ việc sử dụng nội dung do bạn tạo ra.
+- Bạn đồng ý bồi hoàn và giữ cho nhà phát triển ứng dụng không bị thiệt hại trước mọi khiếu nại phát sinh từ việc bạn sử dụng ứng dụng.
+
+Bằng việc nhấn "Tôi đồng ý" và hoàn tất cài đặt, bạn xác nhận đã đọc, hiểu và cam kết tuân thủ nghiêm ngặt các quy định trên.

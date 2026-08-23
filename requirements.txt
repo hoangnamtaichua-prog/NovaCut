@@ -1,0 +1,10 @@
+flask
+requests
+pywebview
+scenedetect[opencv]
+opencv-python
+numpy
+tqdm
+click
+platformdirs
+colorama

@@ -20,7 +20,7 @@ void platform_open_folder(const char *path) {
   if (!path || !path[0]) return;
 
 #if defined(_WIN32)
-  ShellExecuteA(NULL, "open", path, NULL, NULL, SW_SHOWNORMAL);
+  ShellExecuteA(NULL, "explore", path, NULL, NULL, SW_SHOWNORMAL);
 
 #elif defined(__APPLE__)
   char cmd[8192];

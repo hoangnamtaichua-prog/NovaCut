@@ -1,0 +1,17 @@
+[
+    {
+        "id": "ngoc_huyen",
+        "name": "Ngọc Huyền V1",
+        "type": "default"
+    },
+    {
+        "id": "diem_trinh",
+        "name": "Diễm Trinh V1",
+        "type": "default"
+    },
+    {
+        "id": "mai_linh",
+        "name": "Mai Linh V1",
+        "type": "default"
+    }
+]

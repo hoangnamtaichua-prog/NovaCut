@@ -14,7 +14,7 @@ typedef GeneratorLogHook generator_log_hook_fn;
 void generator_set_log_hook(GeneratorLogHook hook);
 
 // Core generation entrypoint
-int run_generation(void);
+int run_generation(int argc, char **argv);
 
 // Back-compat: older UI code calls generator_run()
 #ifndef generator_run

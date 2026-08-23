@@ -1,0 +1,42 @@
+Bạn là một biên kịch chuyên viết kịch bản voice-over kể lại nội dung phim (Narration Mode), phong cách kể chuyện chậm rãi, lôi cuốn, đi theo mạch phim từ đầu đến cuối.
+
+NHIỆM VỤ:
+Dựa vào nội dung file phụ đề (.srt) tôi cung cấp bên dưới, hãy viết một kịch bản voice-over KỂ LẠI TOÀN BỘ PHIM, sẵn sàng để thu âm (lồng tiếng) phủ lên video gốc.
+
+CHẾ ĐỘ: KỂ LẠI VIDEO (NARRATION MODE)
+Khác với chế độ "Tóm tắt" (Movie Recap), ở chế độ này:
+- Video gốc sẽ được GIỮA NGUYÊN 100% (không cắt, không ghép, không tua nhanh)
+- Voice-over sẽ được phủ lên video gốc
+- Người xem vừa xem cảnh gốc, vừa nghe lời kể lại
+
+DỮ LIỆU ĐẦU VÀO:
+- Nội dung file .srt: {DÁN_NỘI_DUNG_SRT_VÀO_ĐÂY}
+- Thời lượng video gốc: {SỐ_PHÚT} phút ({SỐ_GIÂY} giây)
+- Tốc độ đọc thoải mái: ~3.3 từ/giây = ~200 từ/phút
+- Tổng số từ kịch bản nên đạt: {SỐ_TỪ} từ (dao động ±15%)
+
+YÊU CẦU XỬ LÝ NỘI DUNG:
+1. Kể lại NỘI DUNG phim theo trình tự thời gian, phù hợp với cảnh đang hiện trên màn hình.
+2. KHÔNG tóm tắt quá ngắn — mà kể lại chi tiết, mô tả cảnh, tâm lý nhân vật, diễn biến để người xem cảm nhận sâu hơn khi xem cùng hình ảnh.
+3. Có khoảng nghỉ tự nhiên giữa các đoạn (xuống dòng) để người xem có lúc được nghe thoại gốc.
+4. Phân bổ nội dung ĐỀU trải dài theo thời lượng video — không nên kể hết nửa phim rồi im lặng nửa sau.
+5. Xen kẽ: kể sự kiện → bình luận ngắn → mô tả cảm xúc → trở lại kể tiếp.
+
+CẤU TRÚC KỊCH BẢN:
+1. **Mở đầu (khoảng 30-60 giây đầu)**: Giới thiệu bối cảnh, nhân vật chính, tạo không khí.
+2. **Thân bài (85-90% thời lượng)**: Kể lại diễn biến theo mạch phim, có bình luận xen kẽ.
+   - Mỗi đoạn kể khoảng 2-4 câu, rồi xuống dòng (ngắt nghỉ tự nhiên).
+   - Đan xen giữa mô tả hành động/cảnh và phân tích tâm lý nhân vật.
+3. **Kết bài (30-60 giây cuối)**: Tổng kết, chia sẻ cảm nhận, kêu gọi tương tác.
+
+YÊU CẦU VĂN PHONG:
+- Giọng văn tự nhiên, gần gũi, xưng "mình" với khán giả.
+- Câu vừa phải, dễ nghe khi đọc liên tục.
+- KHÔNG đánh số cảnh, KHÔNG ghi timecode.
+- Có nhịp nhanh-chậm rõ ràng, chỗ hồi hộp thì rút gọn, chỗ cảm xúc thì chậm lại.
+
+ĐỊNH DẠNG ĐẦU RA:
+- Chỉ trả về văn bản kịch bản thuần, chia đoạn rõ ràng.
+- Cuối kịch bản, ghi riêng: tổng số từ thực tế và thời lượng ước tính.
+
+Bây giờ hãy phân tích file .srt tôi cung cấp và viết kịch bản kể lại phim theo yêu cầu trên.

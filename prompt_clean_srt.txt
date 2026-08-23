@@ -1,0 +1,44 @@
+Bạn là một chuyên gia biên tập phụ đề (subtitle editor). Tôi có một file SRT được tạo ra từ quá trình OCR (nhận dạng ký tự quang học), do đó có nhiều lỗi cần được làm sạch.
+
+NHIỆM VỤ:
+
+1. SỬA LỖI NỘI DUNG:
+   - Loại bỏ các block bị lặp lại trùng nghĩa / gần giống nhau về nghĩa (ví dụ OCR quét ra 2 block liền kề: "幸好没有退到" và "幸好没有迟到" — đây là lỗi OCR nhận nhầm chữ khiến 1 câu bị tách thành 2 block gần giống nhau, cần gộp lại thành 1 block đúng nghĩa duy nhất).
+   - Loại bỏ các chuỗi ký tự vô nghĩa do OCR quét sai (ký tự rác, không tạo thành từ có nghĩa).
+   - Sửa lỗi chính tả, dấu câu, khoảng trắng thừa/thiếu do OCR gây ra.
+   - Giữ nguyên văn phong, ngữ cảnh, ý nghĩa gốc — KHÔNG tự ý thêm nội dung không có trong bản gốc.
+   - Sau khi xóa/gộp block, đánh số lại (renumber) toàn bộ block theo thứ tự liên tục từ 1.
+
+2. SỬA THỜI GIAN (timestamp) — YÊU CẦU TUYỆT ĐỐI, KHÔNG NGOẠI LỆ:
+   - TUYỆT ĐỐI KHÔNG để hai block chồng lấn thời gian, dù chỉ 1 mili-giây. Start của block sau phải >= End của block liền trước.
+   - Trong cùng 1 block: Start luôn nhỏ hơn End.
+   - Khi gộp 2 block trùng nghĩa thành 1 (như ví dụ trên), lấy Start của block đầu và End của block sau làm khung thời gian mới cho block đã gộp.
+   - Nếu thời lượng hiển thị quá ngắn so với độ dài câu thoại, kéo dài hợp lý nhưng vẫn phải đảm bảo không chồng lấn với block kế tiếp (chèn tối thiểu 50-100ms đệm nếu cần).
+
+3. ĐỊNH DẠNG ĐẦU RA — bắt buộc đúng như mẫu sau (số block, dòng thời gian dạng HH:MM:SS,mmm --> HH:MM:SS,mmm, nội dung, 1 dòng trống ngăn cách):
+
+1
+00:00:01,500 --> 00:00:02,000
+幸好没有退到
+
+2
+00:00:02,000 --> 00:00:03,000
+幸好没有迟到
+
+3
+00:00:05,000 --> 00:00:06,500
+不知道为什么
+
+4
+00:00:06,500 --> 00:00:08,500
+心里总有点七上八下的
+
+   - Không thêm giải thích, ghi chú, markdown code fence hay bình luận xen vào giữa các block — chỉ xuất đúng nội dung file SRT sạch theo mẫu trên.
+
+4. XỬ LÝ FILE DÀI (nếu vượt giới hạn ngữ cảnh):
+   - Chia file thành từng đoạn ~200-300 block để xử lý lần lượt.
+   - Khi xử lý đoạn kế tiếp, giữ lại 2-3 block cuối của đoạn trước làm ngữ cảnh tham chiếu, để đảm bảo thời gian ở điểm nối giữa hai đoạn không bị chồng lấn hoặc đánh số trùng.
+   - Sau khi xử lý xong tất cả các đoạn, ghép lại thành 1 file SRT hoàn chỉnh, đánh số lại toàn bộ từ 1 đến hết.
+
+DỮ LIỆU ĐẦU VÀO:
+[Dán nội dung file SRT vào đây]

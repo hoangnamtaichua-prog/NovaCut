@@ -32,6 +32,10 @@
 
   static int mkdir_portable(const char *p, int mode) { (void)mode; return _mkdir(p); }
   #define mkdir(p,m) mkdir_portable((p),(m))
+
+  #if defined(__MINGW32__) || defined(__MINGW64__)
+    #include <dirent.h>
+  #endif
 #else
   #include <strings.h>
   #include <unistd.h>
@@ -1987,9 +1991,59 @@ static void strip_ext(const char *filename, char *out, size_t outsz) {
 }
 
 /* -------------------------- PUBLIC ENTRYPOINT -------------------------- */
-int run_generation(void) {
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+static bool process_manual_mode(const char *in_vid, const char *out_vid, const char *audio, const char *srt) {
+  if (!in_vid || !audio || !out_vid) {
+    logw("Missing arguments for manual mode.");
+    return false;
+  }
+  logi("Running manual mode pipeline...");
+  
+  double aud_len = ffprobe_duration_seconds(audio);
+  if (aud_len <= 0) {
+    logw("Could not get audio duration for %s", audio);
+    return false;
+  }
+  
+  char *esc_in = sh_escape(in_vid);
+  char *esc_aud = sh_escape(audio);
+  char *esc_out = sh_escape(out_vid);
+  
+  char cmd[8192];
+  if (srt && srt[0]) {
+    char srt_ff[PATH_MAX];
+    size_t j = 0;
+    for (size_t i = 0; srt[i] && j < sizeof(srt_ff)-3; i++) {
+      if (srt[i] == '\\') srt_ff[j++] = '/';
+      else if (srt[i] == ':') { srt_ff[j++] = '\\'; srt_ff[j++] = ':'; }
+      else srt_ff[j++] = srt[i];
+    }
+    srt_ff[j] = 0;
+    
+    snprintf(cmd, sizeof(cmd), "ffmpeg -y -i %s -i %s -t %f -filter_complex \"[0:v]subtitles='%s'[v]\" -map \"[v]\" -map 1:a -c:v libx264 -c:a aac %s",
+             esc_in, esc_aud, aud_len, srt_ff, esc_out);
+  } else {
+    snprintf(cmd, sizeof(cmd), "ffmpeg -y -i %s -i %s -t %f -map 0:v -map 1:a -c:v copy -c:a aac %s",
+             esc_in, esc_aud, aud_len, esc_out);
+  }
+  
+  logi("Executing FFmpeg: %s", cmd);
+  int rc = run_cmd("%s", cmd);
+  
+  free(esc_in);
+  free(esc_aud);
+  free(esc_out);
+  
+  if (rc == 0) {
+    logok("Manual mode success! Output: %s", out_vid);
+    return true;
+  } else {
+    logw("FFmpeg failed with code %d", rc);
+    return false;
+  }
+}
 
+int run_generation(int argc, char **argv) {
+  curl_global_init(CURL_GLOBAL_DEFAULT);
   Config cfg = load_config_json("config.json");
 
   ensure_dir("movies");
@@ -2001,53 +2055,87 @@ int run_generation(void) {
   ensure_dir("tiktok_output");
   ensure_dir("movies_retired");
 
-  logi("Clearing clips/ folder...");
-  if (!clear_directory_contents("clips")) {
-    logw("Failed to fully clear clips/ (continuing anyway).");
-  } else {
-    logok("Cleared clips/ folder.");
+  bool is_manual = false;
+  const char *in_vid = NULL;
+  const char *out_dir = "output";
+  const char *out_name = "video_tom_tat.mp4";
+  const char *manual_aud = NULL;
+  const char *manual_srt = NULL;
+
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--manual-mode") == 0) {
+      is_manual = true;
+    } else if (strcmp(argv[i], "--input-video") == 0 && i + 1 < argc) {
+      in_vid = argv[++i];
+    } else if (strcmp(argv[i], "--output-dir") == 0 && i + 1 < argc) {
+      out_dir = argv[++i];
+    } else if (strcmp(argv[i], "--output-name") == 0 && i + 1 < argc) {
+      out_name = argv[++i];
+    } else if (strcmp(argv[i], "--manual-audio") == 0 && i + 1 < argc) {
+      manual_aud = argv[++i];
+    } else if (strcmp(argv[i], "--manual-srt") == 0 && i + 1 < argc) {
+      manual_srt = argv[++i];
+    }
   }
 
-  ensure_dir("clips");
-  ensure_dir("clips/audio");
-
-  srand((unsigned)time(NULL));
-  int num_clips = MIN_NUM_CLIPS + (rand() % (MAX_NUM_CLIPS - MIN_NUM_CLIPS + 1));
-
-  DIR *d = opendir("movies");
-  if (!d) die("Failed to open movies/");
-
-  struct dirent *ent;
   int processed = 0;
-  while ((ent = readdir(d))) {
-    if (ent->d_name[0] == '.') continue;
-    size_t ln = strlen(ent->d_name);
-    if (ln < 4) continue;
-    if (strcasecmp(ent->d_name + ln - 4, ".mp4") != 0) continue;
-
-    char title[PATH_MAX];
-    strip_ext(ent->d_name, title, sizeof(title));
-
-    if (output_already_exists(title)) {
-      logi("Skipping %s (already in output/)", title);
-      continue;
-    }
-
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "movies/%s", ent->d_name);
-
-    fprintf(stderr, "\n=== Processing: %s ===\n", title);
-    if (process_movie(&cfg, path, title, num_clips)) {
-      processed++;
-      fprintf(stderr, "DONE: %s\n", title);
+  if (in_vid) {
+    char out_path[PATH_MAX];
+    snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, out_name);
+    
+    if (is_manual) {
+      if (process_manual_mode(in_vid, out_path, manual_aud, manual_srt)) processed++;
     } else {
-      fprintf(stderr, "FAILED: %s\n", title);
+      // API Mode single file fallback
+      char title[PATH_MAX];
+      const char *base = strrchr(in_vid, '/');
+      if (!base) base = strrchr(in_vid, '\\');
+      if (base) base++; else base = in_vid;
+      strip_ext(base, title, sizeof(title));
+      
+      srand((unsigned)time(NULL));
+      int num_clips = MIN_NUM_CLIPS + (rand() % (MAX_NUM_CLIPS - MIN_NUM_CLIPS + 1));
+      if (process_movie(&cfg, in_vid, title, num_clips)) processed++;
+      
+      // Move final file if we want custom output (process_movie puts in output/title.mp4)
+      char def_out[PATH_MAX];
+      snprintf(def_out, sizeof(def_out), "output/%s.mp4", title);
+      if (file_exists(def_out)) {
+         rename(def_out, out_path);
+      }
+    }
+  } else {
+    logi("Clearing clips/ folder...");
+    clear_directory_contents("clips");
+    ensure_dir("clips/audio");
+
+    srand((unsigned)time(NULL));
+    int num_clips = MIN_NUM_CLIPS + (rand() % (MAX_NUM_CLIPS - MIN_NUM_CLIPS + 1));
+
+    DIR *d = opendir("movies");
+    if (d) {
+      struct dirent *ent;
+      while ((ent = readdir(d))) {
+        if (ent->d_name[0] == '.') continue;
+        size_t ln = strlen(ent->d_name);
+        if (ln < 4) continue;
+        if (strcasecmp(ent->d_name + ln - 4, ".mp4") != 0) continue;
+
+        char title[PATH_MAX];
+        strip_ext(ent->d_name, title, sizeof(title));
+
+        if (output_already_exists(title)) continue;
+
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "movies/%s", ent->d_name);
+
+        fprintf(stderr, "\n=== Processing: %s ===\n", title);
+        if (process_movie(&cfg, path, title, num_clips)) processed++;
+      }
+      closedir(d);
     }
   }
-
-  closedir(d);
-  fprintf(stderr, "\nAll done. Processed: %d\n", processed);
 
   curl_global_cleanup();
-  return processed; /* 0 is also a valid “nothing to do” result */
+  return processed;
 }

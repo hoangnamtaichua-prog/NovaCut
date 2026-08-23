@@ -1,41 +1,51 @@
-client_secrets.json
-__pycache__\
-clips/*
-output/*
-build/*
-build/
-output_audio/*
-temp_movies/
-tiktok_output/*
-Good Summaries\
-movies_retired\
-download_playlist.py
-scripts/srt_files/*
-cookies.txt
-/client_secrets.json
-movies_retired/
-movies/*
-tiktok_uploader\
-tiktok_uploader/
-tiktok_uploader/*
-config.sample.json
-config.json
-
-# Local env and editor
-.venv/
-.qodo/
-.vscode/
+# Bytecode and Cache
 __pycache__/
 *.pyc
-.DS_Store
+.cache/
+.pytest_cache/
+.system_generated/
+*.log
 
-# Sensitive runtime config
+# Sensitive User & License Files
+.license.dat
+.processed_txs.dat
+.token_quota.dat
+license_config.json
+api_keys.txt
 config.json
+client_secrets.json
+cookies.txt
 
-# Build/output caches
-clips/
-output/
-output_audio/
-tiktok_output/
+# Projects, Media & Temp
+projects/
 movies/
+movies_retired/
+downloads/
+output/
+tiktok_output/
+temp/
+scratch/
+temp_movies/
+output_audio/
+clips/
 scripts/srt_files/
+
+# Large Binaries, Models & Releases
+release/
+models/
+bin/
+dist/
+*.zip
+*.exe
+*.iso
+*.tar*
+
+# Virtual Environments
+.venv/
+venv/
+.asr_venv/
+rvc_env/
+python-nuget/
+.qodo/
+.vscode/
+.DS_Store
