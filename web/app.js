@@ -246,6 +246,70 @@ if (btnQuickTestVoice) {
     });
 }
 
+// AI Stem & Vocal Separation Event Listeners for Editor Tab
+const editorStemSeparationEnabled = document.getElementById('editorStemSeparationEnabled');
+const editorStemConfig = document.getElementById('editorStemConfig');
+if (editorStemSeparationEnabled && editorStemConfig) {
+    editorStemSeparationEnabled.addEventListener('change', (e) => {
+        editorStemConfig.style.opacity = e.target.checked ? '1' : '0.4';
+        editorStemConfig.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+    });
+}
+
+const btnRunStemSeparationEditor = document.getElementById('btnRunStemSeparationEditor');
+if (btnRunStemSeparationEditor) {
+    btnRunStemSeparationEditor.addEventListener('click', async () => {
+        const videoInput = document.getElementById('editorInputVideoPath')?.value || '';
+        if (!videoInput) {
+            showToast('⚠️ Vui lòng chọn video đầu vào trước khi tách âm thanh!', 'warning');
+            return;
+        }
+
+        const hasPerm = await checkFeaturePermission('can_access_editor', 'Tách Âm Thanh AI & Lọc Giọng Thoại');
+        if (!hasPerm) return;
+
+        btnRunStemSeparationEditor.disabled = true;
+        btnRunStemSeparationEditor.innerHTML = '<span class="loading-spinner-small"></span> Đang tách âm thanh AI...';
+        showToast('🎛️ Đang chạy tách lời thoại cũ và bảo lưu tiếng động SFX...', 'info');
+
+        try {
+            const mode = document.getElementById('editorStemMode')?.value || 'ai_neural';
+            const removeVocals = document.getElementById('editorRemoveVocals')?.checked !== false;
+            const keepSfx = document.getElementById('editorKeepSfx')?.checked !== false;
+
+            const res = await fetch('/api/audio/separate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    media_path: videoInput,
+                    mode: mode,
+                    remove_vocals: removeVocals,
+                    keep_sfx: keepSfx
+                })
+            });
+
+            const data = await res.json();
+            if (data.success && data.cleaned_url) {
+                showToast('🎉 Đã tách và lọc âm thanh AI thành công!', 'success');
+                const resultBox = document.getElementById('editorStemResultAudio');
+                const player = document.getElementById('editorStemAudioPlayer');
+                if (resultBox && player) {
+                    resultBox.style.display = 'block';
+                    player.src = data.cleaned_url;
+                    player.play().catch(() => {});
+                }
+            } else {
+                showToast(`❌ Lỗi tách âm thanh: ${data.error || 'Thất bại'}`, 'error');
+            }
+        } catch (err) {
+            showToast(`❌ Lỗi kết nối: ${err.message}`, 'error');
+        } finally {
+            btnRunStemSeparationEditor.disabled = false;
+            btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm SFX';
+        }
+    });
+}
+
 // File & Folder Selection Helper (works on both pywebview Desktop and Browser mode via Flask API)
 async function selectDirectory(title = 'Chọn thư mục lưu trữ') {
     try {
@@ -472,12 +536,12 @@ async function executeExportPipeline() {
         voice_volume: parseInt(document.getElementById('dubbingVoiceVol')?.value || 100) / 100,
         original_volume: parseInt(document.getElementById('dubbingOrigVol')?.value || 30) / 100,
         audio_ducking: document.getElementById('dubbingDucking')?.checked ?? true,
-        remove_original_vocals: true,
+        remove_original_vocals: document.getElementById('editorRemoveVocals')?.checked ?? true,
         stem_separation: {
-            enabled: true,
-            mode: 'ai_neural',
-            remove_vocals: true,
-            keep_sfx: true
+            enabled: document.getElementById('editorStemSeparationEnabled')?.checked ?? true,
+            mode: document.getElementById('editorStemMode')?.value || 'ai_neural',
+            remove_vocals: document.getElementById('editorRemoveVocals')?.checked ?? true,
+            keep_sfx: document.getElementById('editorKeepSfx')?.checked ?? true
         },
         manual_audio: document.getElementById('manualAudioPath')?.value || '',
         manual_voice_volume: parseInt(document.getElementById('dubbingManualVol')?.value || 100) / 100,

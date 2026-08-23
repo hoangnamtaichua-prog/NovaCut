@@ -494,6 +494,49 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" style="flex-shrink: 0;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                             <span>Tự động đọc theo các câu phụ đề đã dịch trên bảng Editor.</span>
                         </div>
+
+                        <!-- AI Stem & Vocal Separation Box in Editor -->
+                        <div class="stem-separation-box" style="margin-top: 12px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <span style="font-size: 14px;">🎛️</span>
+                                    <span style="font-size: 12px; font-weight: 600; color: #38bdf8;">Tách & Lọc Âm Gốc AI (Stem Separator)</span>
+                                </div>
+                                <label class="switch" style="margin-bottom: 0; transform: scale(0.85);">
+                                    <input type="checkbox" id="editorStemSeparationEnabled" checked>
+                                    <span class="slider-toggle round"></span>
+                                </label>
+                            </div>
+                            <div id="editorStemConfig" style="display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: #cbd5e1;">
+                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                                    <span>🎙️ Loại bỏ lời thoại cũ (Xóa Vocal gốc)</span>
+                                    <input type="checkbox" id="editorRemoveVocals" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
+                                </label>
+                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                                    <span>💥 Giữ lại tiếng động môi trường & hiệu ứng (Keep SFX)</span>
+                                    <input type="checkbox" id="editorKeepSfx" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
+                                </label>
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
+                                    <span style="color: #94a3b8; font-size: 11px;">Chế độ tách:</span>
+                                    <select id="editorStemMode" style="background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 2px 8px; font-size: 11px; outline: none;">
+                                        <option value="ai_neural">⚡ AI Neural (Chất lượng cao)</option>
+                                        <option value="dsp_turbo">🚀 DSP Turbo (Siêu tốc 0.2s)</option>
+                                    </select>
+                                </div>
+                                <div style="display: flex; gap: 8px; margin-top: 6px;">
+                                    <button type="button" id="btnRunStemSeparationEditor" class="btn secondary small" style="flex: 1; padding: 5px 8px; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; background: rgba(56, 189, 248, 0.1);">
+                                        <span>⚡</span> Tách & Nghe Thử Âm SFX
+                                    </button>
+                                </div>
+                                <div id="editorStemResultAudio" style="display: none; margin-top: 6px; padding: 6px; background: #0f172a; border-radius: 6px; border: 1px solid #334155;">
+                                    <div style="font-size: 10.5px; color: #34d399; margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                        <span>🎧 Audio SFX đã lọc sạch lời thoại:</span>
+                                        <span id="editorStemResultStatus">Sẵn sàng</span>
+                                    </div>
+                                    <audio id="editorStemAudioPlayer" controls style="width: 100%; height: 28px; outline: none;"></audio>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Manual Tab Content -->
