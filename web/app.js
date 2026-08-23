@@ -10765,6 +10765,7 @@ const appUpdater = {
                     showToast('Bản cập nhật này là bắt buộc để tiếp tục sử dụng ứng dụng!', 'warning');
                     return;
                 }
+                modal.classList.remove('active');
                 modal.style.display = 'none';
             });
         }
@@ -10775,6 +10776,7 @@ const appUpdater = {
                     showToast('Bản cập nhật này là bắt buộc để tiếp tục sử dụng ứng dụng!', 'warning');
                     return;
                 }
+                modal.classList.remove('active');
                 modal.style.display = 'none';
             });
         }
@@ -10879,6 +10881,7 @@ const appUpdater = {
 
         if (btnClose) btnClose.style.display = data.is_mandatory ? 'none' : 'block';
 
+        modal.classList.add('active');
         modal.style.display = 'flex';
     },
 

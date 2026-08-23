@@ -1,7 +1,7 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Bản cập nhật v1.0.6: Luôn bật Popup thông báo phiên bản và nút Cập nhật ngay khi người dùng bấm kiểm tra",
+  "changelog": "Bản cập nhật v1.0.7: Sửa hoàn thiện modal-overlay Popup kiểm tra bản cập nhật và nút nâng cấp 1-click",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 02:29:49"
+  "updated_at": "2026-08-24 02:32:34"
 }

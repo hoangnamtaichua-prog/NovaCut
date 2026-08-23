@@ -7,30 +7,35 @@
 
 ---
 
-## ✅ I. CÁC TÍNH NĂNG & SỬA LỖI ĐÃ HOÀN THÀNH MỚI NHẤT (v1.0.5)
+## ✅ I. CÁC TÍNH NĂNG & SỬA LỖI ĐÃ HOÀN THÀNH MỚI NHẤT (v1.0.6)
 
-1. ✅ **Gắn Cụm Điều Khiển Tách & Lọc Âm Gốc AI Trực Tiếp Vào Thẻ Lồng Tiếng:**
+1. ✅ **Popup Cập Nhật & Kiểm Tra Phiên Bản Trực Quan (Interactive Update Modal):**
+   - Khi bấm **`[🚀 Cập nhật]`**, app luôn bật Popup Dark Mode hiển thị rõ: Phiên bản hiện tại trên máy vs Phiên bản mới nhất trên máy chủ.
+   - Nếu có bản mới: Hiện nút **`[🚀 Cập Nhật Ngay]`** + nội dung Changelog chi tiết.
+   - Nếu đã là bản mới nhất: Hiện thông báo xanh xác nhận đang dùng bản mới nhất.
+
+2. ✅ **Gắn Cụm Điều Khiển Tách & Lọc Âm Gốc AI Trực Tiếp Vào Thẻ Lồng Tiếng:**
    - Đặt ngay trong thẻ **`🎙️ LỒNG TIẾNG AI`** ở giao diện Biên tập phim.
    - Thêm nút **`[⚡ Tách & Nghe Thử Âm SFX]`** kèm trình phát nghe thử trực tiếp file đã lọc sạch lời thoại.
 
-2. ✅ **Hệ Thống 1-Click Auto-Updater Trực Tiếp Kho Private GitHub (`hoangnamtaichua-prog/NovaCut`):**
-   - Đèn báo phát sáng viền cyan trên nút **`[🚀 Cập nhật (v1.0.5)]`** khi phát hiện bản mới.
+3. ✅ **Hệ Thống 1-Click Auto-Updater Trực Tiếp Kho Private GitHub (`hoangnamtaichua-prog/NovaCut`):**
+   - Đèn báo phát sáng viền cyan trên nút **`[🚀 Cập nhật]`** khi phát hiện bản mới.
    - Tải stream bản vá `patch.zip` qua GitHub Private API trong 2-3 giây, tự giải nén và tải lại app giữ nguyên 100% bản quyền & dữ liệu người dùng.
 
-3. ✅ **AI Tách Âm Thanh, Lọc Lời Thoại Cũ & Bỏ Nhạc Nền Giữ Lại Âm Gốc (AI Stem & Vocal Separation):**
+4. ✅ **AI Tách Âm Thanh, Lọc Lời Thoại Cũ & Bỏ Nhạc Nền Giữ Lại Âm Gốc (AI Stem & Vocal Separation):**
    - Đã xây dựng engine `audio_separator.py` hỗ trợ 2 chế độ: **AI Neural** (Phân tích ma trận phổ STFT + Harmonic-Percussive Gating) và **DSP Turbo** (Đảo pha triệt tiêu Center Dialogue siêu tốc 0.2s).
    - Tách và triệt tiêu sạch lời thoại gốc (tiếng Trung, Anh, Hàn...) trước khi lồng tiếng mới.
    - Giữ nguyên 100% tiếng động hiện trường (tiếng súng nổ, bước chân, tiếng xe, tiếng đấm đá, gió thổi, mở cửa...).
 
-4. ✅ **Khắc Phục Triệt Để Lỗi Clone Voice Trên Môi Trường Máy Sạch / Windows Sandbox:**
+5. ✅ **Khắc Phục Triệt Để Lỗi Clone Voice Trên Môi Trường Máy Sạch / Windows Sandbox:**
    - Đóng gói trọn bộ mô hình Offline ONNX int8 (`denoiser.onnx`, `speaker_encoder.onnx`, `vieneu_v3_heads.npz`) vào `models/vieneu/`.
    - Tự động nạp mô hình cục bộ, triệt tiêu 100% lỗi `os error 2`.
 
-5. ✅ **Tính Năng Nghe Thử Lồng Tiếng Trực Tiếp (Live Dubbing Engine):**
+6. ✅ **Tính Năng Nghe Thử Lồng Tiếng Trực Tiếp (Live Dubbing Engine):**
    - Nghe thử giọng AI khớp thời gian thực trên video khi chuyển sang chế độ **`[✨ Bản sau khi sửa]`** (kèm tính năng Audio Ducking tự hạ âm lượng gốc).
    - Thêm nút **`[🗣️]`** nghe thử từng câu trên từng dòng bảng phụ đề SRT.
 
-6. ✅ **Chuẩn Hóa Khung Hình Mặc Định 16:9 Ngang & Chuyển Đổi Dọc 9:16:**
+7. ✅ **Chuẩn Hóa Khung Hình Mặc Định 16:9 Ngang & Chuyển Đổi Dọc 9:16:**
    - Mặc định 16:9 ngang và tự động co giãn khung hình 9:16 dọc có viền sáng cyan và cover fit.
 
 ---
