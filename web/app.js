@@ -10813,7 +10813,7 @@ const appUpdater = {
                 this.showUpdateModal(data);
             } else {
                 if (!silent) {
-                    showToast(`✅ Bạn đang sử dụng phiên bản mới nhất (v${data.current_version || '1.0.0'})!`, 'success');
+                    this.showUpdateModal(data);
                 }
             }
         } catch (err) {
@@ -10821,7 +10821,7 @@ const appUpdater = {
                 showToast('Lỗi kiểm tra cập nhật: ' + err.message, 'error');
             }
         } finally {
-            if (!silent && btnHeaderCheck && !this.currentUpdateInfo?.has_update) {
+            if (btnHeaderCheck && !this.currentUpdateInfo?.has_update) {
                 btnHeaderCheck.disabled = false;
                 btnHeaderCheck.innerHTML = `<span style="font-size: 13px;">🚀</span><span style="font-weight: 600;">Cập nhật</span>`;
             }
@@ -10839,25 +10839,45 @@ const appUpdater = {
         const btnClose = document.getElementById('btnCloseUpdateModal');
         const progressBox = document.getElementById('updateProgressBox');
         const btnStart = document.getElementById('btnStartAppUpdate');
+        const modalTitle = modal.querySelector('h3');
+        const modalSubtitle = modal.querySelector('h3 + div');
 
-        if (lblCurrent) lblCurrent.textContent = `v${data.current_version || '1.0.0'}`;
-        if (lblLatest) lblLatest.textContent = `v${data.latest_version || '1.0.1'}`;
-        if (changelogContent) changelogContent.textContent = data.changelog || '🎉 Bản cập nhật tối ưu hóa hiệu năng & bổ sung tính năng mới.';
+        const currentVer = data.current_version || '1.0.0';
+        const latestVer = data.latest_version || currentVer;
+        const hasUpdate = Boolean(data.has_update);
+
+        if (lblCurrent) lblCurrent.textContent = `v${currentVer}`;
+        if (lblLatest) lblLatest.textContent = `v${latestVer}`;
 
         if (progressBox) progressBox.style.display = 'none';
-        if (btnStart) {
-            btnStart.disabled = false;
-            btnStart.innerHTML = `<span>🚀</span><span>Cập Nhật Ngay</span>`;
+
+        if (hasUpdate) {
+            if (modalTitle) modalTitle.textContent = "🚀 ĐÃ CÓ BẢN NÂNG CẤP MỚI!";
+            if (modalSubtitle) modalSubtitle.textContent = "Tự động nâng cấp & bảo toàn nguyên vẹn 100% dữ liệu của bạn";
+            if (changelogContent) changelogContent.textContent = data.changelog || '🎉 Bản cập nhật tối ưu hóa hiệu năng & bổ sung tính năng mới.';
+            if (btnStart) {
+                btnStart.style.display = 'inline-flex';
+                btnStart.disabled = false;
+                btnStart.innerHTML = `<span>🚀</span><span>Cập Nhật Ngay (v${latestVer})</span>`;
+            }
+            if (btnSkip) {
+                btnSkip.textContent = "Để sau";
+                btnSkip.style.display = data.is_mandatory ? 'none' : 'inline-block';
+            }
+        } else {
+            if (modalTitle) modalTitle.textContent = "✅ BẢN MỚI NHẤT ĐANG HOẠT ĐỘNG!";
+            if (modalSubtitle) modalSubtitle.textContent = "Ứng dụng NovaCut trên máy tính của bạn đang ở phiên bản mới nhất";
+            if (changelogContent) changelogContent.textContent = `🎉 Bạn đang sử dụng phiên bản v${currentVer}.\nKhông có bản cập nhật nào mới hơn tại thời điểm này. Khi có tính năng mới, hệ thống sẽ tự động thông báo tại đây!`;
+            if (btnStart) {
+                btnStart.style.display = 'none';
+            }
+            if (btnSkip) {
+                btnSkip.textContent = "Đóng";
+                btnSkip.style.display = 'inline-block';
+            }
         }
 
-        // Nếu bắt buộc cập nhật -> ẩn nút Bỏ qua / Đóng
-        if (data.is_mandatory) {
-            if (btnSkip) btnSkip.style.display = 'none';
-            if (btnClose) btnClose.style.display = 'none';
-        } else {
-            if (btnSkip) btnSkip.style.display = 'inline-block';
-            if (btnClose) btnClose.style.display = 'block';
-        }
+        if (btnClose) btnClose.style.display = data.is_mandatory ? 'none' : 'block';
 
         modal.style.display = 'flex';
     },

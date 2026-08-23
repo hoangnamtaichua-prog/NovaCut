@@ -7,22 +7,20 @@
 
 ---
 
-## ✅ I. CÁC TÍNH NĂNG & SỬA LỖI ĐÃ HOÀN THÀNH MỚI NHẤT (v1.0.3)
+## ✅ I. CÁC TÍNH NĂNG & SỬA LỖI ĐÃ HOÀN THÀNH MỚI NHẤT (v1.0.5)
 
-1. ✅ **Sửa Triệt Để Lỗi Thụt Đầu Dòng (IndentationError) & Kiểm Thử Toàn Bộ Module:**
-   - Sửa lỗi cú pháp `else:` tại [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py).
-   - Kiểm thử nạp toàn bộ các module `web_app.py`, `routes.video_edit`, `routes.audio`, `audio_separator` chạy mượt mà 100%.
+1. ✅ **Gắn Cụm Điều Khiển Tách & Lọc Âm Gốc AI Trực Tiếp Vào Thẻ Lồng Tiếng:**
+   - Đặt ngay trong thẻ **`🎙️ LỒNG TIẾNG AI`** ở giao diện Biên tập phim.
+   - Thêm nút **`[⚡ Tách & Nghe Thử Âm SFX]`** kèm trình phát nghe thử trực tiếp file đã lọc sạch lời thoại.
 
-2. ✅ **AI Tách Âm Thanh, Lọc Lời Thoại Cũ & Bỏ Nhạc Nền Giữ Lại Âm Gốc (AI Stem & Vocal Separation):**
+2. ✅ **Hệ Thống 1-Click Auto-Updater Trực Tiếp Kho Private GitHub (`hoangnamtaichua-prog/NovaCut`):**
+   - Đèn báo phát sáng viền cyan trên nút **`[🚀 Cập nhật (v1.0.5)]`** khi phát hiện bản mới.
+   - Tải stream bản vá `patch.zip` qua GitHub Private API trong 2-3 giây, tự giải nén và tải lại app giữ nguyên 100% bản quyền & dữ liệu người dùng.
+
+3. ✅ **AI Tách Âm Thanh, Lọc Lời Thoại Cũ & Bỏ Nhạc Nền Giữ Lại Âm Gốc (AI Stem & Vocal Separation):**
    - Đã xây dựng engine `audio_separator.py` hỗ trợ 2 chế độ: **AI Neural** (Phân tích ma trận phổ STFT + Harmonic-Percussive Gating) và **DSP Turbo** (Đảo pha triệt tiêu Center Dialogue siêu tốc 0.2s).
-   - **Tách & Xóa giọng thoại cũ (Vocal Remover):** Bóc tách và triệt tiêu sạch lời thoại gốc (tiếng Trung, Anh, Hàn...) trước khi lồng tiếng mới.
-   - **Bảo lưu âm thanh hiệu ứng (Keep SFX & Ambience):** Giữ nguyên 100% tiếng động hiện trường (tiếng súng nổ, bước chân, tiếng xe, tiếng đấm đá, gió thổi, mở cửa...).
-   - Tích hợp cụm điều khiển Dark Mode trực tiếp vào cả Studio Biên Tập Phim và Review Phim.
-
-3. ✅ **Hệ Thống 1-Click Auto-Updater Trực Tiếp Kho Private GitHub (`hoangnamtaichua-prog/NovaCut`):**
-   - Kết nối trực tiếp kho Private an toàn 100%, bảo mật mã nguồn tuyệt đối.
-   - Dev chỉ cần 1 lệnh: `python scripts/publish_patch.py` (tự động đóng gói `patch.zip`, push Git và tạo GitHub Private Release trong 3 giây).
-   - Khách hàng bấm **[🚀 Cập Nhật]** là tự động tải và cập nhật trong 3 giây (bảo toàn 100% bản quyền, Key, dự án `projects/` và video).
+   - Tách và triệt tiêu sạch lời thoại gốc (tiếng Trung, Anh, Hàn...) trước khi lồng tiếng mới.
+   - Giữ nguyên 100% tiếng động hiện trường (tiếng súng nổ, bước chân, tiếng xe, tiếng đấm đá, gió thổi, mở cửa...).
 
 4. ✅ **Khắc Phục Triệt Để Lỗi Clone Voice Trên Môi Trường Máy Sạch / Windows Sandbox:**
    - Đóng gói trọn bộ mô hình Offline ONNX int8 (`denoiser.onnx`, `speaker_encoder.onnx`, `vieneu_v3_heads.npz`) vào `models/vieneu/`.
