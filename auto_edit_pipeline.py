@@ -11,7 +11,10 @@ import ffmpeg_installer
 import ai_dubbing
 import timeline_sanitizer
 import openai
-import tiktoken
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None
 import asyncio
 import hashlib
 import concurrent.futures
@@ -128,11 +131,28 @@ def condense_srt_for_llm(srt_text: str, max_chars: int = 40000) -> str:
     return result if result else srt_text
 
 def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
+    if not text:
+        return 0
     try:
-        encoding = tiktoken.encoding_for_model(model_name)
-    except KeyError:
-        encoding = tiktoken.get_encoding("cl100k_base")
-    return len(encoding.encode(text))
+        if tiktoken is not None:
+            encoding = None
+            try:
+                encoding = tiktoken.encoding_for_model(model_name)
+            except Exception:
+                try:
+                    encoding = tiktoken.get_encoding("cl100k_base")
+                except Exception:
+                    encoding = None
+            if encoding is not None:
+                return len(encoding.encode(text))
+    except Exception:
+        pass
+        
+    # Heuristic fallback: An toàn tuyệt đối khi tiktoken không khả dụng hoặc lỗi encoding
+    # Trung bình 1 token ~ 3.5 ký tự hoặc ~1.3 từ đối với văn bản/phụ đề
+    words = len(text.split())
+    chars = len(text)
+    return max(1, int(chars / 3.5), int(words * 1.3))
 
 def split_srt_by_tokens(srt_text: str, max_tokens: int = 6000, model_name: str = "gpt-3.5-turbo") -> list:
     """
@@ -407,7 +427,7 @@ def get_video_duration_ffprobe(video_path):
         if os.path.exists(ff_p) or ff_p == 'ffprobe':
             try:
                 cmd = [ff_p, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
-                res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+                res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, creationflags=0x08000000 if os.name == 'nt' else 0).strip()
                 val = float(res)
                 if val > 0:
                     return val
@@ -417,7 +437,7 @@ def get_video_duration_ffprobe(video_path):
     # 2. Thử ffmpeg -i stderr inspection (luôn hoạt động vì ffmpeg.exe luôn có sẵn)
     try:
         cmd = [ffmpeg_path, '-i', video_path]
-        proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+        proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=0x08000000 if os.name == 'nt' else 0)
         m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', proc.stderr)
         if m:
             h, mins, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
@@ -450,7 +470,8 @@ def run_ffmpeg_with_progress_yield(cmd, total_duration, start_pct, end_pct, desc
         stderr=subprocess.STDOUT,
         text=True,
         encoding='utf-8',
-        errors='replace'
+        errors='replace',
+        creationflags=0x08000000 if os.name == 'nt' else 0
     )
     last_reported_pct = -1
     last_report_time = 0
@@ -566,7 +587,7 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
             
         try:
             conv_cmd = [ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error', '-i', audio_path, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', wav_path]
-            subprocess.run(conv_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(conv_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0)
         except subprocess.CalledProcessError as e:
             raise Exception(f"Lỗi convert WAV câu {idx+1}: {e.stderr.decode()}")
             
@@ -632,7 +653,7 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
         '-c:a', 'pcm_s16le',
         final_audio
     ]
-    proc = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
     if proc.returncode != 0:
         yield 'error', f"Lỗi concat audio: {proc.stderr}"
         return
@@ -1156,7 +1177,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                         '-i', temp_aud_raw, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le',
                         voice_audio_path
                     ]
-                    subprocess.run(cmd_conv, check=True)
+                    subprocess.run(cmd_conv, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0)
                     
                     yield log("✅ Đã nhận xong giọng đọc và phụ đề trực tiếp từ API!")
                     yield log("[PROGRESS] 40")
@@ -1443,7 +1464,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 clip_silent_path
             ]
             
-            proc_m = subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc_m = subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
             if proc_m.returncode != 0:
                 yield log(f"🛑 Lỗi FFmpeg khi dựng clip #{i+1}: {proc_m.stderr}")
                 return
@@ -1476,7 +1497,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
             '-c', 'copy',
             concat_silent_path
         ]
-        proc_c = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc_c = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
         if proc_c.returncode != 0:
             yield log(f"🛑 Lỗi ghép nối video: {proc_c.stderr}")
             return
@@ -1535,7 +1556,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
             final_output
         ]
         
-        proc_overlay = subprocess.run(cmd_overlay, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc_overlay = subprocess.run(cmd_overlay, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
         if proc_overlay.returncode != 0:
             yield log(f"🛑 Lỗi chèn âm thanh/sub cuối cùng: {proc_overlay.stderr}")
             return
@@ -1704,7 +1725,7 @@ def run_narration_workflow(payload, check_stop_func):
                         '-i', temp_aud_raw, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le',
                         voice_audio_path
                     ]
-                    subprocess.run(cmd_conv, check=True)
+                    subprocess.run(cmd_conv, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0)
                     
                     yield log("✅ Đã nhận xong giọng đọc và phụ đề trực tiếp từ API!")
                     yield log("[PROGRESS] 50")
@@ -1871,7 +1892,7 @@ def run_narration_workflow(payload, check_stop_func):
         has_orig_audio = True
         try:
             p_cmd = [ffmpeg_path, '-i', video_path]
-            p_proc = subprocess.run(p_cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+            p_proc = subprocess.run(p_cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=0x08000000 if os.name == 'nt' else 0)
             has_orig_audio = 'Audio:' in p_proc.stderr
         except Exception:
             pass
@@ -1955,7 +1976,7 @@ def run_narration_workflow(payload, check_stop_func):
                 '-c:v', 'copy', '-c:a', 'aac',
                 final_output
             ]
-            proc_bgm = subprocess.run(cmd_bgm, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc_bgm = subprocess.run(cmd_bgm, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
             if proc_bgm.returncode != 0:
                 yield log(f"⚠️ Lỗi mix BGM, sử dụng bản không nhạc nền: {proc_bgm.stderr[:200]}")
                 shutil.copy2(temp_no_bgm, final_output)

@@ -104,10 +104,77 @@ def api_download_open_folder():
     return jsonify({'success': True})
 
 
+@download_bp.route('/api/download/douyin/scan_channel_stream', methods=['POST'])
+def api_download_douyin_scan_channel_stream():
+    """
+    API quét kênh Douyin thời gian thực qua Server-Sent Events (SSE Stream).
+    """
+    import license_manager
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'error': f"Chức năng bị khóa: {perm_msg}", 'license_required': True}), 403
+
+    import douyin_browser_downloader, queue, threading, json
+    data = request.json or {}
+    channel_url = data.get('channel_url', '').strip()
+    limit = data.get('limit', 30)
+
+    if not channel_url:
+        return jsonify({'error': 'Vui lòng nhập đường dẫn kênh hoặc mã sec_uid của Douyin'}), 400
+
+    try:
+        limit = int(limit) if limit and str(limit).isdigit() else 30
+        if limit <= 0 or limit > 300:
+            limit = 30
+    except Exception:
+        limit = 30
+
+    q = queue.Queue()
+
+    def progress_callback(pct, msg):
+        q.put({
+            'status': 'progress',
+            'pct': pct,
+            'msg': msg
+        })
+
+    def worker():
+        try:
+            crawler = douyin_browser_downloader.DouyinBrowserDownloader()
+            result = crawler.scan_channel_videos(channel_url, limit=limit, progress_cb=progress_callback)
+            q.put({
+                'status': 'completed',
+                'pct': 100,
+                'result': result
+            })
+        except Exception as e:
+            import traceback
+            logging.error(f"[Douyin Channel Scan Error] {traceback.format_exc()}")
+            q.put({
+                'status': 'error',
+                'error': str(e)
+            })
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+    def generate():
+        while True:
+            try:
+                item = q.get(timeout=60)
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                if item.get('status') in ['completed', 'error']:
+                    break
+            except queue.Empty:
+                yield "data: {\"status\": \"heartbeat\"}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
 @download_bp.route('/api/download/douyin/scan_channel', methods=['POST'])
 def api_download_douyin_scan_channel():
     """
-    API quét toàn bộ hoặc N video mới nhất từ một kênh Douyin bằng Browser Worker ngầm.
+    API quét toàn bộ hoặc N video mới nhất từ một kênh Douyin (Fallback Synchronous).
     """
     import license_manager
     allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')

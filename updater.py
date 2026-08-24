@@ -397,7 +397,8 @@ def perform_auto_update_async(download_url_or_file_id, target_version):
                         cwd=ROOT_DIR,
                         check=True,
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.DEVNULL,
+                        creationflags=0x08000000 if os.name == 'nt' else 0
                     )
                 except Exception as e:
                     print(f"Lỗi cài đặt pip ẩn: {e}")

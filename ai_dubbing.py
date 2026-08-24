@@ -291,7 +291,7 @@ def synthesize_openspeaker_with_transcript(text, voice_id, speed, output_audio_p
                         try:
                             import ffmpeg_installer
                             ff = ffmpeg_installer.get_ffmpeg_path()
-                            p = subprocess.run([ff, '-i', output_audio_path], stderr=subprocess.PIPE, text=True)
+                            p = subprocess.run([ff, '-i', output_audio_path], stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
                             import re
                             m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', p.stderr)
                             if m:
@@ -461,7 +461,7 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                 "-c:a", "pcm_s16le",
                 part_resampled
             ]
-            subprocess.run(cmd_resample, capture_output=True)
+            subprocess.run(cmd_resample, capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
             
             if os.path.exists(part_raw):
                 try:

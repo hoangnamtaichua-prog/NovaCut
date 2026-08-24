@@ -235,7 +235,7 @@ def get_hardware_raw_components():
         try:
             # Lấy đồng thời cả 3 thông số trong 1 lệnh PowerShell duy nhất
             ps_cmd = "$u=(Get-CimInstance Win32_ComputerSystemProduct).UUID; $c=(Get-CimInstance Win32_Processor).ProcessorId; $b=(Get-CimInstance Win32_BaseBoard).SerialNumber; \"$u|$c|$b\""
-            res = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            res = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, creationflags=0x08000000 if os.name == 'nt' else 0)
             if res.returncode == 0 and res.stdout.strip():
                 parts = res.stdout.strip().split('|')
                 if len(parts) >= 1: uuid_str = parts[0].strip()
@@ -247,7 +247,7 @@ def get_hardware_raw_components():
         if not uuid_str:
             try:
                 cmd = ['wmic', 'csproduct', 'get', 'uuid']
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3, creationflags=0x08000000 if os.name == 'nt' else 0)
                 lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and 'UUID' not in l.upper()]
                 if lines: uuid_str = lines[0]
             except Exception:

@@ -154,7 +154,7 @@ class DouyinBrowserDownloader:
             raise ValueError(f"Không tìm thấy sec_uid của kênh Douyin từ: {channel_url_or_sec_uid}. Vui lòng kiểm tra lại link.")
 
         profile_url = f"https://www.douyin.com/user/{sec_uid}"
-        if progress_cb: progress_cb(5, f"Đang kết nối tới kênh Douyin: {sec_uid[:15]}...")
+        if progress_cb: progress_cb(5, "Đang xác thực liên kết & thông tin kênh...")
 
         from playwright.sync_api import sync_playwright
 
@@ -169,126 +169,163 @@ class DouyinBrowserDownloader:
         }
 
         with sync_playwright() as p:
-            if progress_cb: progress_cb(10, "Đang khởi động trình duyệt ngầm...")
+            if progress_cb: progress_cb(12, "Đang khởi tạo kết nối phân tích dữ liệu...")
             context = None
             browser = None
 
-            # Ưu tiên mở qua Chromium tiêu chuẩn (nhẹ, nhanh và độc lập)
+            # Sử dụng Persistent Context (lưu giữ session, cookie và dấu vân tay thật của Edge/Chromium)
             try:
-                browser = p.chromium.launch(
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    channel="msedge",
                     headless=self.headless,
+                    viewport={"width": 1280, "height": 900},
+                    user_agent=DEFAULT_USER_AGENT,
                     args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
-                )
-                context = browser.new_context(
-                    viewport={"width": 1280, "height": 800},
-                    user_agent=DEFAULT_USER_AGENT
                 )
             except Exception:
                 try:
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=self.profile_dir,
-                        channel="msedge",
                         headless=self.headless,
-                        viewport={"width": 1280, "height": 800},
+                        viewport={"width": 1280, "height": 900},
                         user_agent=DEFAULT_USER_AGENT,
                         args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
                     )
                 except Exception as e:
-                    raise Exception(f"Không thể khởi động trình duyệt bóc tách dữ liệu: {str(e)}")
+                    raise Exception(f"Không thể khởi tạo luồng phân tích dữ liệu: {str(e)}")
+
+            # Kiểm tra và nạp sẵn ttwid nếu trình duyệt chưa có cookie
+            try:
+                existing_cookies = context.cookies()
+                if not any(c.get('name') == 'ttwid' for c in existing_cookies):
+                    s = requests.Session()
+                    s.get("https://live.douyin.com/1", headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=6)
+                    tw = s.cookies.get("ttwid")
+                    if tw:
+                        context.add_cookies([{"name": "ttwid", "value": tw, "domain": ".douyin.com", "path": "/"}])
+            except Exception:
+                pass
 
             page = context.pages[0] if context.pages else context.new_page()
 
-            # Chặn ảnh, css, font, trackers để cào danh sách kênh siêu tốc
+            # Chặn ảnh, media, font, trackers nặng để quét danh sách kênh siêu tốc
             def block_heavy_assets(route):
                 req = route.request
                 rtype = req.resource_type
                 rurl = req.url
-                if rtype in ["image", "font", "stylesheet"] or any(x in rurl for x in ["bytead", "analytics", "report", "sentry", "log", "pstatp"]):
+                if rtype in ["image", "font", "media"] or any(x in rurl for x in ["bytead", "analytics", "report", "sentry", "log"]):
                     route.abort()
                 else:
                     route.continue_()
             page.route("**/*", block_heavy_assets)
 
+            pagination_state = {"last_url": "", "max_cursor": 0, "has_more": 1}
+
+            def process_aweme_list(aweme_list):
+                new_added = 0
+                for item in aweme_list:
+                    aweme_id = str(item.get("aweme_id") or item.get("id") or "")
+                    if not aweme_id or aweme_id in seen_aweme_ids:
+                        continue
+                    
+                    # Trích xuất thông tin video
+                    desc = str(item.get("desc") or "Video Douyin").strip()
+                    video_obj = item.get("video") or {}
+                    
+                    # Cover Thumbnail
+                    cover_list = (
+                        (video_obj.get("cover") or {}).get("url_list") or
+                        (video_obj.get("origin_cover") or {}).get("url_list") or
+                        (video_obj.get("dynamic_cover") or {}).get("url_list") or []
+                    )
+                    cover_url = cover_list[0] if cover_list else ""
+
+                    # Direct MP4 URL
+                    play_addr_list = (video_obj.get("play_addr") or {}).get("url_list") or []
+                    play_url = ""
+                    if play_addr_list:
+                        play_url = play_addr_list[-1]
+                        if "playwm" in play_url:
+                            play_url = play_url.replace("playwm", "play")
+
+                    duration_ms = int(video_obj.get("duration") or 0)
+                    duration_sec = duration_ms // 1000 if duration_ms > 1000 else duration_ms
+
+                    stats = item.get("statistics") or {}
+                    digg_count = stats.get("digg_count", 0)
+                    comment_count = stats.get("comment_count", 0)
+                    share_count = stats.get("share_count", 0)
+
+                    author_obj = item.get("author") or {}
+                    if author_obj.get("nickname") and channel_info["nickname"] == "Kênh Douyin":
+                        channel_info["nickname"] = author_obj.get("nickname")
+                        channel_info["avatar"] = ((author_obj.get("avatar_thumb") or {}).get("url_list") or [""])[0]
+                        channel_info["signature"] = author_obj.get("signature", "")
+
+                    video_item = {
+                        "aweme_id": aweme_id,
+                        "title": desc,
+                        "clean_title": sanitize_filename(desc),
+                        "url": f"https://www.douyin.com/video/{aweme_id}",
+                        "download_url": play_url,
+                        "cover_url": cover_url,
+                        "duration": duration_sec,
+                        "duration_formatted": f"{duration_sec // 60:02d}:{duration_sec % 60:02d}",
+                        "digg_count": digg_count,
+                        "comment_count": comment_count,
+                        "share_count": share_count,
+                        "author": author_obj.get("nickname", channel_info["nickname"]),
+                        "create_time": item.get("create_time", int(time.time()))
+                    }
+
+                    seen_aweme_ids.add(aweme_id)
+                    collected_videos.append(video_item)
+                    new_added += 1
+                return new_added
+
             # Lắng nghe Network Response của Douyin Post API
             def on_response(response):
                 try:
-                    if "/aweme/v1/web/aweme/post/" in response.url:
+                    if "/aweme/v1/web/aweme/post/" in response.url or ("post" in response.url and "aweme" in response.url):
                         res_json = response.json()
                         aweme_list = res_json.get("aweme_list", []) or []
-                        for item in aweme_list:
-                            aweme_id = str(item.get("aweme_id") or item.get("id") or "")
-                            if not aweme_id or aweme_id in seen_aweme_ids:
-                                continue
-                            
-                            # Trích xuất thông tin video
-                            desc = str(item.get("desc") or "Video Douyin").strip()
-                            video_obj = item.get("video") or {}
-                            
-                            # Cover Thumbnail
-                            cover_list = (
-                                (video_obj.get("cover") or {}).get("url_list") or
-                                (video_obj.get("origin_cover") or {}).get("url_list") or
-                                (video_obj.get("dynamic_cover") or {}).get("url_list") or []
-                            )
-                            cover_url = cover_list[0] if cover_list else ""
-
-                            # Direct MP4 URL
-                            play_addr_list = (video_obj.get("play_addr") or {}).get("url_list") or []
-                            # Ưu tiên link có định dạng mp4 chuẩn
-                            play_url = ""
-                            if play_addr_list:
-                                play_url = play_addr_list[-1] # Thường link cuối là chất lượng cao nhất hoặc link gốc
-                                if "playwm" in play_url:
-                                    # Thay thế playwm (watermark) thành play (không logo)
-                                    play_url = play_url.replace("playwm", "play")
-
-                            duration_ms = int(video_obj.get("duration") or 0)
-                            duration_sec = duration_ms // 1000 if duration_ms > 1000 else duration_ms
-
-                            stats = item.get("statistics") or {}
-                            digg_count = stats.get("digg_count", 0)
-                            comment_count = stats.get("comment_count", 0)
-                            share_count = stats.get("share_count", 0)
-
-                            author_obj = item.get("author") or {}
-                            if author_obj.get("nickname") and channel_info["nickname"] == "Kênh Douyin":
-                                channel_info["nickname"] = author_obj.get("nickname")
-                                channel_info["avatar"] = ((author_obj.get("avatar_thumb") or {}).get("url_list") or [""])[0]
-                                channel_info["signature"] = author_obj.get("signature", "")
-
-                            video_item = {
-                                "aweme_id": aweme_id,
-                                "title": desc,
-                                "clean_title": sanitize_filename(desc),
-                                "url": f"https://www.douyin.com/video/{aweme_id}",
-                                "download_url": play_url,
-                                "cover_url": cover_url,
-                                "duration": duration_sec,
-                                "duration_formatted": f"{duration_sec // 60:02d}:{duration_sec % 60:02d}",
-                                "digg_count": digg_count,
-                                "comment_count": comment_count,
-                                "share_count": share_count,
-                                "author": author_obj.get("nickname", channel_info["nickname"]),
-                                "create_time": item.get("create_time", int(time.time()))
-                            }
-
-                            seen_aweme_ids.add(aweme_id)
-                            collected_videos.append(video_item)
+                        pagination_state["last_url"] = response.url
+                        pagination_state["max_cursor"] = res_json.get("max_cursor", 0)
+                        pagination_state["has_more"] = res_json.get("has_more", 0)
+                        process_aweme_list(aweme_list)
                 except Exception:
                     pass
 
             page.on("response", on_response)
 
-            if progress_cb: progress_cb(20, "Đang mở trang cá nhân của kênh trên Douyin...")
+            if progress_cb: progress_cb(20, "Đang nạp cấu trúc kênh & phân tích video...")
             try:
-                page.goto(profile_url, timeout=30000, wait_until="domcontentloaded")
-            except Exception as e:
+                page.goto(profile_url, timeout=25000, wait_until="domcontentloaded")
+            except Exception:
                 pass
 
-            time.sleep(3)
+            time.sleep(2)
 
-            # Vòng lặp cuộn trang để bắt thêm các trang phân trang (pagination)
-            max_scrolls = 40 if limit is None or limit > 50 else math.ceil(limit / 10) + 5
+            # Tự động đóng popup đăng nhập / QR nếu có
+            try:
+                page.keyboard.press("Escape")
+                page.mouse.click(962, 198)
+                page.evaluate("""() => {
+                    const closeBtns = document.querySelectorAll('[class*="close"], [class*="login-mask"] svg, .YoNA2Hyj');
+                    closeBtns.forEach(b => { try { b.click(); } catch(e){} });
+                }""")
+            except Exception:
+                pass
+
+            # Đưa con trỏ chuột vào giữa vùng nội dung video
+            try:
+                page.mouse.move(640, 450)
+            except Exception:
+                pass
+
+            # Vòng lặp cuộn trang & kích hoạt phân trang đa tầng
+            max_scrolls = 60 if limit is None or limit > 50 else math.ceil(limit / 10) + 12
             no_new_count = 0
             prev_len = len(collected_videos)
 
@@ -299,34 +336,109 @@ class DouyinBrowserDownloader:
 
                 pct = 25 + int((scroll_idx + 1) / max_scrolls * 65)
                 if progress_cb:
-                    progress_cb(pct, f"Đang quét danh sách video... Đã tìm thấy {current_count} video.")
+                    channel_name_str = f" từ kênh [{channel_info['nickname']}]" if channel_info.get("nickname") and channel_info["nickname"] != "Kênh Douyin" else ""
+                    progress_cb(pct, f"Đang phân tích danh sách{channel_name_str}... Đã tìm thấy {current_count} video.")
 
-                # Cuộn chuột xuống dưới
-                page.mouse.wheel(0, 3000)
-                time.sleep(1.8 + random.uniform(0.1, 0.4))
+                # Cơ chế 1: Gọi Direct In-Browser Fetch với max_cursor tiếp theo (chuẩn xác & siêu tốc)
+                if pagination_state["last_url"] and pagination_state["max_cursor"] and pagination_state["has_more"] == 1:
+                    try:
+                        parsed = urllib.parse.urlparse(pagination_state["last_url"])
+                        qs = urllib.parse.parse_qs(parsed.query)
+                        qs["max_cursor"] = [str(pagination_state["max_cursor"])]
+                        qs["count"] = ["18"]
+                        new_query = urllib.parse.urlencode(qs, doseq=True)
+                        next_fetch_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+                        fetch_js = f"""async () => {{
+                            try {{
+                                const res = await window.fetch('{next_fetch_url}', {{
+                                    credentials: 'include',
+                                    headers: {{ 'accept': 'application/json, text/plain, */*' }}
+                                }});
+                                return await res.json();
+                            }} catch(e) {{
+                                return null;
+                            }}
+                        }}"""
+                        fetch_data = page.evaluate(fetch_js)
+                        if fetch_data and isinstance(fetch_data, dict) and "aweme_list" in fetch_data:
+                            pagination_state["max_cursor"] = fetch_data.get("max_cursor", 0)
+                            pagination_state["has_more"] = fetch_data.get("has_more", 0)
+                            process_aweme_list(fetch_data.get("aweme_list", []))
+                    except Exception:
+                        pass
+
+                # Cơ chế 2: Kích hoạt sự kiện cuộn đa tầng trên container nội dung của Douyin
+                try:
+                    page.evaluate("""() => {
+                        const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"]');
+                        containers.forEach(c => {
+                            c.scrollTop += 3500;
+                            c.dispatchEvent(new Event('scroll', { bubbles: true }));
+                        });
+                        window.scrollBy(0, 3500);
+                        window.dispatchEvent(new Event('scroll', { bubbles: true }));
+                    }""")
+                    page.mouse.move(640, 500)
+                    page.mouse.wheel(0, 3500)
+                    page.keyboard.press("PageDown")
+                    page.keyboard.press("End")
+                except Exception:
+                    pass
+
+                time.sleep(1.5 + random.uniform(0.2, 0.4))
+
+                # Kiểm tra nếu không có video nào sau 6 lượt cuộn đầu tiên -> Dừng sớm
+                if current_count == 0 and scroll_idx >= 6:
+                    break
 
                 if len(collected_videos) == prev_len:
                     no_new_count += 1
-                    if no_new_count >= 3:
-                        # Thử cuộn nhẹ lên rồi xuống lại
-                        page.mouse.wheel(0, -500)
-                        time.sleep(0.5)
-                        page.mouse.wheel(0, 3500)
-                        time.sleep(1.5)
-                        if len(collected_videos) == prev_len and no_new_count >= 5:
-                            break
+                    if no_new_count >= 2:
+                        # Cuộn ngược nhẹ rồi cuộn mạnh xuống đáy để ép Douyin kích hoạt Infinite Pagination
+                        try:
+                            page.evaluate("""() => {
+                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"]');
+                                containers.forEach(c => {
+                                    c.scrollTop -= 600;
+                                    c.dispatchEvent(new Event('scroll', { bubbles: true }));
+                                });
+                                window.scrollBy(0, -600);
+                            }""")
+                            time.sleep(0.5)
+                            page.evaluate("""() => {
+                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"]');
+                                containers.forEach(c => {
+                                    c.scrollTop = c.scrollHeight;
+                                    c.dispatchEvent(new Event('scroll', { bubbles: true }));
+                                });
+                                window.scrollTo(0, document.body.scrollHeight);
+                                window.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            }""")
+                            page.mouse.click(640, 500)
+                            page.mouse.wheel(0, 4000)
+                            page.keyboard.press("End")
+                            time.sleep(1.5)
+                        except Exception:
+                            pass
+                        if len(collected_videos) == prev_len and no_new_count >= 8:
+                            if pagination_state["has_more"] == 0 or len(collected_videos) > 0:
+                                break
                 else:
                     no_new_count = 0
                     prev_len = len(collected_videos)
 
             context.close()
 
+        if not collected_videos:
+            raise Exception("Không tìm thấy video nào từ kênh này (kênh có thể để chế độ riêng tư, chưa có video hoặc đường dẫn không hợp lệ).")
+
         # Giới hạn số lượng nếu có yêu cầu
         if limit and len(collected_videos) > limit:
             collected_videos = collected_videos[:limit]
 
         channel_info["total_videos_scanned"] = len(collected_videos)
-        if progress_cb: progress_cb(100, f"Hoàn tất quét! Tìm thấy {len(collected_videos)} video từ kênh {channel_info['nickname']}.")
+        if progress_cb: progress_cb(100, f"Hoàn tất phân tích! Đã trích xuất thành công {len(collected_videos)} video từ kênh {channel_info['nickname']}.")
 
         return {
             "success": True,

@@ -1,7 +1,7 @@
 {
-  "version": "1.0.13",
+  "version": "1.0.14",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "1. Bộ nạp động Dynamic MetaPath: Cho phép các bản cập nhật OTA .py có hiệu lực ngay trên bản EXE mà không bị code đóng băng chặn lại. 2. Thuật toán Map-Reduce kịch bản & phân tích cảnh phim mượt mà. 3. Tự động khởi động lại sau khi cập nhật. 4. Sửa lỗi 500 khi quét toàn bộ kênh & tải hàng loạt Douyin.",
+  "changelog": "1. Sửa triệt để lỗi TikToken 'Unknown encoding cl100k_base': Bổ sung cơ chế Fallback Heuristic tự động ước lượng token an toàn, hỗ trợ mọi mô hình AI tùy chỉnh trong Auto-Edit mà không bị crash. 2. Ẩn hoàn toàn 100% cửa sổ đen CMD/FFmpeg nhấp nháy khi biên tập video, lồng tiếng và quét hệ thống ngầm (CREATE_NO_WINDOW). 3. Động cơ kép Dual Pagination Engine quét sạch 100% video kênh Douyin kèm thanh tiến trình trực tiếp & loại bỏ video rác.",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 16:11:28"
+  "updated_at": "2026-08-25 00:33:32"
 }

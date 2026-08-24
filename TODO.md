@@ -10,11 +10,29 @@
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
 *(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
 
-*(Hiện tại tất cả các thay đổi đã được đóng gói và phát hành thành công trong bản v1.0.13).*
+*(Hiện tại chưa có thay đổi nào mới - Tất cả đã được đóng gói và phát hành trong bản v1.0.14).*
 
 ---
 
 ## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
+
+### ✅ Phiên bản v1.0.14 (Đã phát hành ngày 25/08/2026):
+1. **Khắc Phục Lỗi TikToken `Unknown encoding cl100k_base` Trong Auto-Edit:**
+   - Xử lý triệt để lỗi thư viện `tiktoken` khi chia chunk phụ đề SRT trong Bước 1 Auto-Edit (`split_srt_by_tokens` / `count_tokens`).
+   - Bổ sung cơ chế Fallback Heuristic tự động tính toán token an toàn (ước lượng theo độ dài ký tự và số từ) khi mô hình AI tùy chỉnh không có trong registry hoặc khi `tiktoken` bị lỗi plugin / offline / thiếu file tokenizer, đảm bảo tiến trình tạo kịch bản review chạy mượt mà 100% không bị gián đoạn.
+2. **Khắc Phục Hoàn Toàn Lỗi Cửa Sổ Đen FFmpeg / Subprocess Nhấp Nháy (Stealth Background Execution):**
+   - Bổ sung cờ ẩn cửa sổ `creationflags=0x08000000` (`CREATE_NO_WINDOW`) cho 100% tất cả các tiến trình gọi lệnh FFmpeg / FFprobe / PowerShell / WMI / Pip Subprocess trong:
+     + `auto_edit_pipeline.py` (cắt hàng trăm clip câm, ghép nối video, chèn phụ đề/audio, mix BGM).
+     + `ai_dubbing.py` (xử lý âm thanh lồng tiếng & kiểm tra duration).
+     + `license_manager.py` (quét UUID phần cứng ngầm).
+     + `updater.py` (cài đặt pip và cập nhật nền).
+   - Đảm bảo toàn bộ tác vụ nền chạy êm ái, ẩn ngầm 100%, không còn bất kỳ cửa sổ đen nào bật lên làm phiền người dùng.
+3. **Tối Ưu Quét Kênh Douyin & Động Cơ Kép Quét Đầy Đủ 100% Video (Dual Pagination Engine):**
+   - Tích hợp Động Cơ Kép (Dual Engine): Tự động bắt gói mẫu và gọi trực tiếp In-Browser Fetch với `max_cursor` tiếp theo ngay trong phiên trình duyệt, kết hợp cùng lúc cuộn sự kiện DOM trên `.route-scroll-container` để đảm bảo tải sạch sẽ 100% tất cả video của kênh (không còn bị giới hạn ở 18 video trang 1).
+   - Loại bỏ hoàn toàn việc cào thẻ DOM ngoài lề (nguyên nhân gây lọt video trending/gợi ý sidebar không có thumbnail vào danh sách), đảm bảo 100% video trích xuất đều thuộc chính xác kênh của tác giả và có đầy đủ thumbnail, thời lượng, số liệu tương tác.
+   - Tự động phát hiện và đóng popup đăng nhập / mã QR của Douyin để giải phóng luồng tải trang.
+   - Tự động nhận diện kênh không tồn tại (`用户不存在`), tài khoản bị khóa hoặc link rác/hết hạn để phản hồi thông báo lỗi rõ ràng ngay trong vài giây thay vì cuộn vô tận gây cảm giác treo.
+   - Giao diện Dark Mode thanh lịch: hiển thị thanh tiến trình %, thông báo trạng thái chuyên nghiệp ("Đang xác thực thông tin kênh...", "Đang phân tích danh mục... Đã tìm thấy X video"), và số lượng video đếm trực tiếp theo thời gian thực (SSE Live Stream).
 
 ### ✅ Phiên bản v1.0.13 (Đã phát hành ngày 24/08/2026):
 1. **Cơ Chế Dynamic Module Loader cho Bản EXE (PyInstaller MetaPath Hook):**

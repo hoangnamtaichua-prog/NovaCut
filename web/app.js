@@ -7771,67 +7771,111 @@ function initDouyinChannelDownloader() {
             const limit = parseInt(douyinChannelLimitSelect?.value || '30', 10);
 
             btnScanDouyinChannel.disabled = true;
-            btnScanDouyinChannel.innerHTML = `<span class="loading-spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Đang quét kênh...`;
+            btnScanDouyinChannel.innerHTML = `<span class="loading-spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Đang phân tích...`;
 
             if (douyinChannelEmptyPlaceholder) {
                 douyinChannelEmptyPlaceholder.style.display = 'block';
                 douyinChannelEmptyPlaceholder.innerHTML = `
-                    <div style="width: 56px; height: 56px; border-radius: 12px; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 14px;">
-                        <span class="loading-spinner" style="width:28px;height:28px;"></span>
+                    <div style="padding: 24px; max-width: 520px; margin: 0 auto; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.35);">
+                        <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(56, 189, 248, 0.2)); border: 1px solid rgba(168, 85, 247, 0.4); display: flex; align-items: center; justify-content: center;">
+                                <span class="loading-spinner" style="width:24px;height:24px;border-width:2.5px;"></span>
+                            </div>
+                        </div>
+                        <div id="douyinScanStatusTitle" style="font-size: 15px; font-weight: 600; color: #f8fafc; margin-bottom: 6px;">Đang kết nối & phân tích thông tin kênh...</div>
+                        <div id="douyinScanStatusDesc" style="font-size: 12.5px; color: #94a3b8; margin-bottom: 16px;">Hệ thống đang nạp dữ liệu danh sách video theo thời gian thực...</div>
+                        
+                        <div style="background: rgba(30, 41, 59, 0.8); border-radius: 9999px; height: 8px; overflow: hidden; position: relative; margin-bottom: 10px;">
+                            <div id="douyinScanProgressBar" style="width: 8%; height: 100%; background: linear-gradient(90deg, #a855f7, #38bdf8); border-radius: 9999px; transition: width 0.35s ease;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 11.5px; color: #64748b;">
+                            <span id="douyinScanFoundCount">Đã tìm thấy: 0 video</span>
+                            <span id="douyinScanPercent">8%</span>
+                        </div>
                     </div>
-                    <div style="font-size: 15px; font-weight: 600; color: #f8fafc;">Đang khởi động trình duyệt ngầm & cào dữ liệu...</div>
-                    <div style="font-size: 12.5px; color: #38bdf8; margin-top: 6px;">Vui lòng đợi trong giây lát khi hệ thống tự động cuộn trang phân trang.</div>
                 `;
             }
 
+            const updateScanUI = (pct, msg) => {
+                const titleEl = document.getElementById('douyinScanStatusTitle');
+                const barEl = document.getElementById('douyinScanProgressBar');
+                const pctEl = document.getElementById('douyinScanPercent');
+                const countEl = document.getElementById('douyinScanFoundCount');
+
+                if (titleEl && msg) titleEl.textContent = msg;
+                if (barEl && pct !== undefined) barEl.style.width = `${Math.min(100, Math.max(5, pct))}%`;
+                if (pctEl && pct !== undefined) pctEl.textContent = `${pct}%`;
+                
+                // Trích xuất số lượng video từ text nếu có
+                if (countEl && msg) {
+                    const match = msg.match(/(\d+)\s+video/i);
+                    if (match) {
+                        countEl.textContent = `Đã tìm thấy: ${match[1]} video`;
+                    }
+                }
+            };
+
             try {
-                const res = await fetch('/api/download/douyin/scan_channel', {
+                const res = await fetch('/api/download/douyin/scan_channel_stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ channel_url: channelUrl, limit })
                 });
 
-                if (res.status === 404) {
-                    showToast('Backend chưa nạp API quét kênh mới. Vui lòng tắt và khởi động lại ứng dụng!', 'warning');
-                    if (douyinChannelEmptyPlaceholder) {
-                        douyinChannelEmptyPlaceholder.innerHTML = `
-                            <div style="font-size: 15px; font-weight: 600; color: #f87171;">⚠️ Chưa khởi động lại Backend</div>
-                            <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">Vui lòng tắt ứng dụng và chạy lại file <code>run_app.bat</code> để nạp API quét kênh mới.</div>
-                        `;
-                    }
-                    return;
+                if (!res.ok) {
+                    let errMsg = `Lỗi phản hồi từ máy chủ (Mã: ${res.status})`;
+                    try {
+                        const errData = await res.json();
+                        if (errData.error) errMsg = errData.error;
+                    } catch (_) {}
+                    throw new Error(errMsg);
                 }
 
-                let data;
-                try {
-                    data = await res.json();
-                } catch (jsonErr) {
-                    showToast('Lỗi phản hồi từ máy chủ (Mã: ' + res.status + '). Vui lòng tắt và khởi động lại ứng dụng!', 'error');
-                    if (douyinChannelEmptyPlaceholder) {
-                        douyinChannelEmptyPlaceholder.innerHTML = `
-                            <div style="font-size: 15px; font-weight: 600; color: #f87171;">❌ Phản hồi không hợp lệ (Mã: ${res.status})</div>
-                            <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">Vui lòng khởi động lại ứng dụng để cập nhật endpoint.</div>
-                        `;
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+                let finalData = null;
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // giữ lại phần chưa hoàn chỉnh
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+                        const jsonStr = trimmed.replace(/^data:\s*/, '');
+                        try {
+                            const eventData = JSON.parse(jsonStr);
+                            if (eventData.status === 'progress') {
+                                updateScanUI(eventData.pct, eventData.msg);
+                            } else if (eventData.status === 'completed') {
+                                finalData = eventData.result;
+                                updateScanUI(100, 'Đã phân tích hoàn tất toàn bộ danh sách!');
+                            } else if (eventData.status === 'error') {
+                                throw new Error(eventData.error || 'Quá trình phân tích kênh bị gián đoạn.');
+                            }
+                        } catch (parseErr) {
+                            if (jsonStr.includes('"error"')) {
+                                throw parseErr;
+                            }
+                        }
                     }
-                    return;
                 }
 
-                if (!res.ok || data.error) {
-                    showToast(data.error || 'Lỗi khi quét kênh Douyin!', 'error');
-                    if (douyinChannelEmptyPlaceholder) {
-                        douyinChannelEmptyPlaceholder.innerHTML = `
-                            <div style="font-size: 15px; font-weight: 600; color: #f87171;">❌ Quét kênh thất bại</div>
-                            <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">${data.error || 'Không thể kết nối kênh Douyin.'}</div>
-                        `;
-                    }
-                    return;
+                if (!finalData || !finalData.videos) {
+                    throw new Error('Không nhận được dữ liệu danh sách video từ kênh.');
                 }
 
-                scannedDouyinVideos = data.videos || [];
+                scannedDouyinVideos = finalData.videos || [];
                 selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id));
 
                 // Render Channel Info Banner
-                const info = data.channel_info || {};
+                const info = finalData.channel_info || {};
                 if (douyinChannelInfoBanner) douyinChannelInfoBanner.style.display = 'block';
                 if (douyinChannelAvatar) douyinChannelAvatar.src = info.avatar || '';
                 if (douyinChannelNickname) douyinChannelNickname.textContent = info.nickname || 'Kênh Douyin';
@@ -7841,9 +7885,15 @@ function initDouyinChannelDownloader() {
                 // Render Video Grid
                 renderDouyinVideoGrid();
 
-                showToast(`Đã quét thành công ${scannedDouyinVideos.length} video từ kênh!`, 'success');
+                showToast(`Đã phân tích thành công ${scannedDouyinVideos.length} video từ kênh!`, 'success');
             } catch (e) {
-                showToast('Lỗi kết nối khi quét kênh: ' + e.message, 'error');
+                showToast('Lỗi khi phân tích kênh: ' + e.message, 'error');
+                if (douyinChannelEmptyPlaceholder) {
+                    douyinChannelEmptyPlaceholder.innerHTML = `
+                        <div style="font-size: 15px; font-weight: 600; color: #f87171;">❌ Phân tích kênh không thành công</div>
+                        <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">${e.message}</div>
+                    `;
+                }
             } finally {
                 btnScanDouyinChannel.disabled = false;
                 btnScanDouyinChannel.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Quét Danh Sách Video</span>`;
