@@ -17,6 +17,8 @@ import requests
 import subprocess
 import yt_dlp
 import ffmpeg_installer
+import concurrent.futures
+import threading
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -101,55 +103,119 @@ def sanitize_filename(name, max_len=90):
         clean = clean[:max_len].strip()
     return clean or 'video'
 
-def _find_aweme_detail_in_json(data):
+def _find_aweme_detail_in_json(data, target_video_id=None):
     """
-    Tìm đối tượng aweme_detail hoặc video detail hợp lệ trong cấu trúc JSON lồng nhau
+    Tìm đối tượng aweme_detail hoặc video detail hợp lệ trong cấu trúc JSON lồng nhau.
+    Nếu có target_video_id: Ưu tiên tuyệt đối tìm đúng video có ID trùng khớp, 
+    tránh nhầm lẫn với danh sách video đề xuất (Swiper/Recommended Feed list).
     """
+    if target_video_id:
+        target_str = str(target_video_id).strip()
+        # 1. Tìm chính xác video có ID trùng khớp trước
+        def _find_exact(node):
+            if isinstance(node, dict):
+                cur_id = str(node.get('aweme_id') or node.get('id') or node.get('awemeId') or '')
+                if cur_id and cur_id == target_str and 'video' in node and isinstance(node.get('video'), dict):
+                    return node
+                for v in node.values():
+                    if isinstance(v, (dict, list)):
+                        found = _find_exact(v)
+                        if found: return found
+            elif isinstance(node, list):
+                for item in node:
+                    if isinstance(item, (dict, list)):
+                        found = _find_exact(item)
+                        if found: return found
+            return None
+
+        exact_match = _find_exact(data)
+        if exact_match:
+            return exact_match
+
+    # 2. Fallback tìm video đầu tiên nếu không có target_video_id hoặc không khớp ID tuyệt đối
     if isinstance(data, dict):
-        # 1. Kiểm tra nếu chính là aweme_detail hoặc itemStruct
         if ('aweme_id' in data or 'id' in data) and 'video' in data and isinstance(data.get('video'), dict):
             video = data['video']
             if video.get('play_addr') or video.get('bit_rate') or video.get('download_addr'):
                 return data
                 
-        # 2. Kiểm tra các key phổ biến
         for key in ['aweme_detail', 'awemeDetail', 'videoDetail', 'itemStruct', 'itemInfo', 'item_list']:
             if key in data:
-                res = _find_aweme_detail_in_json(data[key])
+                res = _find_aweme_detail_in_json(data[key], target_video_id)
                 if res:
                     return res
 
         for k, v in data.items():
             if isinstance(v, (dict, list)):
-                res = _find_aweme_detail_in_json(v)
+                res = _find_aweme_detail_in_json(v, target_video_id)
                 if res:
                     return res
                     
     elif isinstance(data, list):
         for item in data:
             if isinstance(item, (dict, list)):
-                res = _find_aweme_detail_in_json(item)
+                res = _find_aweme_detail_in_json(item, target_video_id)
                 if res:
                     return res
 
     return None
 
-def _extract_aweme_detail_from_html(html_content):
+def _find_all_aweme_details_in_json(data):
     """
-    Trích xuất aweme_detail từ tất cả các thẻ script SSR của Douyin
+    Thu thập TẤT CẢ các đối tượng aweme_detail / video hợp lệ tìm thấy trong cây JSON lồng nhau
+    (Bao gồm video chính, các tập trong playlist/mix, feed video đề xuất, v.v.)
+    Khử trùng lặp theo aweme_id.
+    """
+    collected = []
+    seen_ids = set()
+
+    def _walk(node):
+        if isinstance(node, dict):
+            # Kiểm tra nếu là một aweme video hoàn chỉnh
+            aweme_id = str(node.get('aweme_id') or node.get('id') or node.get('awemeId') or '')
+            if aweme_id and 'video' in node and isinstance(node.get('video'), dict):
+                v = node['video']
+                if (v.get('play_addr') or v.get('bit_rate') or v.get('download_addr')) and not _is_ad_or_guide_url(str(node.get('desc', ''))):
+                    if aweme_id not in seen_ids:
+                        seen_ids.add(aweme_id)
+                        collected.append(node)
+            
+            # Tiếp tục duyệt sâu vào các key
+            for k, val in node.items():
+                if isinstance(val, (dict, list)):
+                    _walk(val)
+        elif isinstance(node, list):
+            for item in node:
+                if isinstance(item, (dict, list)):
+                    _walk(item)
+
+    _walk(data)
+    return collected
+
+def _extract_all_aweme_details_from_html(html_content):
+    """
+    Trích xuất TẤT CẢ aweme_detail từ toàn bộ các thẻ script SSR của Douyin
     """
     if not html_content:
-        return None
+        return []
 
     import urllib.parse
+    all_details = []
+    seen_ids = set()
+
+    def _add_details(det_list):
+        for d in det_list:
+            aid = str(d.get('aweme_id') or d.get('id') or '')
+            if aid and aid not in seen_ids:
+                seen_ids.add(aid)
+                all_details.append(d)
+
     # 1. __UNIVERSAL_DATA_FOR_REHYDRATION__
     m_univ = re.search(r'<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"\s+type="application/json">([^<]+)</script>', html_content)
     if m_univ:
         try:
             raw_json = json.loads(m_univ.group(1).strip())
-            detail = _find_aweme_detail_in_json(raw_json)
-            if detail:
-                return detail
+            _add_details(_find_all_aweme_details_in_json(raw_json))
         except Exception:
             pass
 
@@ -158,9 +224,7 @@ def _extract_aweme_detail_from_html(html_content):
     if m_router:
         try:
             raw_json = json.loads(m_router.group(1).strip())
-            detail = _find_aweme_detail_in_json(raw_json)
-            if detail:
-                return detail
+            _add_details(_find_all_aweme_details_in_json(raw_json))
         except Exception:
             pass
 
@@ -170,24 +234,20 @@ def _extract_aweme_detail_from_html(html_content):
         try:
             raw_text = urllib.parse.unquote(m_render.group(1).strip())
             raw_json = json.loads(raw_text)
-            detail = _find_aweme_detail_in_json(raw_json)
-            if detail:
-                return detail
+            _add_details(_find_all_aweme_details_in_json(raw_json))
         except Exception:
             pass
 
-    # 4. Fallback: Bất kỳ thẻ script chứa JSON có aweme_id hoặc video
+    # 4. Fallback: Bất kỳ thẻ script chứa JSON
     script_matches = re.findall(r'<script[^>]*type="application/json"[^>]*>([^<]+)</script>', html_content)
     for s_content in script_matches:
         try:
             raw_json = json.loads(s_content.strip())
-            detail = _find_aweme_detail_in_json(raw_json)
-            if detail:
-                return detail
+            _add_details(_find_all_aweme_details_in_json(raw_json))
         except Exception:
             pass
 
-    return None
+    return all_details
 
 def _is_ad_or_guide_url(url):
     """
@@ -208,103 +268,82 @@ def _is_ad_or_guide_url(url):
 # =========================================================================
 _DOUYIN_RESOLVE_CACHE = {}
 
-def _format_douyin_result(detail, video_id, page_title, target_url, original_url, captured_video_srcs=None):
+def _format_single_douyin_detail(detail, video_id=None, page_title='', target_url=''):
     """
-    Chuẩn hóa cấu trúc dữ liệu kết quả Douyin chuẩn Section 8 & 28.
+    Format 1 video detail Douyin thành cấu trúc chuẩn Section 8.
     """
-    if captured_video_srcs is None:
-        captured_video_srcs = []
-        
+    if not detail:
+        return None
+    aweme_id = str(detail.get('aweme_id') or detail.get('id') or video_id or 'unknown_id')
+    title = detail.get('desc') or page_title or 'Video Douyin'
+    title = re.sub(r' - 抖音$', '', title).strip()
+    safe_title = sanitize_filename(title)
+    
+    author = detail.get('author', {}).get('nickname', 'Tác giả Douyin')
+    duration = round((detail.get('duration', 0) or 0) / 1000.0, 1)
+    video = detail.get('video', {})
+    cover = video.get('cover', {}).get('url_list', [''])[0] or video.get('origin_cover', {}).get('url_list', [''])[0]
+    height = video.get('height', 1080)
+    width = video.get('width', 1920)
+    
     resolutions = []
     format_url_map = {}
+    bit_rate_list = video.get('bit_rate', []) or []
+    sorted_bitrates = sorted(bit_rate_list, key=lambda x: (x.get('quality_type', 0) or 0, x.get('bit_rate', 0) or 0), reverse=True)
     
-    if detail:
-        aweme_id = detail.get('aweme_id') or video_id or 'unknown_id'
-        title = detail.get('desc') or page_title or 'Video Douyin'
-        title = re.sub(r' - 抖音$', '', title).strip()
-        safe_title = sanitize_filename(title)
+    seen_heights = set()
+    for br in sorted_bitrates:
+        gear = str(br.get('gear_name', ''))
+        q_type = br.get('quality_type')
+        h = br.get('height') or height or 1080
+        if '1080' in gear or q_type == 1080: h = 1080
+        elif '720' in gear or q_type == 720: h = 720
+        elif '540' in gear or q_type == 540: h = 540
+        elif '480' in gear or q_type == 480: h = 480
         
-        author = detail.get('author', {}).get('nickname', 'Tác giả Douyin')
-        duration = round((detail.get('duration', 0) or 0) / 1000.0, 1)
-        video = detail.get('video', {})
-        cover = video.get('cover', {}).get('url_list', [''])[0] or video.get('origin_cover', {}).get('url_list', [''])[0]
-        height = video.get('height', 1080)
-        width = video.get('width', 1920)
+        br_urls = br.get('play_addr', {}).get('url_list', []) or []
+        clean_br_urls = [u.replace('playwm', 'play') for u in br_urls if u and not _is_ad_or_guide_url(u)]
         
-        # Trích xuất tất cả các luồng phân giải từ bit_rate
-        bit_rate_list = video.get('bit_rate', []) or []
-        sorted_bitrates = sorted(bit_rate_list, key=lambda x: (x.get('quality_type', 0) or 0, x.get('bit_rate', 0) or 0), reverse=True)
-        
-        seen_heights = set()
-        for br in sorted_bitrates:
-            gear = str(br.get('gear_name', ''))
-            q_type = br.get('quality_type')
-            h = br.get('height') or height or 1080
-            if '1080' in gear or q_type == 1080: h = 1080
-            elif '720' in gear or q_type == 720: h = 720
-            elif '540' in gear or q_type == 540: h = 540
-            elif '480' in gear or q_type == 480: h = 480
+        if clean_br_urls:
+            lbl = f"{h}p"
+            if h >= 2160: lbl += " (4K Ultra HD)"
+            elif h >= 1440: lbl += " (2K QHD)"
+            elif h >= 1080: lbl += " (Full HD)"
+            elif h >= 720: lbl += " (HD)"
             
-            br_urls = br.get('play_addr', {}).get('url_list', []) or []
-            clean_br_urls = [u.replace('playwm', 'play') for u in br_urls if u and not _is_ad_or_guide_url(u)]
+            fmt_id = str(h)
+            if fmt_id not in seen_heights:
+                seen_heights.add(fmt_id)
+                resolutions.append({
+                    'format_id': fmt_id,
+                    'label': lbl,
+                    'height': h,
+                    'ext': 'mp4'
+                })
+                format_url_map[fmt_id] = clean_br_urls
+
+    url_list = []
+    for u in video.get('play_addr', {}).get('url_list', []):
+        u_clean = u.replace('playwm', 'play')
+        if u_clean and u_clean not in url_list and not _is_ad_or_guide_url(u_clean):
+            url_list.append(u_clean)
             
-            if clean_br_urls:
-                lbl = f"{h}p"
-                if h >= 2160: lbl += " (4K Ultra HD)"
-                elif h >= 1440: lbl += " (2K QHD)"
-                elif h >= 1080: lbl += " (Full HD)"
-                elif h >= 720: lbl += " (HD)"
-                
-                fmt_id = str(h)
-                if fmt_id not in seen_heights:
-                    seen_heights.add(fmt_id)
-                    resolutions.append({
-                        'format_id': fmt_id,
-                        'label': lbl,
-                        'height': h,
-                        'ext': 'mp4'
-                    })
-                    format_url_map[fmt_id] = clean_br_urls
+    for u in video.get('download_addr', {}).get('url_list', []):
+        if u and u not in url_list and not _is_ad_or_guide_url(u):
+            url_list.append(u)
+            
+    for u in video.get('play_addr_h264', {}).get('url_list', []):
+        if u and u not in url_list and not _is_ad_or_guide_url(u):
+            url_list.append(u)
 
-        # Thu thập các URL mặc định
-        url_list = []
-        for u in video.get('play_addr', {}).get('url_list', []):
-            u_clean = u.replace('playwm', 'play')
-            if u_clean and u_clean not in url_list and not _is_ad_or_guide_url(u_clean):
-                url_list.append(u_clean)
-                
-        for u in video.get('download_addr', {}).get('url_list', []):
-            if u and u not in url_list and not _is_ad_or_guide_url(u):
-                url_list.append(u)
-                
-        for u in video.get('play_addr_h264', {}).get('url_list', []):
-            if u and u not in url_list and not _is_ad_or_guide_url(u):
-                url_list.append(u)
-
-        if not url_list:
-            for br_urls in format_url_map.values():
-                for u in br_urls:
-                    if u not in url_list:
-                        url_list.append(u)
-
-        for s in captured_video_srcs:
-            if s not in url_list and not _is_ad_or_guide_url(s):
-                url_list.append(s)
-    else:
-        aweme_id = video_id or 'unknown_id'
-        title = page_title or 'Video Douyin'
-        title = re.sub(r' - 抖音$', '', title).strip()
-        safe_title = sanitize_filename(title)
-        author = 'Tác giả Douyin'
-        duration = 0
-        cover = ''
-        url_list = [s for s in captured_video_srcs if not _is_ad_or_guide_url(s)]
-        height = 1080
-        width = 1920
-        detail = {}
-    
     if not url_list:
-        return {'error': 'Không tìm thấy luồng tải video khả dụng cho video Douyin này (đã loại trừ video quảng cáo).'}
+        for br_urls in format_url_map.values():
+            for u in br_urls:
+                if u not in url_list:
+                    url_list.append(u)
+
+    if not url_list:
+        return None
 
     if resolutions:
         best_fmt = resolutions[0]
@@ -326,8 +365,8 @@ def _format_douyin_result(detail, video_id, page_title, target_url, original_url
         ]
         format_url_map['best'] = url_list
         format_url_map[str(height)] = url_list
-    
-    res_info = {
+
+    return {
         'success': True,
         'video_id': aweme_id,
         'title': safe_title or title,
@@ -338,21 +377,80 @@ def _format_douyin_result(detail, video_id, page_title, target_url, original_url
         'width': width,
         'height': height,
         'extractor': 'Douyin',
-        'url': target_url,
+        'url': f"https://www.douyin.com/video/{aweme_id}" if aweme_id and aweme_id != 'unknown_id' else target_url,
         'video_urls': url_list,
         'resolutions': resolutions,
         'format_url_map': format_url_map,
         'raw_detail': detail
     }
+
+def _format_douyin_result(detail, video_id, page_title, target_url, original_url, captured_video_srcs=None, all_details=None):
+    """
+    Chuẩn hóa cấu trúc dữ liệu kết quả Douyin, hỗ trợ trả về TẤT CẢ video tìm thấy trong link.
+    """
+    if captured_video_srcs is None:
+        captured_video_srcs = []
+        
+    primary_info = _format_single_douyin_detail(detail, video_id, page_title, target_url)
+    
+    if not primary_info:
+        if captured_video_srcs:
+            aweme_id = video_id or 'unknown_id'
+            title = page_title or 'Video Douyin'
+            title = re.sub(r' - 抖音$', '', title).strip()
+            safe_title = sanitize_filename(title)
+            clean_srcs = [s for s in captured_video_srcs if not _is_ad_or_guide_url(s)]
+            primary_info = {
+                'success': True,
+                'video_id': aweme_id,
+                'title': safe_title or title,
+                'uploader': 'Tác giả Douyin',
+                'author': 'Tác giả Douyin',
+                'duration': 0,
+                'thumbnail': '',
+                'width': 1920,
+                'height': 1080,
+                'extractor': 'Douyin',
+                'url': target_url,
+                'video_urls': clean_srcs,
+                'resolutions': [{'format_id': 'best', 'label': 'Chất lượng cao nhất (Gốc)', 'height': 9999, 'ext': 'mp4'}],
+                'format_url_map': {'best': clean_srcs},
+                'raw_detail': {}
+            }
+        else:
+            return {'error': 'Không tìm thấy luồng tải video khả dụng cho video Douyin này (đã loại trừ video quảng cáo).'}
+
+    # Thu thập tất cả các video được quét (chống circular reference)
+    all_formatted_videos = []
+    seen_ids = set()
+    
+    if primary_info and primary_info.get('video_id'):
+        seen_ids.add(primary_info['video_id'])
+        # Tạo dict copy độc lập, tránh lồng ghép tham chiếu vòng
+        all_formatted_videos.append(dict(primary_info))
+        
+    if all_details:
+        for d in all_details:
+            d_id = str(d.get('aweme_id') or d.get('id') or '')
+            if d_id and d_id not in seen_ids:
+                f_item = _format_single_douyin_detail(d, d_id, page_title, target_url)
+                if f_item and f_item.get('success'):
+                    seen_ids.add(d_id)
+                    all_formatted_videos.append(f_item)
+                    
+    primary_info['is_multiple'] = len(all_formatted_videos) > 1
+    primary_info['video_count'] = len(all_formatted_videos)
+    primary_info['videos'] = all_formatted_videos
     
     # Lưu cache
     now = time.time()
-    _DOUYIN_RESOLVE_CACHE[target_url] = {'timestamp': now, 'data': res_info}
-    _DOUYIN_RESOLVE_CACHE[original_url] = {'timestamp': now, 'data': res_info}
+    _DOUYIN_RESOLVE_CACHE[target_url] = {'timestamp': now, 'data': primary_info}
+    _DOUYIN_RESOLVE_CACHE[original_url] = {'timestamp': now, 'data': primary_info}
+    aweme_id = primary_info.get('video_id')
     if aweme_id:
-        _DOUYIN_RESOLVE_CACHE[str(aweme_id)] = {'timestamp': now, 'data': res_info}
+        _DOUYIN_RESOLVE_CACHE[str(aweme_id)] = {'timestamp': now, 'data': primary_info}
         
-    return res_info
+    return primary_info
 
 def _resolve_douyin_http_direct(url, video_id=None):
     """
@@ -369,7 +467,7 @@ def _resolve_douyin_http_direct(url, video_id=None):
         # 1. Giải mã link rút gọn nếu có
         if 'v.douyin.com' in url or not video_id:
             try:
-                resp_head = requests.get(url, headers=headers, allow_redirects=True, timeout=8)
+                resp_head = requests.get(url, headers=headers, allow_redirects=True, timeout=3.0)
                 target_url = resp_head.url
                 canonical_url, vid = parse_douyin_url(target_url)
                 if vid:
@@ -385,10 +483,10 @@ def _resolve_douyin_http_direct(url, video_id=None):
         if video_id:
             api_url = f"https://www.iesdouyin.com/aweme/v1/web/aweme/detail/?aweme_id={video_id}&aid=1128&version_name=23.5.0&device_platform=android&os_version=2333"
             try:
-                r_api = requests.get(api_url, headers=headers, timeout=8)
+                r_api = requests.get(api_url, headers=headers, timeout=2.5)
                 if r_api.status_code == 200:
                     api_json = r_api.json()
-                    det = _find_aweme_detail_in_json(api_json)
+                    det = _find_aweme_detail_in_json(api_json, target_video_id=video_id)
                     if det:
                         return _format_douyin_result(det, video_id, '', target_url, url, [])
             except Exception:
@@ -396,13 +494,23 @@ def _resolve_douyin_http_direct(url, video_id=None):
 
         # 3. Thử tải HTML của target_url và bóc tách SSR JSON
         try:
-            r_page = requests.get(target_url, headers=headers, timeout=10)
+            r_page = requests.get(target_url, headers=headers, timeout=3.0)
             if r_page.status_code == 200:
-                ssr_detail = _extract_aweme_detail_from_html(r_page.text)
-                if ssr_detail:
-                    title_m = re.search(r'<title>([^<]+)</title>', r_page.text)
-                    p_title = title_m.group(1) if title_m else ''
-                    return _format_douyin_result(ssr_detail, video_id, p_title, target_url, url, [])
+                all_ssr_details = _extract_all_aweme_details_from_html(r_page.text)
+                if all_ssr_details:
+                    primary_detail = None
+                    if video_id:
+                        for d in all_ssr_details:
+                            if str(d.get('aweme_id') or d.get('id') or '') == str(video_id):
+                                primary_detail = d
+                                break
+                    elif all_ssr_details:
+                        primary_detail = all_ssr_details[0]
+
+                    if primary_detail:
+                        title_m = re.search(r'<title>([^<]+)</title>', r_page.text)
+                        p_title = title_m.group(1) if title_m else ''
+                        return _format_douyin_result(primary_detail, video_id, p_title, target_url, url, [], all_details=all_ssr_details)
         except Exception:
             pass
 
@@ -416,7 +524,7 @@ def _resolve_via_cloud_api(url):
     """
     try:
         api_url = "https://www.tikwm.com/api/"
-        resp = requests.post(api_url, data={'url': url, 'count': 12, 'cursor': 0, 'web': 1, 'hd': 1}, timeout=10)
+        resp = requests.post(api_url, data={'url': url, 'count': 12, 'cursor': 0, 'web': 1, 'hd': 1}, timeout=3.5)
         if resp.status_code == 200:
             res_data = resp.json()
             if res_data.get('code') == 0 and res_data.get('data'):
@@ -442,7 +550,7 @@ def _resolve_via_cloud_api(url):
                     if wm_u not in vid_urls: vid_urls.append(wm_u)
                     
                 if vid_urls:
-                    res_info = {
+                    single_v = {
                         'success': True,
                         'video_id': vid or 'unknown_id',
                         'title': title,
@@ -460,7 +568,10 @@ def _resolve_via_cloud_api(url):
                         ],
                         'format_url_map': {'best': vid_urls}
                     }
-                    return res_info
+                    single_v['is_multiple'] = False
+                    single_v['video_count'] = 1
+                    single_v['videos'] = [dict(single_v)]
+                    return single_v
     except Exception:
         pass
     return None
@@ -473,61 +584,41 @@ def resolve_douyin_media(url, use_cache=True):
     canonical_url, video_id = parse_douyin_url(url)
     target_url = canonical_url or url
     
-    # 1. Kiểm tra Cache trước
+    # 0. Giải mã link rút gọn v.douyin.com ngay từ đầu để lấy chính xác Video ID
+    if 'v.douyin.com' in url or not video_id:
+        try:
+            resp_head = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'}, allow_redirects=True, timeout=5.0, stream=True)
+            if resp_head.url:
+                target_url = resp_head.url
+                c_url, vid = parse_douyin_url(target_url)
+                if vid:
+                    video_id = vid
+                    target_url = c_url
+        except Exception:
+            pass
+
+    # 1. Kiểm tra Cache trước (chỉ dùng nếu cache hợp lệ và có thông tin thật)
     if use_cache:
         now = time.time()
         for k in [target_url, url, video_id]:
             if k and k in _DOUYIN_RESOLVE_CACHE:
                 entry = _DOUYIN_RESOLVE_CACHE[k]
-                if now - entry['timestamp'] < 1800:
-                    return entry['data']
+                c_data = entry.get('data') or {}
+                if c_data.get('title') and c_data.get('title') != 'Video Douyin' and (c_data.get('duration', 0) > 0 or c_data.get('video_urls')):
+                    if now - entry.get('timestamp', 0) < 1800:
+                        return c_data
 
     # 2. Thử giải mã trực tiếp qua HTTP Direct API / SSR (Nhanh gấp 10x, 100% không phụ thuộc Chromium)
     http_result = _resolve_douyin_http_direct(target_url, video_id)
     if http_result and http_result.get('success'):
         return http_result
 
-    # 3. Thử giải mã qua Cloud API
-    cloud_result = _resolve_via_cloud_api(target_url)
-    if cloud_result and cloud_result.get('success'):
-        _DOUYIN_RESOLVE_CACHE[target_url] = {'timestamp': time.time(), 'data': cloud_result}
-        return cloud_result
-
-    # 4. Thử giải mã qua yt-dlp
+    # 3. Thử giải mã qua Cloud API (Timeout nhanh 3s)
     try:
-        ydl_opts = get_common_ydl_opts()
-        ydl_opts['skip_download'] = True
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(target_url, download=False)
-            if info:
-                vid_urls = []
-                for f in info.get('formats', []):
-                    u = f.get('url')
-                    if u and u.startswith('http') and not _is_ad_or_guide_url(u):
-                        vid_urls.append(u)
-                if info.get('url') and info['url'].startswith('http'):
-                    vid_urls.insert(0, info['url'])
-                if vid_urls:
-                    res_ytdlp = {
-                        'success': True,
-                        'video_id': str(info.get('id') or video_id or 'unknown_id'),
-                        'title': sanitize_filename(info.get('title') or 'Video Douyin'),
-                        'uploader': info.get('uploader') or 'Tác giả Douyin',
-                        'author': info.get('uploader') or 'Tác giả Douyin',
-                        'duration': info.get('duration') or 0,
-                        'thumbnail': info.get('thumbnail') or '',
-                        'width': info.get('width', 1080),
-                        'height': info.get('height', 1920),
-                        'extractor': 'Douyin',
-                        'url': target_url,
-                        'video_urls': vid_urls,
-                        'resolutions': [
-                            {'format_id': 'best', 'label': 'Chất lượng cao nhất (yt-dlp)', 'height': 1080, 'ext': 'mp4'}
-                        ],
-                        'format_url_map': {'best': vid_urls}
-                    }
-                    _DOUYIN_RESOLVE_CACHE[target_url] = {'timestamp': time.time(), 'data': res_ytdlp}
-                    return res_ytdlp
+        cloud_result = _resolve_via_cloud_api(target_url)
+        if cloud_result and cloud_result.get('success'):
+            _DOUYIN_RESOLVE_CACHE[target_url] = {'timestamp': time.time(), 'data': cloud_result}
+            return cloud_result
     except Exception:
         pass
 
@@ -539,37 +630,72 @@ def resolve_douyin_media(url, use_cache=True):
 
     captured_data = {}
     captured_video_srcs = []
+    captured_all_details = []
+    seen_captured_ids = set()
+
+    def _collect_details(det_list):
+        for d in det_list:
+            aid = str(d.get('aweme_id') or d.get('id') or '')
+            if aid and aid not in seen_captured_ids:
+                seen_captured_ids.add(aid)
+                captured_all_details.append(d)
     
     try:
         with sync_playwright() as p:
             try:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
+                )
             except Exception:
                 return {'error': 'Không thể bóc tách luồng video từ link này. Video có thể đang bị chặn khu vực hoặc link đã hết hạn.'}
 
             context = browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                 locale='zh-CN',
-                viewport={'width': 1920, 'height': 1080}
+                viewport={'width': 1280, 'height': 800}
             )
             page = context.new_page()
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.navigator.chrome = { runtime: {} };
+            """)
             
             def handle_response(response):
                 try:
                     r_url = response.url
                     if any(endpoint in r_url for endpoint in [
-                        'aweme/v1/web/aweme/detail/',
-                        'aweme/v1/web/aweme/iteminfo/',
-                        'aweme/v1/web/item/detail/',
-                        'aweme/v1/web/tab/feed/',
-                        'aweme/v1/web/aweme/post/',
-                        'aweme/v1/web/slider/video/'
+                        'aweme/v1/web/aweme/detail',
+                        'aweme/v1/web/aweme/iteminfo',
+                        'aweme/v1/web/item/detail',
+                        'aweme/v1/web/tab/feed',
+                        'aweme/v1/web/aweme/post',
+                        'aweme/v1/web/slider/video'
                     ]):
                         try:
                             data = response.json()
-                            det = _find_aweme_detail_in_json(data)
-                            if det and not captured_data.get('detail'):
-                                captured_data['detail'] = det
+                            if isinstance(data, dict):
+                                if data.get('aweme_detail'):
+                                    aw_d = data['aweme_detail']
+                                    aw_id = str(aw_d.get('aweme_id') or '')
+                                    if not video_id or aw_id == str(video_id):
+                                        captured_data['detail'] = aw_d
+                                    _collect_details([aw_d])
+                                elif data.get('aweme_list'):
+                                    _collect_details(data['aweme_list'])
+                                    for itm in data['aweme_list']:
+                                        if str(itm.get('aweme_id') or '') == str(video_id):
+                                            captured_data['detail'] = itm
+                                            break
+                            found_items = _find_all_aweme_details_in_json(data)
+                            if found_items:
+                                _collect_details(found_items)
+                                if not captured_data.get('detail'):
+                                    det = _find_aweme_detail_in_json(data, target_video_id=video_id)
+                                    if det:
+                                        captured_data['detail'] = det
+                                    elif not video_id:
+                                        captured_data['detail'] = found_items[0]
                         except Exception:
                             pass
                     elif ('.mp4' in r_url or 'video/tos' in r_url or 'douyinvod' in r_url or 'aweme/v1/play' in r_url) and response.status in [200, 206]:
@@ -579,27 +705,37 @@ def resolve_douyin_media(url, use_cache=True):
                                     captured_video_srcs.append(r_url)
                 except Exception:
                     pass
-                    
+
             page.on('response', handle_response)
-            
+                    
+            # 1. Khởi tạo cookie Douyin
             try:
-                page.goto(target_url, wait_until='domcontentloaded', timeout=15000)
+                page.goto("https://www.douyin.com/", timeout=10000)
+                time.sleep(1.2)
             except Exception:
                 pass
-                
-            for _ in range(15):
+
+            # 2. Mở target URL
+            try:
+                page.goto(target_url, timeout=20000)
+            except Exception:
+                pass
+            
+            for _ in range(35):
                 if 'detail' in captured_data:
                     break
-                page.wait_for_timeout(400)
+                time.sleep(0.2)
                 
-            if 'detail' not in captured_data:
-                try:
-                    html_content = page.content()
-                    ssr_detail = _extract_aweme_detail_from_html(html_content)
-                    if ssr_detail:
-                        captured_data['detail'] = ssr_detail
-                except Exception:
-                    pass
+            try:
+                html_content = page.content()
+                ssr_all = _extract_all_aweme_details_from_html(html_content)
+                if ssr_all:
+                    _collect_details(ssr_all)
+                    if not captured_data.get('detail'):
+                        det = _find_aweme_detail_in_json({'items': ssr_all}, target_video_id=video_id)
+                        captured_data['detail'] = det or ssr_all[0]
+            except Exception:
+                pass
 
             final_url = page.url
             page_title = page.title() or ''
@@ -613,7 +749,15 @@ def resolve_douyin_media(url, use_cache=True):
         if 'detail' not in captured_data and not captured_video_srcs:
             return {'error': 'Không thể trích xuất thông tin video từ Douyin. Video có thể bị ẩn, riêng tư hoặc link đã hết hạn.'}
             
-        return _format_douyin_result(captured_data.get('detail'), video_id, page_title, target_url, url, captured_video_srcs)
+        return _format_douyin_result(
+            captured_data.get('detail'),
+            video_id,
+            page_title,
+            target_url,
+            url,
+            captured_video_srcs,
+            all_details=captured_all_details
+        )
     except Exception as e:
         return {'error': f'Lỗi phân tích Douyin: {str(e)}'}
 
@@ -621,10 +765,10 @@ def resolve_douyin_media(url, use_cache=True):
 # =========================================================================
 # 3. STREAM DOWNLOAD MANAGER VỚI RANGE RESUME & RETRY (Section 9 & 27)
 # =========================================================================
-def download_stream_with_resume(video_urls, output_path, is_audio=False, progress_callback=None, max_retries=3):
+def download_stream_with_resume(video_urls, output_path, is_audio=False, progress_callback=None, max_retries=3, num_threads=4):
     """
-    Tải stream chunk trực tiếp xuống disk (.part), hỗ trợ HTTP Range Resume và Exponential Backoff Retry.
-    Không lưu toàn bộ video trong RAM (Section 27).
+    Tải stream đa luồng (Multi-Connection Range Downloader - chuẩn IDM 4-6 luồng)
+    với tự động fallback đơn luồng, hỗ trợ HTTP Range Resume và Exponential Backoff Retry.
     """
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -633,79 +777,187 @@ def download_stream_with_resume(video_urls, output_path, is_audio=False, progres
     }
     
     part_path = output_path + '.part'
-    backoff_delays = [2, 5, 10]
-    chunk_size = 1024 * 256  # 256 KB chunk
+    backoff_delays = [1, 2, 4]
     
-    # Kiểm tra file dở dang để tải tiếp (Resume - Section 9)
-    downloaded_total = 0
-    if os.path.exists(part_path):
-        downloaded_total = os.path.getsize(part_path)
-        
-    success = False
+    # 1. Thử qua từng URL để thăm dò kích thước và hỗ trợ Range
+    selected_url = None
     total_file_size = 0
+    accept_ranges = False
     
-    for attempt in range(max_retries):
-        for v_url in video_urls:
-            try:
-                req_headers = headers.copy()
-                if downloaded_total > 0:
-                    req_headers['Range'] = f"bytes={downloaded_total}-"
-                    
-                with requests.get(v_url, headers=req_headers, stream=True, timeout=25) as r:
-                    if r.status_code == 206:
-                        # Server hỗ trợ Resume (Partial Content)
-                        content_range = r.headers.get('content-range', '')
-                        m = re.search(r'/(\d+)', content_range)
-                        total_file_size = int(m.group(1)) if m else (downloaded_total + int(r.headers.get('content-length', 0)))
-                        mode = 'ab'
-                    elif r.status_code == 200:
-                        # Server gửi full stream từ đầu
-                        total_file_size = int(r.headers.get('content-length', 0))
-                        downloaded_total = 0
-                        mode = 'wb'
-                    else:
-                        continue
-                        
-                    start_time = time.time()
-                    last_update = start_time
-                    
-                    with open(part_path, mode) as f:
-                        for chunk in r.iter_content(chunk_size=chunk_size):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded_total += len(chunk)
+    session = requests.Session()
+    
+    for v_url in video_urls:
+        try:
+            r_head = session.head(v_url, headers=headers, allow_redirects=True, timeout=8)
+            if r_head.status_code in [200, 206]:
+                selected_url = v_url
+                total_file_size = int(r_head.headers.get('content-length', 0))
+                accept_ranges = 'bytes' in r_head.headers.get('accept-ranges', '').lower() or r_head.status_code == 206
+                break
+        except Exception:
+            pass
+        # Nếu HEAD bị chặn, thử GET 2 bytes
+        try:
+            r_test = session.get(v_url, headers={**headers, 'Range': 'bytes=0-1'}, stream=True, timeout=8)
+            if r_test.status_code == 206:
+                selected_url = v_url
+                accept_ranges = True
+                cr = r_test.headers.get('content-range', '')
+                if '/' in cr:
+                    total_file_size = int(cr.split('/')[-1])
+                break
+            elif r_test.status_code == 200:
+                selected_url = v_url
+                total_file_size = int(r_test.headers.get('content-length', 0))
+                break
+        except Exception:
+            pass
+            
+    if not selected_url and video_urls:
+        selected_url = video_urls[0]
+
+    success = False
+    
+    # 2. Nếu server hỗ trợ Range và dung lượng > 2MB -> TẢI ĐA LUỒNG SIÊU TỐC (IDM Standard)
+    if accept_ranges and total_file_size > 2 * 1024 * 1024:
+        threads_count = min(num_threads, 6)
+        chunk_size_per_thread = total_file_size // threads_count
+        ranges = []
+        for i in range(threads_count):
+            start = i * chunk_size_per_thread
+            end = total_file_size - 1 if i == threads_count - 1 else (start + chunk_size_per_thread - 1)
+            ranges.append((i, start, end))
+            
+        temp_files = [f"{part_path}.part{i}" for i in range(threads_count)]
+        downloaded_bytes = [0] * threads_count
+        lock = threading.Lock()
+        t0 = time.time()
+        last_cb_time = t0
+        
+        def _download_range(idx, start_byte, end_byte):
+            nonlocal last_cb_time
+            req_h = headers.copy()
+            req_h['Range'] = f"bytes={start_byte}-{end_byte}"
+            temp_f = temp_files[idx]
+            
+            with requests.get(selected_url, headers=req_h, stream=True, timeout=25) as r:
+                r.raise_for_status()
+                with open(temp_f, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024*512):
+                        if chunk:
+                            f.write(chunk)
+                            with lock:
+                                downloaded_bytes[idx] += len(chunk)
+                                total_dl = sum(downloaded_bytes)
                                 now = time.time()
-                                if progress_callback and (now - last_update >= 0.25 or (total_file_size and downloaded_total == total_file_size)):
-                                    last_update = now
-                                    percent = round((downloaded_total / total_file_size) * 100, 1) if total_file_size > 0 else 0
-                                    elapsed = now - start_time
-                                    speed = (downloaded_total - (downloaded_total if mode == 'wb' else 0)) / elapsed if elapsed > 0 else 0
-                                    speed_str = f"{speed / (1024*1024):.1f} MB/s" if speed else "-- MB/s"
-                                    remaining = max(0, total_file_size - downloaded_total)
-                                    eta = int(remaining / speed) if speed > 0 else 0
-                                    eta_str = f"{eta}s" if eta else "--"
-                                    
+                                if progress_callback and (now - last_cb_time >= 0.15 or total_dl >= total_file_size):
+                                    last_cb_time = now
+                                    pct = round((total_dl / total_file_size) * 100, 1) if total_file_size > 0 else 0
+                                    el = now - t0
+                                    spd = (total_dl / el) if el > 0 else 0
+                                    spd_str = f"{spd / (1024*1024):.1f} MB/s" if spd else "-- MB/s"
+                                    rem = max(0, total_file_size - total_dl)
+                                    eta = int(rem / spd) if spd > 0 else 0
                                     progress_callback({
                                         'status': 'downloading',
-                                        'downloaded_bytes': downloaded_total,
+                                        'downloaded_bytes': total_dl,
                                         'total_bytes': total_file_size,
-                                        'percent': percent,
-                                        'speed': speed_str,
-                                        'eta': eta_str
+                                        'percent': pct,
+                                        'speed': spd_str,
+                                        'eta': f"{eta}s" if eta else "--"
                                     })
                                     
-                    # Kiểm tra hoàn thành
-                    if (total_file_size > 0 and downloaded_total >= total_file_size) or (downloaded_total > 1024*100 and total_file_size == 0):
-                        success = True
-                        break
-                        
-            except (requests.RequestException, IOError) as e:
-                time.sleep(backoff_delays[min(attempt, len(backoff_delays)-1)])
-                continue
-                
-        if success:
-            break
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=threads_count) as executor:
+                futures = [executor.submit(_download_range, r[0], r[1], r[2]) for r in ranges]
+                concurrent.futures.wait(futures)
+                for f in futures:
+                    f.result()
+                    
+            # Ghép nối các file part thành part_path chính thức
+            with open(part_path, 'wb') as out_f:
+                for temp_f in temp_files:
+                    if os.path.exists(temp_f):
+                        with open(temp_f, 'rb') as in_f:
+                            while True:
+                                b = in_f.read(1024 * 1024 * 2)
+                                if not b:
+                                    break
+                                out_f.write(b)
+                        try:
+                            os.remove(temp_f)
+                        except Exception:
+                            pass
+            success = True
+        except Exception:
+            for temp_f in temp_files:
+                if os.path.exists(temp_f):
+                    try: os.remove(temp_f)
+                    except Exception: pass
+            success = False
+
+    # 3. Fallback: Đơn luồng nếu Range không hỗ trợ hoặc tải đa luồng gặp lỗi
+    if not success:
+        downloaded_total = 0
+        if os.path.exists(part_path):
+            downloaded_total = os.path.getsize(part_path)
             
+        for attempt in range(max_retries):
+            for v_url in ([selected_url] if selected_url else []) + [u for u in video_urls if u != selected_url]:
+                try:
+                    req_headers = headers.copy()
+                    if downloaded_total > 0:
+                        req_headers['Range'] = f"bytes={downloaded_total}-"
+                        
+                    with requests.get(v_url, headers=req_headers, stream=True, timeout=25) as r:
+                        if r.status_code == 206:
+                            content_range = r.headers.get('content-range', '')
+                            m = re.search(r'/(\d+)', content_range)
+                            total_file_size = int(m.group(1)) if m else (downloaded_total + int(r.headers.get('content-length', 0)))
+                            mode = 'ab'
+                        elif r.status_code == 200:
+                            total_file_size = int(r.headers.get('content-length', 0))
+                            downloaded_total = 0
+                            mode = 'wb'
+                        else:
+                            continue
+                            
+                        start_time = time.time()
+                        last_update = start_time
+                        
+                        with open(part_path, mode) as f:
+                            for chunk in r.iter_content(chunk_size=1024*1024):
+                                if chunk:
+                                    f.write(chunk)
+                                    downloaded_total += len(chunk)
+                                    now = time.time()
+                                    if progress_callback and (now - last_update >= 0.2 or (total_file_size and downloaded_total == total_file_size)):
+                                        last_update = now
+                                        percent = round((downloaded_total / total_file_size) * 100, 1) if total_file_size > 0 else 0
+                                        elapsed = now - start_time
+                                        speed = (downloaded_total - (downloaded_total if mode == 'wb' else 0)) / elapsed if elapsed > 0 else 0
+                                        speed_str = f"{speed / (1024*1024):.1f} MB/s" if speed else "-- MB/s"
+                                        remaining = max(0, total_file_size - downloaded_total)
+                                        eta = int(remaining / speed) if speed > 0 else 0
+                                        
+                                        progress_callback({
+                                            'status': 'downloading',
+                                            'downloaded_bytes': downloaded_total,
+                                            'total_bytes': total_file_size,
+                                            'percent': percent,
+                                            'speed': speed_str,
+                                            'eta': f"{eta}s" if eta else "--"
+                                        })
+                                        
+                        if (total_file_size > 0 and downloaded_total >= total_file_size) or (downloaded_total > 1024*100 and total_file_size == 0):
+                            success = True
+                            break
+                except (requests.RequestException, IOError):
+                    time.sleep(backoff_delays[min(attempt, len(backoff_delays)-1)])
+                    continue
+            if success:
+                break
+
     if not success or not os.path.exists(part_path):
         raise Exception('Không thể tải luồng video từ máy chủ Douyin sau nhiều lần thử lại.')
         
@@ -741,7 +993,7 @@ def download_stream_with_resume(video_urls, output_path, is_audio=False, progres
 # =========================================================================
 def get_common_ydl_opts():
     """
-    Cấu hình tối ưu cho yt-dlp đối với các nền tảng khác
+    Cấu hình tối ưu cho yt-dlp đối với các nền tảng khác (YouTube 2K/4K, TikTok, Facebook...)
     """
     ffmpeg_dir = get_ffmpeg_dir()
     opts = {
@@ -750,10 +1002,8 @@ def get_common_ydl_opts():
         'windowsfilenames': True,
         'socket_timeout': 30,
         'js_runtimes': {'node': {}},
+        'remote_components': {'ejs': 'github'},
         'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-            },
             'tiktok': {
                 'api_hostname': 'api16-normal-c-useast1a.tiktokv.com',
             }
@@ -805,7 +1055,7 @@ def extract_video_info(url):
             
             available_resolutions.append({
                 'format_id': 'best',
-                'label': 'Chất lượng cao nhất (Tự động)',
+                'label': 'Chất lượng cao nhất (Gốc)',
                 'height': 9999,
                 'ext': 'mp4'
             })
@@ -817,13 +1067,14 @@ def extract_video_info(url):
                     if height not in seen_heights:
                         seen_heights.add(height)
                         lbl = f"{height}p"
-                        if height >= 2160: lbl += " (4K Ultra HD)"
+                        if height >= 4320: lbl += " (8K Ultra HD)"
+                        elif height >= 2160: lbl += " (4K Ultra HD)"
                         elif height >= 1440: lbl += " (2K QHD)"
                         elif height >= 1080: lbl += " (Full HD)"
                         elif height >= 720: lbl += " (HD)"
                         
                         available_resolutions.append({
-                            'format_id': f.get('format_id') or str(height),
+                            'format_id': str(height),
                             'label': lbl,
                             'height': height,
                             'ext': 'mp4'

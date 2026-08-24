@@ -1,7 +1,7 @@
 {
-  "version": "1.0.8",
+  "version": "1.0.9",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Bản cập nhật v1.0.8: Nâng cấp kiến trúc Map-Reduce cho Bước 1 và Bước 3 (hỗ trợ SRT phim dài không giới hạn, chống timeout & fix lỗi timeline rỗng), thêm tùy chọn Đa luồng TTS (1-10 luồng) tăng tốc x5, thêm tính năng Video Zoom (100%-150%) chống bản quyền, sửa hiển thị % tiến trình chi tiết và tự động cài đặt thư viện dependencies khi cập nhật.",
+  "changelog": "Bản cập nhật v1.0.9: Tích hợp Map-Reduce Phân tích cảnh theo mẻ (35 câu/lần, xử lý bất đồng bộ & Batch Caching), mở khóa YouTube 4K/2K, Turbo Multi-connection Douyin 6 luồng, Role Admin Quản Trị đặc quyền, Multi-Video Deep Scanner Douyin và fix link rút gọn 1p33s.",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 12:11:54"
+  "updated_at": "2026-08-24 14:24:03"
 }

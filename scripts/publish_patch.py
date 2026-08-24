@@ -51,6 +51,7 @@ PATCH_INCLUDE_FILES = [
     "asr_inference.py",
     "capcut_sync.py",
     "downloader.py",
+    "douyin_browser_downloader.py",
     "ffmpeg_installer.py",
     "ocr_module.py",
     "custom_voices.py",

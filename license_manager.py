@@ -572,6 +572,24 @@ PACKAGE_TIERS = {
             "cloud_gpt_included": True
         }
     },
+    "admin": {
+        "tier": "admin",
+        "plan_name": "Tài Khoản Quản Trị (Admin)",
+        "badge_class": "badge-admin",
+        "badge_text": "🛡️ Admin Quản Trị",
+        "features": {
+            "can_access_review": True,
+            "can_access_editor": True,
+            "can_clone_voice": True,
+            "clone_voice_limit": 9999,
+            "allow_save_cloned_voice": True,
+            "max_video_export_duration": 999999,
+            "tts_unlimited_local": True,
+            "online_voices_enabled": True,
+            "cloud_gpt_included": True,
+            "is_admin": True
+        }
+    },
     "unlicensed": {
         "tier": "unlicensed",
         "plan_name": "Chưa Kích Hoạt",
@@ -889,6 +907,8 @@ def activate_test_tier(tier="vip", days=30):
     
     if tier == "yearly":
         days = 365
+    elif tier == "admin":
+        days = 3650
     elif tier == "trial":
         days = 1
 
@@ -1332,8 +1352,8 @@ def sync_with_cloud():
                     pro_mod = data.get('pro_selected_module') or (local_cached.get('pro_selected_module') if local_cached else None)
                     vip_keys = data.get('api_keys') or (local_cached.get('vip_api_keys') if local_cached else {})
 
-                    # Tự động nạp API Keys cho Gói VIP / Gói Năm
-                    if vip_keys and isinstance(vip_keys, dict) and (tier in ['vip', 'yearly']):
+                    # Tự động nạp API Keys cho Gói VIP / Gói Năm / Gói Admin
+                    if vip_keys and isinstance(vip_keys, dict) and (tier in ['vip', 'yearly', 'admin']):
                         try:
                             from routes.state import API_KEYS_FILE
                             existing_keys = {}

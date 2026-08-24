@@ -15,6 +15,7 @@ import random
 import urllib.parse
 import requests
 import concurrent.futures
+import threading
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(ROOT_DIR, "temp", "douyin_browser_profile")
@@ -61,7 +62,7 @@ def resolve_redirect_url(url, timeout=10):
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
-        res = requests.head(clean_url, headers=headers, allow_redirects=True, timeout=timeout)
+        res = requests.get(clean_url, headers=headers, allow_redirects=True, timeout=timeout, stream=True)
         return res.url or clean_url
     except Exception:
         return clean_url
@@ -72,6 +73,10 @@ def extract_sec_uid(url_or_text):
     raw_url = clean_url_input(url_or_text)
     if not raw_url:
         return None, None
+    
+    # Dạng chuỗi sec_uid trực tiếp
+    if raw_url.startswith("MS4wLjAB") or (len(raw_url) >= 30 and not "/" in raw_url and not "." in raw_url):
+        return raw_url, f"https://www.douyin.com/user/{raw_url}"
     
     # Nếu là link rút gọn, giải mã redirect
     if "v.douyin.com" in raw_url:
@@ -135,8 +140,18 @@ class DouyinBrowserDownloader:
         """
         sec_uid, resolved_url = extract_sec_uid(channel_url_or_sec_uid)
         if not sec_uid:
-            # Thử giải mã nếu URL chứa video thay vì profile
-            raise ValueError(f"Không tìm thấy sec_uid của kênh Douyin từ: {channel_url_or_sec_uid}")
+            # Thử kiểm tra nếu dán link video -> tìm sec_uid của tác giả video
+            try:
+                import downloader
+                vid_info = downloader.resolve_douyin_media(channel_url_or_sec_uid)
+                if vid_info and vid_info.get("raw_detail"):
+                    author_obj = vid_info["raw_detail"].get("author") or {}
+                    sec_uid = author_obj.get("sec_uid")
+            except Exception:
+                pass
+
+        if not sec_uid:
+            raise ValueError(f"Không tìm thấy sec_uid của kênh Douyin từ: {channel_url_or_sec_uid}. Vui lòng kiểm tra lại link.")
 
         profile_url = f"https://www.douyin.com/user/{sec_uid}"
         if progress_cb: progress_cb(5, f"Đang kết nối tới kênh Douyin: {sec_uid[:15]}...")
@@ -154,18 +169,45 @@ class DouyinBrowserDownloader:
         }
 
         with sync_playwright() as p:
-            if progress_cb: progress_cb(10, "Đang khởi động trình duyệt ngầm (Microsoft Edge)...")
-            
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=self.profile_dir,
-                channel="msedge",
-                headless=self.headless,
-                viewport={"width": 1280, "height": 800},
-                user_agent=DEFAULT_USER_AGENT,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
-            )
+            if progress_cb: progress_cb(10, "Đang khởi động trình duyệt ngầm...")
+            context = None
+            browser = None
+
+            # Ưu tiên mở qua Chromium tiêu chuẩn (nhẹ, nhanh và độc lập)
+            try:
+                browser = p.chromium.launch(
+                    headless=self.headless,
+                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
+                )
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    user_agent=DEFAULT_USER_AGENT
+                )
+            except Exception:
+                try:
+                    context = p.chromium.launch_persistent_context(
+                        user_data_dir=self.profile_dir,
+                        channel="msedge",
+                        headless=self.headless,
+                        viewport={"width": 1280, "height": 800},
+                        user_agent=DEFAULT_USER_AGENT,
+                        args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
+                    )
+                except Exception as e:
+                    raise Exception(f"Không thể khởi động trình duyệt bóc tách dữ liệu: {str(e)}")
 
             page = context.pages[0] if context.pages else context.new_page()
+
+            # Chặn ảnh, css, font, trackers để cào danh sách kênh siêu tốc
+            def block_heavy_assets(route):
+                req = route.request
+                rtype = req.resource_type
+                rurl = req.url
+                if rtype in ["image", "font", "stylesheet"] or any(x in rurl for x in ["bytead", "analytics", "report", "sentry", "log", "pstatp"]):
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route("**/*", block_heavy_assets)
 
             # Lắng nghe Network Response của Douyin Post API
             def on_response(response):
@@ -353,12 +395,32 @@ class DouyinBrowserDownloader:
             )
             page = context.pages[0] if context.pages else context.new_page()
 
+            # Chặn toàn bộ ảnh, font, css, trackers để tải trang trong 1 - 2s
+            def block_heavy_assets(route):
+                req = route.request
+                rtype = req.resource_type
+                rurl = req.url
+                if rtype in ["image", "font", "stylesheet"] or any(x in rurl for x in ["bytead", "analytics", "report", "sentry", "log", "pstatp"]):
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route("**/*", block_heavy_assets)
+
             def on_res(response):
                 try:
-                    # Bắt API aweme/detail hoặc video stream .douyinvod.com
-                    if "/aweme/v1/web/aweme/detail/" in response.url:
+                    # Bắt API aweme/detail, tab/feed hoặc video stream .douyinvod.com
+                    if any(x in response.url for x in ["/aweme/v1/web/aweme/detail/", "/aweme/v1/web/tab/feed/", "/aweme/v1/web/item/detail/"]):
                         j = response.json()
-                        aweme_detail = j.get("aweme_detail") or {}
+                        aweme_detail = j.get("aweme_detail")
+                        if not aweme_detail and j.get("aweme_list"):
+                            # Nếu là feed chứa danh sách, tìm đúng video có ID trùng khớp vid
+                            for itm in j.get("aweme_list", []):
+                                if str(itm.get("aweme_id") or "") == str(vid):
+                                    aweme_detail = itm
+                                    break
+                            if not aweme_detail and j.get("aweme_list"):
+                                aweme_detail = j["aweme_list"][0]
+
                         if aweme_detail:
                             v_obj = aweme_detail.get("video") or {}
                             p_list = (v_obj.get("play_addr") or {}).get("url_list") or []
@@ -378,8 +440,11 @@ class DouyinBrowserDownloader:
             page.on("response", on_res)
 
             try:
-                page.goto(target_url, timeout=25000, wait_until="domcontentloaded")
-                time.sleep(3)
+                page.goto(target_url, timeout=12000, wait_until="commit")
+                for _ in range(15):
+                    if captured_data.get("download_url"):
+                        break
+                    time.sleep(0.15)
             except Exception:
                 pass
 
@@ -407,9 +472,10 @@ class DouyinBrowserDownloader:
         }
 
 
-def download_stream_file(video_url, output_path, progress_cb=None):
+def download_stream_file(video_url, output_path, progress_cb=None, num_threads=4):
     """
-    Tải file video MP4 từ URL trực tiếp qua stream chunk (1MB) kèm header Referer.
+    Tải file video MP4 từ URL trực tiếp qua Multi-Connection Range Downloader (IDM Standard 4 luồng).
+    Tự động fallback về đơn luồng nếu server không hỗ trợ Range.
     """
     headers = {
         "User-Agent": DEFAULT_USER_AGENT,
@@ -417,11 +483,100 @@ def download_stream_file(video_url, output_path, progress_cb=None):
         "Accept": "*/*"
     }
 
+    session = requests.Session()
+    total_size = 0
+    accept_ranges = False
+
+    try:
+        head_res = session.head(video_url, headers=headers, allow_redirects=True, timeout=10)
+        if head_res.status_code in [200, 206]:
+            total_size = int(head_res.headers.get("content-length", 0))
+            accept_ranges = 'bytes' in head_res.headers.get('accept-ranges', '').lower() or head_res.status_code == 206
+    except Exception:
+        pass
+
+    if not total_size:
+        try:
+            test_res = session.get(video_url, headers={**headers, 'Range': 'bytes=0-1'}, stream=True, timeout=8)
+            if test_res.status_code == 206:
+                accept_ranges = True
+                cr = test_res.headers.get('content-range', '')
+                if '/' in cr:
+                    total_size = int(cr.split('/')[-1])
+        except Exception:
+            pass
+
+    part_path = output_path + ".part"
+
+    # 1. Đa luồng Range nếu hỗ trợ và file > 2MB
+    if accept_ranges and total_size > 2 * 1024 * 1024:
+        threads_count = min(num_threads, 6)
+        chunk_size_per_thread = total_size // threads_count
+        ranges = []
+        for i in range(threads_count):
+            start = i * chunk_size_per_thread
+            end = total_size - 1 if i == threads_count - 1 else (start + chunk_size_per_thread - 1)
+            ranges.append((i, start, end))
+
+        temp_files = [f"{part_path}.p{i}" for i in range(threads_count)]
+        downloaded_bytes = [0] * threads_count
+        lock = threading.Lock()
+        t0 = time.time()
+        last_cb_time = t0
+
+        def _download_range(idx, start_byte, end_byte):
+            nonlocal last_cb_time
+            req_h = headers.copy()
+            req_h['Range'] = f"bytes={start_byte}-{end_byte}"
+            temp_f = temp_files[idx]
+
+            with requests.get(video_url, headers=req_h, stream=True, timeout=25) as r:
+                r.raise_for_status()
+                with open(temp_f, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 512):
+                        if chunk:
+                            f.write(chunk)
+                            with lock:
+                                downloaded_bytes[idx] += len(chunk)
+                                total_dl = sum(downloaded_bytes)
+                                now = time.time()
+                                if progress_cb and (now - last_cb_time >= 0.15 or total_dl >= total_size):
+                                    last_cb_time = now
+                                    pct = int(total_dl / total_size * 100) if total_size > 0 else 0
+                                    el = now - t0
+                                    spd = (total_dl / (1024 * 1024)) / (el + 1e-6)
+                                    progress_cb(pct, total_dl, total_size, spd)
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=threads_count) as executor:
+                futures = [executor.submit(_download_range, r[0], r[1], r[2]) for r in ranges]
+                concurrent.futures.wait(futures)
+                for f in futures:
+                    f.result()
+
+            with open(output_path, 'wb') as out_f:
+                for temp_f in temp_files:
+                    if os.path.exists(temp_f):
+                        with open(temp_f, 'rb') as in_f:
+                            while True:
+                                b = in_f.read(1024 * 1024 * 2)
+                                if not b: break
+                                out_f.write(b)
+                        try: os.remove(temp_f)
+                        except Exception: pass
+            return output_path
+        except Exception:
+            for temp_f in temp_files:
+                if os.path.exists(temp_f):
+                    try: os.remove(temp_f)
+                    except Exception: pass
+
+    # 2. Fallback đơn luồng
     res = requests.get(video_url, headers=headers, stream=True, timeout=30)
     if res.status_code not in [200, 206]:
         raise Exception(f"Máy chủ Douyin trả về mã lỗi HTTP: {res.status_code}")
 
-    total_size = int(res.headers.get("content-length", 0))
+    total_size = int(res.headers.get("content-length", 0)) if not total_size else total_size
     downloaded = 0
     chunk_size = 1024 * 1024 # 1MB
 

@@ -7,20 +7,29 @@
 
 ---
 
-## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO v1.0.9)
+## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO v1.1.0)
 *(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
+
+*(Hiện tại tất cả các thay đổi đã được đóng gói và phát hành thành công trong bản v1.0.9).*
 
 ---
 
 ## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
 
+### ✅ Phiên bản v1.0.9 (Đã phát hành ngày 24/08/2026):
+1. **Kiến trúc Map-Reduce Bước 3 (Phân tích cảnh theo mẻ):** Phân tích cảnh theo mẻ 35 câu/lần, xử lý bất đồng bộ, Batch Caching độc lập chống timeout & timeline rỗng.
+2. **Khắc phục lỗi YouTube tải chất lượng 360p:** Mở khóa toàn bộ mức phân giải cao nhất: 4K (2160p), 2K QHD (1440p), Full HD (1080p).
+3. **Multi-Connection Range Turbo Downloader (Douyin):** Nâng cấp tải đa luồng 4-6 kết nối song song IDM, tăng tốc tải gấp 10-20 lần.
+4. **Role Đặc Quyền Quản Trị (Admin Tier):** Mở khóa Full 100% tất cả tính năng, không giới hạn giọng đọc, giao diện nhận diện Hoàng gia Đỏ Neon.
+5. **Bóc tách Đa Video Douyin (Multi-Video Deep Scanner):** Quét toàn bộ video trong link (gồm video chính, danh sách feed, tập phim mix), hỗ trợ chọn tải riêng lẻ hoặc 1-click tải tất cả hàng loạt.
+6. **Sửa lỗi Phân tích Douyin:** Khử hoàn toàn Circular Reference, bóc tách chính xác link rút gọn v.douyin.com với thời lượng chuẩn từng giây (1p33s) và chất lượng 4K/1080p không logo.
+
 ### ✅ Phiên bản v1.0.8 (Đã phát hành ngày 24/08/2026):
 1. **Kiến trúc Map-Reduce Bước 1 (Lên kịch bản):** Xử lý file SRT dài không giới hạn, chống timeout 120s bằng cách chia chunk an toàn.
-2. **Kiến trúc Map-Reduce Bước 3 (Phân tích cảnh):** Chia mẻ 35 câu/lần, xử lý bất đồng bộ, Batch Caching độc lập chống mất dữ liệu và khắc phục triệt để lỗi timeline rỗng.
-3. **Đa luồng TTS (TTS Multi-threading):** Tùy chỉnh 1 - 10 luồng trong Card 3, tăng tốc tạo giọng đọc x3 - x5 lần.
-4. **Phóng to Video (Video Zoom & Crop):** Tùy chỉnh 100% - 150% kèm preset chống bản quyền và bộ lọc Center-Crop FFmpeg.
-5. **Hiển thị % tiến trình từng bước:** Sửa log console hiển thị chính xác % thực tế của từng tác vụ.
-6. **Tự động cài đặt dependencies:** Tự động chạy `pip install -r requirements.txt` khi updater nâng cấp app trên máy khách.
+2. **Đa luồng TTS (TTS Multi-threading):** Tùy chỉnh 1 - 10 luồng trong Card 3, tăng tốc tạo giọng đọc x3 - x5 lần.
+3. **Phóng to Video (Video Zoom & Crop):** Tùy chỉnh 100% - 150% kèm preset chống bản quyền và bộ lọc Center-Crop FFmpeg.
+4. **Hiển thị % tiến trình từng bước:** Sửa log console hiển thị chính xác % thực tế của từng tác vụ.
+5. **Tự động cài đặt dependencies:** Tự động chạy `pip install -r requirements.txt` khi updater nâng cấp app trên máy khách.
 
 ---
 

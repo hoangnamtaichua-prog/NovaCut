@@ -7119,6 +7119,12 @@ const btnPasteDownloadUrl = document.getElementById('btnPasteDownloadUrl');
 const btnAnalyzeUrl = document.getElementById('btnAnalyzeUrl');
 const downloadEmptyPlaceholder = document.getElementById('downloadEmptyPlaceholder');
 const downloadInfoBox = document.getElementById('downloadInfoBox');
+const downloadMultiVideosBanner = document.getElementById('downloadMultiVideosBanner');
+const downloadMultiCountText = document.getElementById('downloadMultiCountText');
+const btnDownloadAllMultiVideos = document.getElementById('btnDownloadAllMultiVideos');
+const downloadMultiVideosSection = document.getElementById('downloadMultiVideosSection');
+const downloadMultiVideosGrid = document.getElementById('downloadMultiVideosGrid');
+const downloadMultiSelectedHint = document.getElementById('downloadMultiSelectedHint');
 const downloadVideoThumb = document.getElementById('downloadVideoThumb');
 const downloadVideoDurationBadge = document.getElementById('downloadVideoDurationBadge');
 const downloadVideoTitle = document.getElementById('downloadVideoTitle');
@@ -7269,24 +7275,126 @@ if (btnAnalyzeUrl && downloadInputUrl) {
             if (downloadCompletedActions) downloadCompletedActions.style.display = 'none';
             if (downloadProgressBox) downloadProgressBox.style.display = 'none';
 
-            if (downloadVideoThumb) downloadVideoThumb.src = data.thumbnail || '';
-            if (downloadVideoDurationBadge) downloadVideoDurationBadge.textContent = formatDurationStr(data.duration);
-            if (downloadVideoTitle) downloadVideoTitle.textContent = data.title || 'Video không tiêu đề';
-            if (downloadVideoUploader) downloadVideoUploader.textContent = `👤 ${data.uploader || 'Không rõ'}`;
-            if (downloadVideoPlatformBadge) downloadVideoPlatformBadge.textContent = data.extractor || 'Web';
+            // Helper để chọn 1 video trong danh sách
+            function selectVideoFromMultiList(vObj, idx, totalCount) {
+                currentDownloadInfo = vObj;
+                if (downloadVideoThumb) downloadVideoThumb.src = vObj.thumbnail || '';
+                if (downloadVideoDurationBadge) downloadVideoDurationBadge.textContent = formatDurationStr(vObj.duration);
+                if (downloadVideoTitle) downloadVideoTitle.textContent = vObj.title || 'Video không tiêu đề';
+                if (downloadVideoUploader) downloadVideoUploader.textContent = `👤 ${vObj.uploader || vObj.author || 'Không rõ'}`;
+                if (downloadVideoPlatformBadge) downloadVideoPlatformBadge.textContent = vObj.extractor || 'Web';
 
-            // Populate Resolutions
-            if (downloadResolutionSelect && data.resolutions) {
-                downloadResolutionSelect.innerHTML = '';
-                data.resolutions.forEach(r => {
-                    const opt = document.createElement('option');
-                    opt.value = r.format_id;
-                    opt.textContent = r.label;
-                    downloadResolutionSelect.appendChild(opt);
-                });
+                if (downloadResolutionSelect && vObj.resolutions) {
+                    downloadResolutionSelect.innerHTML = '';
+                    vObj.resolutions.forEach(r => {
+                        const opt = document.createElement('option');
+                        opt.value = r.format_id;
+                        opt.textContent = r.label;
+                        downloadResolutionSelect.appendChild(opt);
+                    });
+                }
+
+                if (downloadMultiSelectedHint) {
+                    downloadMultiSelectedHint.textContent = `Đang chọn: Video ${idx + 1}/${totalCount}`;
+                }
+
+                // Cập nhật active border cho các card
+                if (downloadMultiVideosGrid) {
+                    const cards = downloadMultiVideosGrid.querySelectorAll('.multi-video-item-card');
+                    cards.forEach((c, cIdx) => {
+                        if (cIdx === idx) {
+                            c.style.borderColor = '#38bdf8';
+                            c.style.background = 'rgba(56, 189, 248, 0.12)';
+                        } else {
+                            c.style.borderColor = '#334155';
+                            c.style.background = '#0f172a';
+                        }
+                    });
+                }
             }
 
-            showToast('Phân tích video thành công!', 'success');
+            // 1. Kiểm tra nếu có nhiều video trong link
+            const videoList = (data.videos && Array.isArray(data.videos) && data.videos.length > 0) ? data.videos : [data];
+            
+            if (videoList.length > 1) {
+                if (downloadMultiVideosBanner) downloadMultiVideosBanner.style.display = 'flex';
+                if (downloadMultiVideosSection) downloadMultiVideosSection.style.display = 'block';
+                if (downloadMultiCountText) downloadMultiCountText.textContent = `Tìm thấy ${videoList.length} video trong liên kết này!`;
+
+                if (downloadMultiVideosGrid) {
+                    downloadMultiVideosGrid.innerHTML = '';
+                    videoList.forEach((v, idx) => {
+                        const card = document.createElement('div');
+                        card.className = 'multi-video-item-card';
+                        card.style.cssText = `
+                            background: ${idx === 0 ? 'rgba(56, 189, 248, 0.12)' : '#0f172a'};
+                            border: 1px solid ${idx === 0 ? '#38bdf8' : '#334155'};
+                            border-radius: 8px;
+                            padding: 8px;
+                            cursor: pointer;
+                            transition: all 0.2s ease;
+                            display: flex;
+                            flex-direction: column;
+                            gap: 6px;
+                        `;
+                        card.innerHTML = `
+                            <div style="position: relative; width: 100%; height: 75px; border-radius: 6px; overflow: hidden; background: #020617;">
+                                <img src="${v.thumbnail || ''}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
+                                <span style="position: absolute; bottom: 3px; right: 3px; background: rgba(0,0,0,0.85); color: #fff; font-size: 9.5px; font-weight: 600; padding: 1px 4px; border-radius: 3px;">
+                                    ${formatDurationStr(v.duration)}
+                                </span>
+                                <span style="position: absolute; top: 3px; left: 3px; background: #0284c7; color: #fff; font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px;">
+                                    #${idx + 1}
+                                </span>
+                            </div>
+                            <div style="font-size: 11.5px; font-weight: 600; color: #f8fafc; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" title="${v.title || ''}">
+                                ${v.title || `Video ${idx + 1}`}
+                            </div>
+                        `;
+
+                        card.addEventListener('click', () => {
+                            selectVideoFromMultiList(v, idx, videoList.length);
+                        });
+
+                        downloadMultiVideosGrid.appendChild(card);
+                    });
+                }
+
+                // Nút tải tất cả hàng loạt
+                if (btnDownloadAllMultiVideos) {
+                    btnDownloadAllMultiVideos.onclick = () => {
+                        scannedDouyinVideos = videoList.map(v => ({
+                            aweme_id: v.video_id || `vid_${Math.random()}`,
+                            desc: v.title || 'Video Douyin',
+                            clean_title: v.title || 'Video Douyin',
+                            author: v.uploader || v.author || 'Tác giả',
+                            duration: v.duration || 0,
+                            duration_formatted: formatDurationStr(v.duration),
+                            cover: v.thumbnail || '',
+                            url: v.url || url,
+                            download_url: (v.video_urls && v.video_urls[0]) || ''
+                        }));
+                        selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id));
+
+                        if (tabDownloadChannel) tabDownloadChannel.click();
+                        if (douyinChannelInfoBanner) douyinChannelInfoBanner.style.display = 'block';
+                        if (douyinChannelNickname) douyinChannelNickname.textContent = `Danh sách ${videoList.length} video từ Link`;
+                        if (douyinChannelSignature) douyinChannelSignature.textContent = `Đã phân tích toàn bộ ${videoList.length} video từ liên kết bạn cung cấp`;
+                        if (douyinChannelVideoCountBadge) douyinChannelVideoCountBadge.textContent = `${videoList.length} Video`;
+                        renderDouyinVideoGrid();
+                        showToast(`Đã nạp toàn bộ ${videoList.length} video vào bảng tải hàng loạt!`, 'success');
+                    };
+                }
+
+                showToast(`Phân tích thành công! Đã tìm thấy ${videoList.length} video trong link.`, 'success');
+            } else {
+                if (downloadMultiVideosBanner) downloadMultiVideosBanner.style.display = 'none';
+                if (downloadMultiVideosSection) downloadMultiVideosSection.style.display = 'none';
+                showToast('Phân tích video thành công!', 'success');
+            }
+
+            // Chọn video đầu tiên làm active
+            selectVideoFromMultiList(videoList[0], 0, videoList.length);
         } catch (e) {
             showToast('Lỗi kết nối khi phân tích: ' + e.message, 'error');
         } finally {
@@ -7683,7 +7791,31 @@ function initDouyinChannelDownloader() {
                     body: JSON.stringify({ channel_url: channelUrl, limit })
                 });
 
-                const data = await res.json();
+                if (res.status === 404) {
+                    showToast('Backend chưa nạp API quét kênh mới. Vui lòng tắt và khởi động lại ứng dụng!', 'warning');
+                    if (douyinChannelEmptyPlaceholder) {
+                        douyinChannelEmptyPlaceholder.innerHTML = `
+                            <div style="font-size: 15px; font-weight: 600; color: #f87171;">⚠️ Chưa khởi động lại Backend</div>
+                            <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">Vui lòng tắt ứng dụng và chạy lại file <code>run_app.bat</code> để nạp API quét kênh mới.</div>
+                        `;
+                    }
+                    return;
+                }
+
+                let data;
+                try {
+                    data = await res.json();
+                } catch (jsonErr) {
+                    showToast('Lỗi phản hồi từ máy chủ (Mã: ' + res.status + '). Vui lòng tắt và khởi động lại ứng dụng!', 'error');
+                    if (douyinChannelEmptyPlaceholder) {
+                        douyinChannelEmptyPlaceholder.innerHTML = `
+                            <div style="font-size: 15px; font-weight: 600; color: #f87171;">❌ Phản hồi không hợp lệ (Mã: ${res.status})</div>
+                            <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">Vui lòng khởi động lại ứng dụng để cập nhật endpoint.</div>
+                        `;
+                    }
+                    return;
+                }
+
                 if (!res.ok || data.error) {
                     showToast(data.error || 'Lỗi khi quét kênh Douyin!', 'error');
                     if (douyinChannelEmptyPlaceholder) {
@@ -9674,7 +9806,8 @@ function updateLicenseUI(info) {
         headerLicenseBadge.className = `license-header-badge ${info.badge_class || 'badge-trial'}`;
         headerLicenseText.textContent = info.badge_text || 'Bản quyền';
         
-        if (info.tier === 'vip') headerLicenseIcon.textContent = '👑';
+        if (info.tier === 'admin') headerLicenseIcon.textContent = '🛡️';
+        else if (info.tier === 'vip') headerLicenseIcon.textContent = '👑';
         else if (info.tier === 'pro') headerLicenseIcon.textContent = '⭐';
         else if (info.tier === 'yearly') headerLicenseIcon.textContent = '💎';
         else if (info.tier === 'trial') headerLicenseIcon.textContent = '⚡';
@@ -9690,7 +9823,7 @@ function updateLicenseUI(info) {
             modalStatusBadge.style.color = '#ef4444';
         } else {
             modalStatusBadge.textContent = `${info.plan_name} (${info.status === 'ACTIVE' ? 'Đang hoạt động' : (info.status === 'EXPIRED' ? 'Đã hết hạn' : 'Chưa kích hoạt')})`;
-            modalStatusBadge.style.color = info.status === 'ACTIVE' ? (info.tier === 'vip' ? '#c084fc' : '#38bdf8') : (info.status === 'EXPIRED' ? '#ef4444' : '#94a3b8');
+            modalStatusBadge.style.color = info.status === 'ACTIVE' ? (info.tier === 'admin' ? '#ff3366' : (info.tier === 'vip' ? '#c084fc' : (info.tier === 'yearly' ? '#f59e0b' : '#38bdf8'))) : (info.status === 'EXPIRED' ? '#ef4444' : '#94a3b8');
         }
     }
     if (modalExpireDate) {

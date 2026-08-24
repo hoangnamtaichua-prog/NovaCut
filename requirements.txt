@@ -10,3 +10,4 @@ platformdirs
 colorama
 openai>=1.0.0
 tiktoken
+yt-dlp>=2026.8.19

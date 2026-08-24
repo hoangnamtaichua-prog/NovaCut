@@ -3200,6 +3200,12 @@ video {
     background: rgba(245, 158, 11, 0.15) !important;
     box-shadow: 0 0 12px rgba(245, 158, 11, 0.35);
 }
+.license-header-badge.badge-admin {
+    color: #ff3366 !important;
+    border-color: rgba(255, 51, 102, 0.7) !important;
+    background: rgba(255, 51, 102, 0.15) !important;
+    box-shadow: 0 0 14px rgba(255, 51, 102, 0.45);
+}
 .license-header-badge.badge-expired {
     color: #ef4444 !important;
     border-color: rgba(239, 68, 68, 0.5) !important;

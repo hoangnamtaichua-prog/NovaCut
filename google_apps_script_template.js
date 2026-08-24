@@ -16,7 +16,7 @@
  * [A] HWID
  * [B] Tên Khách Hàng
  * [C] SĐT / Zalo
- * [D] Gói Cước (trial / pro / vip / yearly)
+ * [D] Gói Cước (trial / pro / vip / yearly / admin)
  * [E] Ngày Hết Hạn
  * [F] Trạng Thái (ACTIVE / EXPIRED / BLOCKED)
  * [G] Số Tiền Đã Trả
