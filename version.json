@@ -1,7 +1,7 @@
 {
-  "version": "1.0.11",
+  "version": "1.0.12",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Fix Douyin API: Sửa lỗi phân tích nhầm video đề xuất thành video đích khi link gốc bị giới hạn quyền truy cập hoặc ẩn ID (Douyin Random Collection Bug).",
+  "changelog": "Tính năng mới: Tự động khởi động lại ứng dụng (Auto-Restart) sau khi cập nhật thành công để nạp ngay mã nguồn mới, tránh tình trạng treo code cũ trên RAM.",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 15:12:06"
+  "updated_at": "2026-08-24 15:22:25"
 }

@@ -11502,6 +11502,27 @@ const appUpdater = {
                 if (p.status === 'completed') {
                     clearInterval(this.pollingInterval);
                     showToast(p.message || 'Cập nhật thành công! Đang khởi động lại...', 'success');
+                    
+                    // Gửi yêu cầu khởi động lại backend
+                    fetch('/api/system/restart', { method: 'POST' })
+                        .catch(e => console.log('Backend đang khởi động lại:', e));
+                        
+                    // Đếm ngược và reload trang
+                    let countdown = 3;
+                    const btnStart = document.getElementById('btnStartAppUpdate');
+                    if (btnStart) {
+                        btnStart.disabled = true;
+                        const interval = setInterval(() => {
+                            btnStart.innerHTML = `<span>🚀</span><span>Khởi động lại trong ${countdown}s...</span>`;
+                            countdown--;
+                            if (countdown < 0) {
+                                clearInterval(interval);
+                                window.location.reload();
+                            }
+                        }, 1000);
+                    } else {
+                        setTimeout(() => window.location.reload(), 3000);
+                    }
                 } else if (p.status === 'error') {
                     clearInterval(this.pollingInterval);
                     showToast('Lỗi cập nhật: ' + (p.error || 'Không xác định'), 'error');
