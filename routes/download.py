@@ -110,9 +110,9 @@ def api_download_douyin_scan_channel():
     API quét toàn bộ hoặc N video mới nhất từ một kênh Douyin bằng Browser Worker ngầm.
     """
     import license_manager
-    is_valid, msg = license_manager.check_permission('can_access_editor')
-    if not is_valid:
-        return jsonify({'error': f"Chức năng bị khóa: {msg}", 'license_required': True}), 403
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'error': f"Chức năng bị khóa: {perm_msg}", 'license_required': True}), 403
 
     import douyin_browser_downloader
     data = request.json or {}
@@ -145,9 +145,9 @@ def api_download_douyin_batch_download():
     API tải hàng loạt danh sách video Douyin qua SSE Stream tiến trình.
     """
     import license_manager
-    is_valid, msg = license_manager.check_permission('can_access_editor')
-    if not is_valid:
-        return jsonify({'error': f"Chức năng bị khóa: {msg}", 'license_required': True}), 403
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'error': f"Chức năng bị khóa: {perm_msg}", 'license_required': True}), 403
 
     import douyin_browser_downloader, queue, threading, json
     data = request.json or {}

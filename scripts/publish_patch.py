@@ -212,32 +212,45 @@ def upload_github_release(version, changelog, patch_path):
         upload_url_template = rel_data.get("upload_url")
         log(f"✅ Đã tạo Release {tag_name} thành công trên kho Private (ID: {rel_id})!")
 
-    # 2. Xóa asset patch.zip cũ nếu đã có
+    # 2. Xóa các asset cũ nếu đã có
     r_assets = requests.get(f"{GITHUB_API_BASE}/releases/{rel_id}/assets", headers=headers)
+    existing_assets = {}
     if r_assets.status_code == 200:
         for a in r_assets.json():
-            if a.get("name") == "patch.zip":
-                log(f" -> Đang xóa file patch.zip cũ (Asset ID: {a.get('id')})...")
-                requests.delete(f"{GITHUB_API_BASE}/releases/assets/{a.get('id')}", headers=headers)
+            existing_assets[a.get("name")] = a.get("id")
 
-    # 3. Upload file patch.zip mới lên
-    upload_url = f"https://uploads.github.com/repos/{GITHUB_REPO}/releases/{rel_id}/assets?name=patch.zip"
-    upload_headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Content-Type": "application/zip",
-        "User-Agent": "NovaCut-Publisher/1.0"
-    }
+    files_to_upload = [("patch.zip", patch_path, "application/zip")]
+    
+    setup_exe = os.path.join(RELEASE_DIR, f"NovaCut_Setup_v{version}.exe")
+    if not os.path.exists(setup_exe):
+        setup_exe = os.path.join(ROOT_DIR, "release", f"NovaCut_Setup_v{version}.exe")
+    if os.path.exists(setup_exe):
+        files_to_upload.append((f"NovaCut_Setup_v{version}.exe", setup_exe, "application/vnd.microsoft.portable-executable"))
 
-    log(f"Đang tải file patch.zip lên GitHub Private Release ({os.path.getsize(patch_path)/(1024*1024):.2f} MB)...")
-    with open(patch_path, "rb") as f:
-        r_up = requests.post(upload_url, headers=upload_headers, data=f)
+    portable_zip = os.path.join(ROOT_DIR, "release", f"NovaCut_v{version}_Portable.zip")
+    if os.path.exists(portable_zip):
+        files_to_upload.append((f"NovaCut_v{version}_Portable.zip", portable_zip, "application/zip"))
 
-    if r_up.status_code in (200, 201):
-        log(f"🎉 TẢI LÊN GITHUB PRIVATE RELEASE THÀNH CÔNG 100%!")
-        return True
-    else:
-        log(f"⚠️ Lỗi upload asset lên GitHub (HTTP {r_up.status_code}): {r_up.text}")
-        return False
+    for asset_name, asset_file, content_type in files_to_upload:
+        if asset_name in existing_assets:
+            log(f" -> Đang xóa asset cũ {asset_name} (ID: {existing_assets[asset_name]})...")
+            requests.delete(f"{GITHUB_API_BASE}/releases/assets/{existing_assets[asset_name]}", headers=headers)
+
+        upload_url = f"https://uploads.github.com/repos/{GITHUB_REPO}/releases/{rel_id}/assets?name={asset_name}"
+        upload_headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Content-Type": content_type,
+            "User-Agent": "NovaCut-Publisher/1.0"
+        }
+        log(f"Đang tải {asset_name} lên GitHub Private Release ({os.path.getsize(asset_file)/(1024*1024):.2f} MB)...")
+        with open(asset_file, "rb") as f:
+            r_up = requests.post(upload_url, headers=upload_headers, data=f)
+        if r_up.status_code in (200, 201):
+            log(f"🎉 ĐÃ TẢI {asset_name} THÀNH CÔNG!")
+        else:
+            log(f"⚠️ Lỗi upload {asset_name} (HTTP {r_up.status_code}): {r_up.text[:200]}")
+
+    return True
 
 
 def git_push_changes(version):

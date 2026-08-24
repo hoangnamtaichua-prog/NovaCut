@@ -328,7 +328,7 @@ def main():
     build_pyinstaller_exe()
     optimize_bytecode()
     build_inno_setup_installer()
-    # create_portable_zip()  # Bo qua ban portable theo yeu cau
+    create_portable_zip()
     
     log("=" * 60)
     log("HOAN TAT QUY TRINH DONG GOI RELEASE THANH CONG 100%!")

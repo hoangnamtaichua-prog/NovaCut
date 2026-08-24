@@ -3,7 +3,9 @@
 ; ═══════════════════════════════════════════════════════════════════════════════
 
 #define MyAppName "NovaCut"
-#define MyAppVersion "1.0.7"
+#ifndef MyAppVersion
+#define MyAppVersion "1.0.13"
+#endif
 #define MyAppPublisher "NovaCut AI Studio"
 #define MyAppURL "https://novacut.ai"
 #define MyAppExeName "NovaCut.exe"

@@ -35,6 +35,16 @@ else:
 os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
 
+# Ưu tiên tuyệt đối nạp các file mã nguồn .py / .pyc cập nhật bên ngoài ổ cứng (OTA Patch) trước khi tìm trong gói đóng băng PyInstaller
+try:
+    from importlib.machinery import PathFinder
+    for _idx, _finder in enumerate(sys.meta_path):
+        if _finder is PathFinder or getattr(_finder, '__name__', '') == 'PathFinder':
+            sys.meta_path.insert(0, sys.meta_path.pop(_idx))
+            break
+except Exception:
+    pass
+
 # Nạp thư mục bin/ vào PATH
 bin_dir = os.path.join(APP_DIR, 'bin')
 if os.path.exists(bin_dir) and bin_dir not in os.environ.get("PATH", ""):

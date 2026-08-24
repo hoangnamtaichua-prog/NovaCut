@@ -303,6 +303,18 @@ def apply_patch_zip(zip_path, target_version=""):
             with zip_ref.open(file_info) as source, open(dest_path, 'wb') as target:
                 shutil.copyfileobj(source, target)
 
+            # Nếu là file Python .py, tự động xóa sạch các file C-binary (.pyd) cũ cùng tên nếu có để đảm bảo file .py mới được nạp ưu tiên 100%
+            if filename.endswith('.py'):
+                base_name = os.path.splitext(dest_path)[0]
+                dir_name = os.path.dirname(dest_path)
+                stem = os.path.basename(base_name)
+                for f in os.listdir(dir_name):
+                    if f.startswith(stem) and f.endswith('.pyd'):
+                        try:
+                            os.remove(os.path.join(dir_name, f))
+                        except Exception:
+                            pass
+
     # Cập nhật version mới
     if target_version:
         set_current_app_version(target_version)

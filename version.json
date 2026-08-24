@@ -1,7 +1,7 @@
 {
-  "version": "1.0.12",
+  "version": "1.0.13",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Tính năng mới: Tự động khởi động lại ứng dụng (Auto-Restart) sau khi cập nhật thành công để nạp ngay mã nguồn mới, tránh tình trạng treo code cũ trên RAM.",
+  "changelog": "1. Bộ nạp động Dynamic MetaPath: Cho phép các bản cập nhật OTA .py có hiệu lực ngay trên bản EXE mà không bị code đóng băng chặn lại. 2. Thuật toán Map-Reduce kịch bản & phân tích cảnh phim mượt mà. 3. Tự động khởi động lại sau khi cập nhật. 4. Sửa lỗi 500 khi quét toàn bộ kênh & tải hàng loạt Douyin.",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 15:22:25"
+  "updated_at": "2026-08-24 16:11:28"
 }
