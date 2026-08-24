@@ -7,9 +7,16 @@
 
 ---
 
-## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN FULL TIẾP THEO)
+## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
 *(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
 
+*(Hiện tại tất cả các thay đổi đã được đóng gói và phát hành thành công trong bản v1.0.13).*
+
+---
+
+## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
+
+### ✅ Phiên bản v1.0.13 (Đã phát hành ngày 24/08/2026):
 1. **Cơ Chế Dynamic Module Loader cho Bản EXE (PyInstaller MetaPath Hook):**
    - Đưa `PathFinder` lên ưu tiên cao nhất trong `sys.meta_path` tại `launcher.py`. 
    - Giúp các bản cập nhật OTA (file `.py` tải về qua app) lập tức có hiệu lực ngay trên bản `.exe` mà KHÔNG bị mã nguồn đóng băng cũ chặn lại. Từ nay user không cần phải gỡ hay cài lại phần mềm khi có cập nhật mới.
@@ -21,10 +28,6 @@
    - Xử lý mượt mà kịch bản dài, chống timeout ChatGPT/OpenAI API và chia mẻ phân tích timeline video cực nhanh.
 5. **Sửa Lỗi Quét Toàn Bộ Kênh & Tải Hàng Loạt Douyin (Lỗi Mã 500):**
    - Khắc phục lỗi unpack tuple phân quyền bản quyền (`check_permission` 3-tuple) trong route `/api/download/douyin/scan_channel` và `/api/download/douyin/batch_download`. Quét kênh và tải hàng loạt mượt mà 100%.
-
----
-
-## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
 
 ### ✅ Phiên bản v1.0.9 (Đã phát hành ngày 24/08/2026):
 1. **Kiến trúc Map-Reduce Bước 3 (Phân tích cảnh theo mẻ):** Phân tích cảnh theo mẻ 35 câu/lần, xử lý bất đồng bộ, Batch Caching độc lập chống timeout & timeline rỗng.
