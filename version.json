@@ -1,7 +1,7 @@
 {
-  "version": "1.0.10",
+  "version": "1.0.11",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Hotfix: Khắc phục lỗi tiến trình Python treo ngầm trong RAM, ép hệ thống tự động Hot Reload mã nguồn mới nhất sau khi cập nhật mà không cần khởi động lại thủ công.",
+  "changelog": "Fix Douyin API: Sửa lỗi phân tích nhầm video đề xuất thành video đích khi link gốc bị giới hạn quyền truy cập hoặc ẩn ID (Douyin Random Collection Bug).",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 14:43:37"
+  "updated_at": "2026-08-24 15:12:06"
 }

@@ -400,24 +400,26 @@ def _format_douyin_result(detail, video_id, page_title, target_url, original_url
             title = re.sub(r' - 抖音$', '', title).strip()
             safe_title = sanitize_filename(title)
             clean_srcs = [s for s in captured_video_srcs if not _is_ad_or_guide_url(s)]
-            primary_info = {
-                'success': True,
-                'video_id': aweme_id,
-                'title': safe_title or title,
-                'uploader': 'Tác giả Douyin',
-                'author': 'Tác giả Douyin',
-                'duration': 0,
-                'thumbnail': '',
-                'width': 1920,
-                'height': 1080,
-                'extractor': 'Douyin',
-                'url': target_url,
-                'video_urls': clean_srcs,
-                'resolutions': [{'format_id': 'best', 'label': 'Chất lượng cao nhất (Gốc)', 'height': 9999, 'ext': 'mp4'}],
-                'format_url_map': {'best': clean_srcs},
-                'raw_detail': {}
-            }
-        else:
+            if clean_srcs:
+                primary_info = {
+                    'success': True,
+                    'video_id': aweme_id,
+                    'title': safe_title or title,
+                    'uploader': 'Tác giả Douyin',
+                    'author': 'Tác giả Douyin',
+                    'duration': 0,
+                    'thumbnail': '',
+                    'width': 1920,
+                    'height': 1080,
+                    'extractor': 'Douyin',
+                    'url': target_url,
+                    'video_urls': clean_srcs,
+                    'resolutions': [{'format_id': 'best', 'label': 'Chất lượng cao nhất (Gốc)', 'height': 9999, 'ext': 'mp4'}],
+                    'format_url_map': {'best': clean_srcs},
+                    'raw_detail': {}
+                }
+        
+        if not primary_info:
             return {'error': 'Không tìm thấy luồng tải video khả dụng cho video Douyin này (đã loại trừ video quảng cáo).'}
 
     # Thu thập tất cả các video được quét (chống circular reference)
@@ -429,7 +431,7 @@ def _format_douyin_result(detail, video_id, page_title, target_url, original_url
         # Tạo dict copy độc lập, tránh lồng ghép tham chiếu vòng
         all_formatted_videos.append(dict(primary_info))
         
-    if all_details:
+    if all_details and not video_id:
         for d in all_details:
             d_id = str(d.get('aweme_id') or d.get('id') or '')
             if d_id and d_id not in seen_ids:
@@ -733,7 +735,10 @@ def resolve_douyin_media(url, use_cache=True):
                     _collect_details(ssr_all)
                     if not captured_data.get('detail'):
                         det = _find_aweme_detail_in_json({'items': ssr_all}, target_video_id=video_id)
-                        captured_data['detail'] = det or ssr_all[0]
+                        if det:
+                            captured_data['detail'] = det
+                        elif not video_id:
+                            captured_data['detail'] = ssr_all[0]
             except Exception:
                 pass
 
