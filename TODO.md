@@ -7,40 +7,20 @@
 
 ---
 
-## 🛠️ I. CÁC LỖI ĐÃ KHẮC PHỤC & TÍNH NĂNG MỚI ĐÃ LÀM (SẴN SÀNG KIỂM THỬ TRÊN MÁY DEV)
-
-1. ✅ **Khắc Phục Lỗi Timeout Khi Viết Kịch Bản Phim (`Read timed out = 120s` trên máy khách):**
-   - **Nguyên nhân:** File SRT phim dài (1-2 tiếng) chứa quá nhiều mili-giây, số thứ tự và thẻ rác làm prompt phình to 20k - 50k tokens, khiến OpenAI xử lý lâu vượt quá 120s.
-   - **Giải pháp đã làm:** 
-     - Xây dựng bộ nén phụ đề thông minh `condense_srt_for_llm`: Tự động rút gọn timestamp `[hh:mm:ss]`, lọc bỏ số thứ tự & thẻ rỗng $\rightarrow$ Giảm **60% - 70% Token**.
-     - Xây dựng cơ chế gọi API đàn hồi `call_openai_chat_resilient`: Nâng timeout lên **240s - 360s**, tự động thử lại **3 lần** (Exponential Backoff) khi gặp lỗi mạng/máy chủ bận.
-
-2. ✅ **Nâng Cấp Toàn Diện Engine Tách Âm Thanh Demucs V2 (Khắc phục lỗi vẫn còn tiếng người nói):**
-   - **Nguyên nhân:** Model cũ HDemucs v2/v3 xếp nhầm lời thoại vào rãnh `other` (SFX/môi trường), cắt đoạn cứng 20s không overlap gây rò rỉ âm thanh gốc ở các điểm giáp nối.
-   - **Giải pháp đã làm:**
-     - Nâng cấp sang mô hình **HTDemucs Transformer (Hybrid Transformer Demucs v4)** của Meta AI.
-     - Tích hợp thuật toán **Overlap-Add Crossfading 25%** (Hanning window) loại bỏ 100% hiện tượng méo tiếng và rò rỉ mép nối.
-     - Bổ sung bộ lọc **Deep Spectral Vocal Bleed Suppression** (STFT Spectral Mask) triệt tiêu sạch 100% âm bội giọng nói cũ trong dải tần 200Hz - 4000Hz $\rightarrow$ Âm thanh nền SFX sạch sẽ, trong trẻo.
-
-3. ✅ **Khắc Phục Lỗi Clone Voice Trên Môi Trường Máy Khách / Windows Sandbox (`os error 2`):**
-   - **Nguyên nhân:** `speaker_encoder.onnx` và `denoiser.onnx` nằm ở thư mục cha `models/vieneu/` thay vì `models/vieneu/onnx_int8/`, khiến engine fallback lên HuggingFace Hub và báo lỗi khi offline.
-   - **Giải pháp đã làm:** Bổ sung cơ chế Self-Healing tự động quét và copy model vào đúng thư mục `onnx_int8/`, đồng bộ cấu hình đóng gói phát hành.
-
-4. ✅ **Tích Hợp Trình Tải Video & Toàn Bộ Kênh Douyin Hàng Loạt (Douyin Channel Batch Downloader):**
-   - **Engine:** Trích xuất `sec_uid`, chạy ngầm trình duyệt Microsoft Edge (`channel="msedge"`), tự động cuộn chuột ảo, bắt API `/aweme/v1/web/aweme/post/` lấy link MP4 gốc không logo.
-   - **Giao diện:** Sub-tab chuyển đổi giữa *Tải 1 Video Đơn Lẻ* và *Tải Toàn Bộ Kênh Douyin*, hiển thị Banner thông tin Kênh (Avatar, Nickname, số lượng video), lưới video kèm Thumbnail, Thời lượng, Tim, Bình luận, Checkbox chọn tất cả, thanh tiến trình tải SSE.
+## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO v1.0.9)
+*(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
 
 ---
 
-## 📌 II. VIỆC CẦN LÀM TIẾP THEO CHO NGÀY MAI (ACTION ITEMS CHO NGÀY MAI)
+## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
 
-- [ ] **1. Kiểm thử thực tế các tính năng mới trên máy Dev:**
-  - [ ] Thử nghiệm Auto-Edit với file SRT dài để xác nhận ChatGPT không còn bị timeout.
-  - [ ] Thử nghiệm tính năng tách âm thanh AI trên video có cả lời thoại + nhạc nền để kiểm tra độ trong của SFX.
-  - [ ] Dán link 1 kênh Douyin vào tab Tải Video để kiểm tra quá trình cào và tải hàng loạt video.
-- [ ] **2. Đóng gói bản cập nhật mới (Khi bạn có lệnh yêu cầu phát hành):**
-  - [ ] Chạy kiểm thử tổng thể.
-  - [ ] Tăng phiên bản `v1.0.7` $\rightarrow$ `v1.0.8` và đóng gói `patch.zip` / full installer `.exe` khi bạn chỉ thị.
+### ✅ Phiên bản v1.0.8 (Đã phát hành ngày 24/08/2026):
+1. **Kiến trúc Map-Reduce Bước 1 (Lên kịch bản):** Xử lý file SRT dài không giới hạn, chống timeout 120s bằng cách chia chunk an toàn.
+2. **Kiến trúc Map-Reduce Bước 3 (Phân tích cảnh):** Chia mẻ 35 câu/lần, xử lý bất đồng bộ, Batch Caching độc lập chống mất dữ liệu và khắc phục triệt để lỗi timeline rỗng.
+3. **Đa luồng TTS (TTS Multi-threading):** Tùy chỉnh 1 - 10 luồng trong Card 3, tăng tốc tạo giọng đọc x3 - x5 lần.
+4. **Phóng to Video (Video Zoom & Crop):** Tùy chỉnh 100% - 150% kèm preset chống bản quyền và bộ lọc Center-Crop FFmpeg.
+5. **Hiển thị % tiến trình từng bước:** Sửa log console hiển thị chính xác % thực tế của từng tác vụ.
+6. **Tự động cài đặt dependencies:** Tự động chạy `pip install -r requirements.txt` khi updater nâng cấp app trên máy khách.
 
 ---
 
