@@ -38,6 +38,14 @@ import asr_manager
 from flask import Flask, send_from_directory, Response, jsonify, request, send_file
 
 app = Flask(__name__, static_folder='web')
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+@app.after_request
+def add_no_cache_headers(response):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 # Ensure we're running from the root directory so resources are found
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))

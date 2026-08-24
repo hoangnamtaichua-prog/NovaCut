@@ -11,11 +11,23 @@ import zipfile
 import subprocess
 import compileall
 
+import json
+
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE_BASE = os.path.join(ROOT_DIR, "release")
 RELEASE_DIR = os.path.join(RELEASE_BASE, "NovaCut")
 
-APP_VERSION = "1.0.1"
+def get_app_version():
+    vfile = os.path.join(ROOT_DIR, "version.json")
+    if os.path.exists(vfile):
+        try:
+            with open(vfile, "r", encoding="utf-8") as f:
+                return str(json.load(f).get("version", "1.0.7")).strip()
+        except Exception:
+            pass
+    return "1.0.7"
+
+APP_VERSION = get_app_version()
 
 # Danh sách các file / thư mục cần đóng gói vào bản phát hành
 INCLUDE_DIRS = [
@@ -48,6 +60,7 @@ INCLUDE_FILES = [
     "local_voice_engine.py",
     "rvc_bridge.py",
     "audio_separator.py",
+    "douyin_browser_downloader.py",
     "tts_cli.py",
     "requirements.txt",
     "version.json",
@@ -275,7 +288,7 @@ def build_inno_setup_installer():
             break
             
     if iscc_bin and os.path.exists(iss_file):
-        cmd = [iscc_bin, iss_file]
+        cmd = [iscc_bin, f"/DMyAppVersion={APP_VERSION}", iss_file]
         res = subprocess.run(cmd, cwd=os.path.dirname(iss_file), capture_output=True, text=True)
         setup_exe = os.path.join(RELEASE_BASE, f"NovaCut_Setup_v{APP_VERSION}.exe")
         if os.path.exists(setup_exe):

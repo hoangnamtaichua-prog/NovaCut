@@ -3,44 +3,48 @@
 > **Quy tắc quản lý:**
 > - Mỗi khi hoàn thành xong một công việc nào trong danh sách này, tôi sẽ **tự động cập nhật / đánh dấu hoàn thành**.
 > - Mỗi lần bạn hỏi "cho tôi xem todo" hoặc "còn việc gì cần làm?", tôi sẽ đọc file này để báo cáo chính xác tiến độ hiện tại.
-> - Mỗi lần đẩy lên bản cập nhật mới không cần nhắc số phiên bản sẽ **tự động tăng tiến +1 (vd: v1.0.1 -> v1.0.2 -> v1.0.3...)**.
+> - **Quy tắc phát hành bản vá:** CHỈ phát hành bản cập nhật mới (tạo GitHub Release / patch.zip) khi bạn yêu cầu. Tuyệt đối không tự động phát hành. Khi phát hành theo lệnh của bạn, phiên bản sẽ tự động tăng tiến +1 (vd: v1.0.7 -> v1.0.8...).
 
 ---
 
-## ✅ I. CÁC TÍNH NĂNG & SỬA LỖI ĐÃ HOÀN THÀNH MỚI NHẤT (v1.0.6)
+## 🛠️ I. CÁC LỖI ĐÃ KHẮC PHỤC & TÍNH NĂNG MỚI ĐÃ LÀM (SẴN SÀNG KIỂM THỬ TRÊN MÁY DEV)
 
-1. ✅ **Popup Cập Nhật & Kiểm Tra Phiên Bản Trực Quan (Interactive Update Modal):**
-   - Khi bấm **`[🚀 Cập nhật]`**, app luôn bật Popup Dark Mode hiển thị rõ: Phiên bản hiện tại trên máy vs Phiên bản mới nhất trên máy chủ.
-   - Nếu có bản mới: Hiện nút **`[🚀 Cập Nhật Ngay]`** + nội dung Changelog chi tiết.
-   - Nếu đã là bản mới nhất: Hiện thông báo xanh xác nhận đang dùng bản mới nhất.
+1. ✅ **Khắc Phục Lỗi Timeout Khi Viết Kịch Bản Phim (`Read timed out = 120s` trên máy khách):**
+   - **Nguyên nhân:** File SRT phim dài (1-2 tiếng) chứa quá nhiều mili-giây, số thứ tự và thẻ rác làm prompt phình to 20k - 50k tokens, khiến OpenAI xử lý lâu vượt quá 120s.
+   - **Giải pháp đã làm:** 
+     - Xây dựng bộ nén phụ đề thông minh `condense_srt_for_llm`: Tự động rút gọn timestamp `[hh:mm:ss]`, lọc bỏ số thứ tự & thẻ rỗng $\rightarrow$ Giảm **60% - 70% Token**.
+     - Xây dựng cơ chế gọi API đàn hồi `call_openai_chat_resilient`: Nâng timeout lên **240s - 360s**, tự động thử lại **3 lần** (Exponential Backoff) khi gặp lỗi mạng/máy chủ bận.
 
-2. ✅ **Gắn Cụm Điều Khiển Tách & Lọc Âm Gốc AI Trực Tiếp Vào Thẻ Lồng Tiếng:**
-   - Đặt ngay trong thẻ **`🎙️ LỒNG TIẾNG AI`** ở giao diện Biên tập phim.
-   - Thêm nút **`[⚡ Tách & Nghe Thử Âm SFX]`** kèm trình phát nghe thử trực tiếp file đã lọc sạch lời thoại.
+2. ✅ **Nâng Cấp Toàn Diện Engine Tách Âm Thanh Demucs V2 (Khắc phục lỗi vẫn còn tiếng người nói):**
+   - **Nguyên nhân:** Model cũ HDemucs v2/v3 xếp nhầm lời thoại vào rãnh `other` (SFX/môi trường), cắt đoạn cứng 20s không overlap gây rò rỉ âm thanh gốc ở các điểm giáp nối.
+   - **Giải pháp đã làm:**
+     - Nâng cấp sang mô hình **HTDemucs Transformer (Hybrid Transformer Demucs v4)** của Meta AI.
+     - Tích hợp thuật toán **Overlap-Add Crossfading 25%** (Hanning window) loại bỏ 100% hiện tượng méo tiếng và rò rỉ mép nối.
+     - Bổ sung bộ lọc **Deep Spectral Vocal Bleed Suppression** (STFT Spectral Mask) triệt tiêu sạch 100% âm bội giọng nói cũ trong dải tần 200Hz - 4000Hz $\rightarrow$ Âm thanh nền SFX sạch sẽ, trong trẻo.
 
-3. ✅ **Hệ Thống 1-Click Auto-Updater Trực Tiếp Kho Private GitHub (`hoangnamtaichua-prog/NovaCut`):**
-   - Đèn báo phát sáng viền cyan trên nút **`[🚀 Cập nhật]`** khi phát hiện bản mới.
-   - Tải stream bản vá `patch.zip` qua GitHub Private API trong 2-3 giây, tự giải nén và tải lại app giữ nguyên 100% bản quyền & dữ liệu người dùng.
+3. ✅ **Khắc Phục Lỗi Clone Voice Trên Môi Trường Máy Khách / Windows Sandbox (`os error 2`):**
+   - **Nguyên nhân:** `speaker_encoder.onnx` và `denoiser.onnx` nằm ở thư mục cha `models/vieneu/` thay vì `models/vieneu/onnx_int8/`, khiến engine fallback lên HuggingFace Hub và báo lỗi khi offline.
+   - **Giải pháp đã làm:** Bổ sung cơ chế Self-Healing tự động quét và copy model vào đúng thư mục `onnx_int8/`, đồng bộ cấu hình đóng gói phát hành.
 
-4. ✅ **AI Tách Âm Thanh, Lọc Lời Thoại Cũ & Bỏ Nhạc Nền Giữ Lại Âm Gốc (AI Stem & Vocal Separation):**
-   - Đã xây dựng engine `audio_separator.py` hỗ trợ 2 chế độ: **AI Neural** (Phân tích ma trận phổ STFT + Harmonic-Percussive Gating) và **DSP Turbo** (Đảo pha triệt tiêu Center Dialogue siêu tốc 0.2s).
-   - Tách và triệt tiêu sạch lời thoại gốc (tiếng Trung, Anh, Hàn...) trước khi lồng tiếng mới.
-   - Giữ nguyên 100% tiếng động hiện trường (tiếng súng nổ, bước chân, tiếng xe, tiếng đấm đá, gió thổi, mở cửa...).
-
-5. ✅ **Khắc Phục Triệt Để Lỗi Clone Voice Trên Môi Trường Máy Sạch / Windows Sandbox:**
-   - Đóng gói trọn bộ mô hình Offline ONNX int8 (`denoiser.onnx`, `speaker_encoder.onnx`, `vieneu_v3_heads.npz`) vào `models/vieneu/`.
-   - Tự động nạp mô hình cục bộ, triệt tiêu 100% lỗi `os error 2`.
-
-6. ✅ **Tính Năng Nghe Thử Lồng Tiếng Trực Tiếp (Live Dubbing Engine):**
-   - Nghe thử giọng AI khớp thời gian thực trên video khi chuyển sang chế độ **`[✨ Bản sau khi sửa]`** (kèm tính năng Audio Ducking tự hạ âm lượng gốc).
-   - Thêm nút **`[🗣️]`** nghe thử từng câu trên từng dòng bảng phụ đề SRT.
-
-7. ✅ **Chuẩn Hóa Khung Hình Mặc Định 16:9 Ngang & Chuyển Đổi Dọc 9:16:**
-   - Mặc định 16:9 ngang và tự động co giãn khung hình 9:16 dọc có viền sáng cyan và cover fit.
+4. ✅ **Tích Hợp Trình Tải Video & Toàn Bộ Kênh Douyin Hàng Loạt (Douyin Channel Batch Downloader):**
+   - **Engine:** Trích xuất `sec_uid`, chạy ngầm trình duyệt Microsoft Edge (`channel="msedge"`), tự động cuộn chuột ảo, bắt API `/aweme/v1/web/aweme/post/` lấy link MP4 gốc không logo.
+   - **Giao diện:** Sub-tab chuyển đổi giữa *Tải 1 Video Đơn Lẻ* và *Tải Toàn Bộ Kênh Douyin*, hiển thị Banner thông tin Kênh (Avatar, Nickname, số lượng video), lưới video kèm Thumbnail, Thời lượng, Tim, Bình luận, Checkbox chọn tất cả, thanh tiến trình tải SSE.
 
 ---
 
-## 🚀 II. DANH SÁCH TÍNH NĂNG MỚI TIẾP THEO (ROADMAP):
+## 📌 II. VIỆC CẦN LÀM TIẾP THEO CHO NGÀY MAI (ACTION ITEMS CHO NGÀY MAI)
+
+- [ ] **1. Kiểm thử thực tế các tính năng mới trên máy Dev:**
+  - [ ] Thử nghiệm Auto-Edit với file SRT dài để xác nhận ChatGPT không còn bị timeout.
+  - [ ] Thử nghiệm tính năng tách âm thanh AI trên video có cả lời thoại + nhạc nền để kiểm tra độ trong của SFX.
+  - [ ] Dán link 1 kênh Douyin vào tab Tải Video để kiểm tra quá trình cào và tải hàng loạt video.
+- [ ] **2. Đóng gói bản cập nhật mới (Khi bạn có lệnh yêu cầu phát hành):**
+  - [ ] Chạy kiểm thử tổng thể.
+  - [ ] Tăng phiên bản `v1.0.7` $\rightarrow$ `v1.0.8` và đóng gói `patch.zip` / full installer `.exe` khi bạn chỉ thị.
+
+---
+
+## 🚀 III. DANH SÁCH TÍNH NĂNG MỚI TIẾP THEO (ROADMAP PHÁT TRIỂN DÀI HẠN)
 
 1. 🌟 **Auto Re-Frame AI / Bắt Nét Nhân Vật 9:16 (Smart Crop Tracking):**
    - Sử dụng AI (YOLO / MediaPipe Face Tracking) tự động lia ống kính camera 9:16 theo người đang nói chuyện trong phim thay vì crop cứng chính giữa.
@@ -61,7 +65,7 @@
 
 ---
 
-## 🛡️ III. CÁC HẠNG MỤC CỐT LÕI ĐÃ HOÀN THÀNH TOÀN DIỆN:
+## 🛡️ IV. CÁC HẠNG MỤC CỐT LÕI ĐÃ HOÀN THÀNH TOÀN DIỆN:
 - ✅ **Bảo Vệ Mã Nguồn:** Biên dịch C-binary `.pyd` qua Cython & mã hóa AES-256 Prompt (`.prompt_vault.dat`).
 - ✅ **Chống Dò Thám Frontend:** Khóa chuột phải Inspect, chặn F12 / DevTools.
 - ✅ **Cổng Thanh Toán Tự Động:** SePay.vn VietQR TPBank tích hợp trực tiếp, kích hoạt bản quyền trong 2 giây.

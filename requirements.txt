@@ -8,3 +8,5 @@ tqdm
 click
 platformdirs
 colorama
+openai>=1.0.0
+tiktoken

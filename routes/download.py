@@ -103,3 +103,111 @@ def api_download_open_folder():
     subprocess.Popen(f'explorer /select,"{file_path}"')
     return jsonify({'success': True})
 
+
+@download_bp.route('/api/download/douyin/scan_channel', methods=['POST'])
+def api_download_douyin_scan_channel():
+    """
+    API quét toàn bộ hoặc N video mới nhất từ một kênh Douyin bằng Browser Worker ngầm.
+    """
+    import license_manager
+    is_valid, msg = license_manager.check_permission('can_access_editor')
+    if not is_valid:
+        return jsonify({'error': f"Chức năng bị khóa: {msg}", 'license_required': True}), 403
+
+    import douyin_browser_downloader
+    data = request.json or {}
+    channel_url = data.get('channel_url', '').strip()
+    limit = data.get('limit', 30)
+
+    if not channel_url:
+        return jsonify({'error': 'Vui lòng nhập đường dẫn kênh hoặc mã sec_uid của Douyin'}), 400
+
+    try:
+        limit = int(limit) if limit and str(limit).isdigit() else 30
+        if limit <= 0 or limit > 300:
+            limit = 30
+    except Exception:
+        limit = 30
+
+    try:
+        crawler = douyin_browser_downloader.DouyinBrowserDownloader()
+        result = crawler.scan_channel_videos(channel_url, limit=limit)
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        logging.error(f"[Douyin Channel Scan Error] {traceback.format_exc()}")
+        return jsonify({'error': f"Lỗi quét kênh Douyin: {str(e)}"}), 500
+
+
+@download_bp.route('/api/download/douyin/batch_download', methods=['POST'])
+def api_download_douyin_batch_download():
+    """
+    API tải hàng loạt danh sách video Douyin qua SSE Stream tiến trình.
+    """
+    import license_manager
+    is_valid, msg = license_manager.check_permission('can_access_editor')
+    if not is_valid:
+        return jsonify({'error': f"Chức năng bị khóa: {msg}", 'license_required': True}), 403
+
+    import douyin_browser_downloader, queue, threading, json
+    data = request.json or {}
+    videos = data.get('videos', [])
+    output_dir = data.get('output_dir', '').strip()
+
+    if not videos or not isinstance(videos, list):
+        return jsonify({'error': 'Danh sách video tải xuống rỗng'}), 400
+
+    if not output_dir:
+        output_dir = os.path.join(ROOT_DIR, 'downloads')
+    os.makedirs(output_dir, exist_ok=True)
+
+    q = queue.Queue()
+
+    def progress_callback(completed, total, video_info, file_path, status_tag):
+        q.put({
+            'status': 'progress',
+            'completed': completed,
+            'total': total,
+            'pct': int(completed / total * 100) if total > 0 else 0,
+            'current_title': video_info.get('title', '') if video_info else '',
+            'file_path': file_path or '',
+            'tag': status_tag
+        })
+
+    def worker():
+        try:
+            downloaded_files = douyin_browser_downloader.download_channel_batch(
+                video_list=videos,
+                output_dir=output_dir,
+                max_workers=2,
+                progress_cb=progress_callback
+            )
+            q.put({
+                'status': 'completed',
+                'downloaded_count': len(downloaded_files),
+                'total_requested': len(videos),
+                'output_dir': output_dir,
+                'files': downloaded_files
+            })
+        except Exception as e:
+            q.put({
+                'status': 'error',
+                'error': str(e)
+            })
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+    def generate():
+        while True:
+            try:
+                item = q.get(timeout=60)
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                if item.get('status') in ['completed', 'error']:
+                    break
+            except queue.Empty:
+                yield "data: {\"status\": \"heartbeat\"}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+

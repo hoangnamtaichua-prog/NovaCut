@@ -42,6 +42,7 @@ PATCH_FILES = [
     "ai_dubbing.py",
     "updater.py",
     "prompt_vault.py",
+    ".prompt_vault.dat",
     "asr_manager.py",
     "asr_inference.py",
     "capcut_sync.py",
@@ -54,6 +55,8 @@ PATCH_FILES = [
     "vietnamese_text_normalizer.py",
     "local_voice_engine.py",
     "rvc_bridge.py",
+    "audio_separator.py",
+    "requirements.txt",
     "tts_cli.py"
 ]
 

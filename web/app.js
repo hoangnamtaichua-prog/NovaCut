@@ -6125,6 +6125,56 @@ if (reviewVoiceSpeed && reviewVoiceSpeedVal) {
     });
 }
 
+// TTS Threads Slider
+const reviewTtsThreads = document.getElementById('reviewTtsThreads');
+const reviewTtsThreadsVal = document.getElementById('reviewTtsThreadsVal');
+if (reviewTtsThreads && reviewTtsThreadsVal) {
+    reviewTtsThreads.addEventListener('input', (e) => {
+        reviewTtsThreadsVal.textContent = e.target.value + ' luồng';
+    });
+}
+
+// Video Zoom Controls
+const reviewEnableZoom = document.getElementById('reviewEnableZoom');
+const reviewZoomConfigPanel = document.getElementById('reviewZoomConfigPanel');
+const reviewVideoZoom = document.getElementById('reviewVideoZoom');
+const reviewVideoZoomVal = document.getElementById('reviewVideoZoomVal');
+
+if (reviewEnableZoom && reviewZoomConfigPanel) {
+    reviewEnableZoom.addEventListener('change', (e) => {
+        reviewZoomConfigPanel.style.display = e.target.checked ? 'flex' : 'none';
+    });
+}
+
+if (reviewVideoZoom && reviewVideoZoomVal) {
+    reviewVideoZoom.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        reviewVideoZoomVal.textContent = val === 105 ? '105% (Khuyên dùng)' : (val === 100 ? '100% (Gốc)' : `${val}%`);
+        
+        document.querySelectorAll('.btn-review-zoom-preset').forEach(btn => {
+            if (parseInt(btn.dataset.zoom) === val) {
+                btn.classList.add('active');
+                btn.style.borderColor = '#38bdf8';
+                btn.style.color = '#38bdf8';
+            } else {
+                btn.classList.remove('active');
+                btn.style.borderColor = '';
+                btn.style.color = '';
+            }
+        });
+    });
+}
+
+document.querySelectorAll('.btn-review-zoom-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const zoomVal = parseInt(btn.dataset.zoom) || 105;
+        if (reviewVideoZoom) {
+            reviewVideoZoom.value = zoomVal;
+            reviewVideoZoom.dispatchEvent(new Event('input'));
+        }
+    });
+});
+
 // BGM Controls
 const reviewBgmEnabled = document.getElementById('reviewBgmEnabled');
 const reviewBgmConfig = document.getElementById('reviewBgmConfig');
@@ -6275,10 +6325,12 @@ if (btnStartReview) {
             mode: reviewVideoMode,
             voice_id: voiceId,
             voice_speed: voiceSpeed,
+            tts_threads: parseInt(document.getElementById('reviewTtsThreads')?.value || 3),
             target_minutes: document.getElementById('reviewTargetMinutes') ? (parseInt(document.getElementById('reviewTargetMinutes').value) || 5) : 5,
             aspect_ratio: reviewAspectRatio,
             pacing: reviewPacing,
-            pan_zoom: document.getElementById('reviewPanZoom')?.checked || false,
+            enable_zoom: document.getElementById('reviewEnableZoom')?.checked ?? true,
+            video_zoom: parseFloat(document.getElementById('reviewVideoZoom')?.value || 105),
             blur_original_subtitles: document.getElementById('reviewTabBlurOriginalSubtitles') ? document.getElementById('reviewTabBlurOriginalSubtitles').checked : true,
             blur_intensity: parseInt(document.getElementById('reviewTabDynBlurIntensity')?.value) || 15,
             blur_lead_offset: parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value) || -180,
@@ -7509,6 +7561,368 @@ if (btnClearDownloadHistory) {
 
 // Render history on startup
 window.addEventListener('DOMContentLoaded', renderDownloadHistory);
+
+// ==========================================
+// DOUYIN CHANNEL BATCH DOWNLOADER CONTROLLER
+// ==========================================
+let scannedDouyinVideos = [];
+let selectedDouyinVideoIds = new Set();
+
+function initDouyinChannelDownloader() {
+    const tabDownloadSingle = document.getElementById('tabDownloadSingle');
+    const tabDownloadChannel = document.getElementById('tabDownloadChannel');
+    const sectionDownloadSingle = document.getElementById('sectionDownloadSingle');
+    const sectionDownloadChannel = document.getElementById('sectionDownloadChannel');
+
+    const douyinChannelInputUrl = document.getElementById('douyinChannelInputUrl');
+    const btnPasteChannelUrl = document.getElementById('btnPasteChannelUrl');
+    const douyinChannelLimitSelect = document.getElementById('douyinChannelLimitSelect');
+    const btnScanDouyinChannel = document.getElementById('btnScanDouyinChannel');
+
+    const douyinChannelInfoBanner = document.getElementById('douyinChannelInfoBanner');
+    const douyinChannelAvatar = document.getElementById('douyinChannelAvatar');
+    const douyinChannelNickname = document.getElementById('douyinChannelNickname');
+    const douyinChannelSignature = document.getElementById('douyinChannelSignature');
+    const douyinChannelVideoCountBadge = document.getElementById('douyinChannelVideoCountBadge');
+
+    const douyinBatchActionsBar = document.getElementById('douyinBatchActionsBar');
+    const douyinSelectAllCheckbox = document.getElementById('douyinSelectAllCheckbox');
+    const douyinSelectedSummary = document.getElementById('douyinSelectedSummary');
+    const btnStartDouyinBatchDownload = document.getElementById('btnStartDouyinBatchDownload');
+    const btnDouyinOpenFolder = document.getElementById('btnDouyinOpenFolder');
+
+    const douyinBatchProgressBox = document.getElementById('douyinBatchProgressBox');
+    const douyinBatchProgressText = document.getElementById('douyinBatchProgressText');
+    const douyinBatchProgressPct = document.getElementById('douyinBatchProgressPct');
+    const douyinBatchProgressBar = document.getElementById('douyinBatchProgressBar');
+
+    const douyinChannelGridContainer = document.getElementById('douyinChannelGridContainer');
+    const douyinChannelGrid = document.getElementById('douyinChannelGrid');
+    const douyinChannelEmptyPlaceholder = document.getElementById('douyinChannelEmptyPlaceholder');
+
+    // 1. Sub-tab toggle
+    if (tabDownloadSingle && tabDownloadChannel && sectionDownloadSingle && sectionDownloadChannel) {
+        tabDownloadSingle.addEventListener('click', () => {
+            tabDownloadSingle.classList.add('active');
+            tabDownloadSingle.style.borderColor = '#38bdf8';
+            tabDownloadSingle.style.color = '#38bdf8';
+            tabDownloadSingle.style.background = 'rgba(56, 189, 248, 0.1)';
+
+            tabDownloadChannel.classList.remove('active');
+            tabDownloadChannel.style.borderColor = '#334155';
+            tabDownloadChannel.style.color = '#94a3b8';
+            tabDownloadChannel.style.background = 'transparent';
+
+            sectionDownloadSingle.style.display = 'block';
+            sectionDownloadChannel.style.display = 'none';
+        });
+
+        tabDownloadChannel.addEventListener('click', () => {
+            tabDownloadChannel.classList.add('active');
+            tabDownloadChannel.style.borderColor = '#a855f7';
+            tabDownloadChannel.style.color = '#c084fc';
+            tabDownloadChannel.style.background = 'rgba(168, 85, 247, 0.1)';
+
+            tabDownloadSingle.classList.remove('active');
+            tabDownloadSingle.style.borderColor = '#334155';
+            tabDownloadSingle.style.color = '#94a3b8';
+            tabDownloadSingle.style.background = 'transparent';
+
+            sectionDownloadSingle.style.display = 'none';
+            sectionDownloadChannel.style.display = 'block';
+        });
+    }
+
+    // 2. Paste Channel URL
+    if (btnPasteChannelUrl && douyinChannelInputUrl) {
+        btnPasteChannelUrl.addEventListener('click', async () => {
+            try {
+                const text = await navigator.clipboard.readText();
+                douyinChannelInputUrl.value = text.trim();
+                showToast('Đã dán liên kết kênh!', 'info');
+            } catch (e) {
+                showToast('Không thể đọc clipboard: ' + e.message, 'warning');
+            }
+        });
+    }
+
+    // 3. Scan Channel Videos
+    if (btnScanDouyinChannel && douyinChannelInputUrl) {
+        btnScanDouyinChannel.addEventListener('click', async () => {
+            const channelUrl = douyinChannelInputUrl.value.trim();
+            if (!channelUrl) {
+                showToast('Vui lòng dán link kênh hoặc mã sec_uid của Douyin!', 'warning');
+                return;
+            }
+
+            if (typeof checkFeaturePermission === 'function') {
+                const allowed = await checkFeaturePermission('can_access_editor', 'Tải Video Hàng Loạt');
+                if (!allowed) return;
+            }
+
+            const limit = parseInt(douyinChannelLimitSelect?.value || '30', 10);
+
+            btnScanDouyinChannel.disabled = true;
+            btnScanDouyinChannel.innerHTML = `<span class="loading-spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Đang quét kênh...`;
+
+            if (douyinChannelEmptyPlaceholder) {
+                douyinChannelEmptyPlaceholder.style.display = 'block';
+                douyinChannelEmptyPlaceholder.innerHTML = `
+                    <div style="width: 56px; height: 56px; border-radius: 12px; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 14px;">
+                        <span class="loading-spinner" style="width:28px;height:28px;"></span>
+                    </div>
+                    <div style="font-size: 15px; font-weight: 600; color: #f8fafc;">Đang khởi động trình duyệt ngầm & cào dữ liệu...</div>
+                    <div style="font-size: 12.5px; color: #38bdf8; margin-top: 6px;">Vui lòng đợi trong giây lát khi hệ thống tự động cuộn trang phân trang.</div>
+                `;
+            }
+
+            try {
+                const res = await fetch('/api/download/douyin/scan_channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_url: channelUrl, limit })
+                });
+
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showToast(data.error || 'Lỗi khi quét kênh Douyin!', 'error');
+                    if (douyinChannelEmptyPlaceholder) {
+                        douyinChannelEmptyPlaceholder.innerHTML = `
+                            <div style="font-size: 15px; font-weight: 600; color: #f87171;">❌ Quét kênh thất bại</div>
+                            <div style="font-size: 12.5px; color: #94a3b8; margin-top: 6px;">${data.error || 'Không thể kết nối kênh Douyin.'}</div>
+                        `;
+                    }
+                    return;
+                }
+
+                scannedDouyinVideos = data.videos || [];
+                selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id));
+
+                // Render Channel Info Banner
+                const info = data.channel_info || {};
+                if (douyinChannelInfoBanner) douyinChannelInfoBanner.style.display = 'block';
+                if (douyinChannelAvatar) douyinChannelAvatar.src = info.avatar || '';
+                if (douyinChannelNickname) douyinChannelNickname.textContent = info.nickname || 'Kênh Douyin';
+                if (douyinChannelSignature) douyinChannelSignature.textContent = info.signature || 'Không có mô tả';
+                if (douyinChannelVideoCountBadge) douyinChannelVideoCountBadge.textContent = `${scannedDouyinVideos.length} Video`;
+
+                // Render Video Grid
+                renderDouyinVideoGrid();
+
+                showToast(`Đã quét thành công ${scannedDouyinVideos.length} video từ kênh!`, 'success');
+            } catch (e) {
+                showToast('Lỗi kết nối khi quét kênh: ' + e.message, 'error');
+            } finally {
+                btnScanDouyinChannel.disabled = false;
+                btnScanDouyinChannel.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Quét Danh Sách Video</span>`;
+            }
+        });
+    }
+
+    // 4. Render Video Grid Function
+    function renderDouyinVideoGrid() {
+        if (!douyinChannelGrid) return;
+        douyinChannelGrid.innerHTML = '';
+
+        if (scannedDouyinVideos.length === 0) {
+            if (douyinChannelGridContainer) douyinChannelGridContainer.style.display = 'none';
+            if (douyinBatchActionsBar) douyinBatchActionsBar.style.display = 'none';
+            if (douyinChannelEmptyPlaceholder) douyinChannelEmptyPlaceholder.style.display = 'block';
+            return;
+        }
+
+        if (douyinChannelEmptyPlaceholder) douyinChannelEmptyPlaceholder.style.display = 'none';
+        if (douyinChannelGridContainer) douyinChannelGridContainer.style.display = 'block';
+        if (douyinBatchActionsBar) douyinBatchActionsBar.style.display = 'block';
+
+        updateSelectionSummary();
+
+        scannedDouyinVideos.forEach((video, idx) => {
+            const isSelected = selectedDouyinVideoIds.has(video.aweme_id);
+            const card = document.createElement('div');
+            card.className = 'card douyin-video-card';
+            card.style.cssText = `
+                background: #1e293b;
+                border: 1px solid ${isSelected ? '#38bdf8' : '#334155'};
+                border-radius: 10px;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                transition: all 0.2s;
+                position: relative;
+            `;
+
+            const thumb = video.cover_url || '';
+            card.innerHTML = `
+                <div style="position: relative; width: 100%; aspect-ratio: 16/9; background: #0f172a; overflow: hidden;">
+                    <img src="${thumb}" alt="thumb" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none';">
+                    <span style="position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,0.8); color: #fff; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;">
+                        ${video.duration_formatted || '00:00'}
+                    </span>
+                    <label style="position: absolute; top: 6px; left: 6px; background: rgba(15,23,42,0.85); padding: 4px 8px; border-radius: 6px; display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" class="douyin-item-checkbox" data-id="${video.aweme_id}" ${isSelected ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #38bdf8; cursor: pointer;">
+                        <span style="font-size: 11px; font-weight: 700; color: #38bdf8;">#${idx + 1}</span>
+                    </label>
+                </div>
+                <div style="padding: 12px; flex: 1; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div style="font-size: 12.5px; font-weight: 600; color: #f8fafc; line-height: 1.4; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" title="${video.title}">
+                        ${video.title || 'Video Douyin'}
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #334155; padding-top: 8px;">
+                        <span>❤️ ${(video.digg_count || 0).toLocaleString()}</span>
+                        <span>💬 ${(video.comment_count || 0).toLocaleString()}</span>
+                        <a href="${video.url}" target="_blank" style="color: #38bdf8; text-decoration: none; font-weight: 600;">Xem ↗</a>
+                    </div>
+                </div>
+            `;
+
+            // Checkbox change handler
+            const chk = card.querySelector('.douyin-item-checkbox');
+            chk?.addEventListener('change', (e) => {
+                const checked = e.target.checked;
+                if (checked) {
+                    selectedDouyinVideoIds.add(video.aweme_id);
+                    card.style.borderColor = '#38bdf8';
+                } else {
+                    selectedDouyinVideoIds.delete(video.aweme_id);
+                    card.style.borderColor = '#334155';
+                }
+                updateSelectionSummary();
+            });
+
+            douyinChannelGrid.appendChild(card);
+        });
+    }
+
+    function updateSelectionSummary() {
+        const total = scannedDouyinVideos.length;
+        const selected = selectedDouyinVideoIds.size;
+        if (douyinSelectedSummary) {
+            douyinSelectedSummary.textContent = `Đã chọn: ${selected} / ${total} video`;
+        }
+        if (douyinSelectAllCheckbox) {
+            douyinSelectAllCheckbox.checked = (selected === total && total > 0);
+            douyinSelectAllCheckbox.indeterminate = (selected > 0 && selected < total);
+        }
+    }
+
+    // 5. Select All Checkbox
+    if (douyinSelectAllCheckbox) {
+        douyinSelectAllCheckbox.addEventListener('change', (e) => {
+            const checked = e.target.checked;
+            if (checked) {
+                selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id));
+            } else {
+                selectedDouyinVideoIds.clear();
+            }
+            renderDouyinVideoGrid();
+        });
+    }
+
+    // 6. Open Folder
+    if (btnDouyinOpenFolder) {
+        btnDouyinOpenFolder.addEventListener('click', () => {
+            fetch('/api/download/open_folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+        });
+    }
+
+    // 7. Start Batch Download
+    if (btnStartDouyinBatchDownload) {
+        btnStartDouyinBatchDownload.addEventListener('click', async () => {
+            const selectedList = scannedDouyinVideos.filter(v => selectedDouyinVideoIds.has(v.aweme_id));
+            if (selectedList.length === 0) {
+                showToast('Vui lòng tích chọn ít nhất 1 video để tải!', 'warning');
+                return;
+            }
+
+            btnStartDouyinBatchDownload.disabled = true;
+            btnStartDouyinBatchDownload.innerHTML = `<span>⏳ Đang tải hàng loạt...</span>`;
+            if (douyinBatchProgressBox) douyinBatchProgressBox.style.display = 'block';
+            if (douyinBatchProgressBar) douyinBatchProgressBar.style.width = '0%';
+            if (douyinBatchProgressText) douyinBatchProgressText.textContent = `Bắt đầu tải ${selectedList.length} video...`;
+            if (douyinBatchProgressPct) douyinBatchProgressPct.textContent = '0%';
+
+            try {
+                const response = await fetch('/api/download/douyin/batch_download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        videos: selectedList,
+                        output_dir: ''
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const jsonStr = line.slice(6).trim();
+                            if (!jsonStr) continue;
+                            try {
+                                const data = JSON.parse(jsonStr);
+                                if (data.status === 'progress') {
+                                    if (douyinBatchProgressBar) douyinBatchProgressBar.style.width = `${data.pct}%`;
+                                    if (douyinBatchProgressPct) douyinBatchProgressPct.textContent = `${data.pct}%`;
+                                    if (douyinBatchProgressText) {
+                                        douyinBatchProgressText.textContent = `Đang tải (${data.completed}/${data.total}): ${data.current_title || ''}`;
+                                    }
+                                } else if (data.status === 'completed') {
+                                    if (douyinBatchProgressBar) douyinBatchProgressBar.style.width = '100%';
+                                    if (douyinBatchProgressPct) douyinBatchProgressPct.textContent = '100%';
+                                    if (douyinBatchProgressText) {
+                                        douyinBatchProgressText.textContent = `✅ Đã tải xong toàn bộ ${data.downloaded_count} / ${data.total_requested} video!`;
+                                    }
+
+                                    // Add to download history
+                                    (data.files || []).forEach(fPath => {
+                                        saveDownloadHistoryItem({
+                                            id: Date.now() + Math.random(),
+                                            title: fPath.split(/[\\/]/).pop(),
+                                            file_path: fPath,
+                                            file_name: fPath.split(/[\\/]/).pop(),
+                                            file_size: '--',
+                                            thumbnail: '',
+                                            platform: 'Douyin Channel',
+                                            is_audio: false,
+                                            timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+                                        });
+                                    });
+
+                                    showToast(`Đã tải thành công ${data.downloaded_count} video về máy!`, 'success');
+                                } else if (data.status === 'error') {
+                                    showToast('Lỗi tải hàng loạt: ' + (data.error || ''), 'error');
+                                }
+                            } catch (err) {
+                                console.error('SSE parse error:', err);
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                showToast('Lỗi kết nối khi tải hàng loạt: ' + e.message, 'error');
+            } finally {
+                btnStartDouyinBatchDownload.disabled = false;
+                btnStartDouyinBatchDownload.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>TẢI CÁC VIDEO ĐÃ CHỌN</span>`;
+            }
+        });
+    }
+}
+
+window.addEventListener('DOMContentLoaded', initDouyinChannelDownloader);
 
 // Initialize Clone Voice Studio
 try {
@@ -10971,6 +11385,7 @@ const appUpdater = {
     }
 };
 
+window.appUpdater = appUpdater;
 appUpdater.init();
 
 

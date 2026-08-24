@@ -10,6 +10,11 @@ import traceback
 import ffmpeg_installer
 import ai_dubbing
 import timeline_sanitizer
+import openai
+import tiktoken
+import asyncio
+import hashlib
+import concurrent.futures
 
 def is_api_voice(voice_id):
     if not voice_id:
@@ -68,6 +73,147 @@ def parse_srt_entries(srt_file_path):
     except Exception:
         pass
     return entries
+
+def condense_srt_for_llm(srt_text: str, max_chars: int = 40000) -> str:
+    """
+    Rút gọn và tối ưu nội dung phụ đề SRT trước khi gửi tới LLM.
+    - Loại bỏ số thứ tự thừa, chỉ giữ timestamp định dạng gọn [mm:ss] hoặc [hh:mm:ss]
+    - Loại bỏ các dòng lặp lại hoặc thẻ âm thanh trống [music], [âm nhạc], (tiếng vỗ tay)
+    - Nếu tổng dung lượng vẫn vượt quá max_chars, tiến hành lấy mẫu thông minh (smart sampling)
+      để đảm bảo không bị quá tải token gây nghẽn và timeout API.
+    """
+    if not srt_text or not isinstance(srt_text, str):
+        return ""
+        
+    lines = srt_text.strip().splitlines()
+    condensed_entries = []
+    
+    time_pattern = re.compile(r'(\d{1,2}:\d{2}:\d{2})[,\.]\d{3}\s*-->\s*(\d{1,2}:\d{2}:\d{2})[,\.]\d{3}')
+    cur_time = None
+    cur_texts = []
+    
+    for line in lines:
+        line_s = line.strip()
+        if not line_s:
+            if cur_time and cur_texts:
+                text_block = " ".join(cur_texts).strip()
+                if text_block:
+                    condensed_entries.append(f"[{cur_time}] {text_block}")
+                cur_time = None
+                cur_texts = []
+            continue
+            
+        if line_s.isdigit():
+            continue
+            
+        m = time_pattern.search(line_s)
+        if m:
+            if cur_time and cur_texts:
+                text_block = " ".join(cur_texts).strip()
+                if text_block:
+                    condensed_entries.append(f"[{cur_time}] {text_block}")
+                cur_texts = []
+            cur_time = m.group(1)
+        else:
+            cleaned = re.sub(r'\[.*?\]|\(.*?\)', '', line_s).strip()
+            if cleaned:
+                cur_texts.append(cleaned)
+                
+    if cur_time and cur_texts:
+        text_block = " ".join(cur_texts).strip()
+        if text_block:
+            condensed_entries.append(f"[{cur_time}] {text_block}")
+            
+    result = "\n".join(condensed_entries)
+    return result if result else srt_text
+
+def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(text))
+
+def split_srt_by_tokens(srt_text: str, max_tokens: int = 6000, model_name: str = "gpt-3.5-turbo") -> list:
+    """
+    Chia srt_text (đã được rút gọn qua condense_srt) thành các chunk, 
+    mỗi chunk đảm bảo không vượt quá max_tokens. Cắt ở ranh giới dòng.
+    """
+    lines = srt_text.splitlines()
+    chunks = []
+    current_chunk_lines = []
+    current_tokens = 0
+    
+    for line in lines:
+        line_tokens = count_tokens(line + "\n", model_name)
+        if current_tokens + line_tokens > max_tokens and current_chunk_lines:
+            chunks.append("\n".join(current_chunk_lines))
+            current_chunk_lines = [line]
+            current_tokens = line_tokens
+        else:
+            current_chunk_lines.append(line)
+            current_tokens += line_tokens
+            
+    if current_chunk_lines:
+        chunks.append("\n".join(current_chunk_lines))
+        
+    return chunks
+
+def call_openai_chat_resilient(url, headers, payload, max_retries=3, initial_timeout=240, check_stop_func=None, progress_logger=None):
+    """
+    Gọi OpenAI/ChatGPT API với cơ chế tự động thử lại (Retry with Exponential Backoff),
+    tăng dần thời gian chờ Timeout (240s -> 300s -> 360s) và báo cáo tiến trình.
+    """
+    timeout = initial_timeout
+    last_error = None
+    
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(max_retries=1, pool_connections=5, pool_maxsize=10)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    
+    for attempt in range(1, max_retries + 1):
+        if check_stop_func and check_stop_func():
+            return None, "Tác vụ đã bị người dùng dừng."
+            
+        try:
+            if attempt > 1 and progress_logger:
+                progress_logger(f"🔄 Đang thử gửi lại yêu cầu tới ChatGPT (Lần {attempt}/{max_retries}, Timeout: {timeout}s)...")
+                
+            res = session.post(url, headers=headers, json=payload, timeout=timeout)
+            if res.status_code == 200:
+                res_json = res.json()
+                content = res_json['choices'][0]['message']['content']
+                usage = res_json.get('usage', {})
+                return {
+                    "content": content,
+                    "usage": usage,
+                    "raw": res_json
+                }, None
+            elif res.status_code in [429, 500, 502, 503, 504]:
+                err_text = res.text[:200]
+                last_error = f"Lỗi máy chủ OpenAI (Mã {res.status_code}): {err_text}"
+                wait_sec = 3 * attempt
+                if progress_logger:
+                    progress_logger(f"⚠️ Máy chủ OpenAI bận (Mã {res.status_code}), tự động chờ {wait_sec}s để thử lại...")
+                time.sleep(wait_sec)
+            else:
+                return None, f"Lỗi API OpenAI (Mã {res.status_code}): {res.text}"
+        except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
+            last_error = f"Quá thời gian chờ phản hồi ({timeout}s) do mạng hoặc phản hồi dài: {str(e)}"
+            timeout += 60
+            wait_sec = 4 * attempt
+            if progress_logger:
+                progress_logger(f"⏳ Kết nối ChatGPT bị nghẽn (Timeout {timeout-60}s). Đang nâng thời gian chờ lên {timeout}s...")
+            time.sleep(wait_sec)
+        except (requests.exceptions.ConnectionError, Exception) as e:
+            last_error = f"Lỗi mạng khi kết nối tới OpenAI: {str(e)}"
+            wait_sec = 3 * attempt
+            if progress_logger:
+                progress_logger(f"⚠️ Mạng chập chờn khi gọi OpenAI: {str(e)[:100]}, thử lại sau {wait_sec}s...")
+            time.sleep(wait_sec)
+            
+    return None, f"Không thể kết nối sau {max_retries} lần thử: {last_error}"
 
 def calc_sub_width_ratio(text):
     """Tính tỷ lệ chiều rộng box blur khớp với độ dài câu chữ (chữ ngắn -> blur ngắn, chữ dài -> blur dài)"""
@@ -349,11 +495,11 @@ def run_ffmpeg_with_progress_yield(cmd, total_duration, start_pct, end_pct, desc
         return False
     return True
 
-def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40):
+def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40, threads=3):
     """
-    Tạo TTS cho từng câu và yield progress real-time theo %.
+    Tạo TTS cho từng câu theo cơ chế đa luồng (Multi-threading) và yield progress real-time.
     Yields:
-      ('progress', (index, total, pct, snippet))
+      ('progress', (completed_count, total, step_pct, overall_pct, snippet))
       ('error', error_str)
       ('done', (final_audio, final_srt, srt_entries))
     """
@@ -366,19 +512,37 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
     is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh']
     tts_url = "http://127.0.0.1:5000/api/tts/kokoro" if is_kokoro else "http://127.0.0.1:5000/api/tts/openspeaker"
     
-    audio_segments = []  # (path, duration, text)
     total = len(sentences)
+    if total == 0:
+        yield 'error', "Không có câu nào để tạo TTS."
+        return
+
+    num_threads = max(1, min(10, int(threads or 3)))
+    results_map = {}
+    error_holder = []
     
-    for i, sentence in enumerate(sentences):
+    def process_sentence(idx, sentence):
         if check_stop_func and check_stop_func():
-            yield 'error', "STOPPED"
-            return
+            return None
+            
+        filename = f"sent_{idx}.wav" if is_kokoro else f"sent_{idx}.mp3"
+        wav_path = os.path.join(sentence_dir, f"sent_{idx}_pcm.wav")
         
-        pct = int(start_pct + ((end_pct - start_pct) * (i + 1) / total)) if total > 0 else end_pct
-        snippet = (sentence[:35] + '...') if len(sentence) > 35 else sentence
-        yield 'progress', (i + 1, total, pct, snippet)
-        
-        filename = f"sent_{i}.wav" if is_kokoro else f"sent_{i}.mp3"
+        # Nếu đã có file WAV hợp lệ (từ cache/lần chạy trước) thì tái sử dụng
+        if os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
+            dur = 2.0
+            try:
+                import wave
+                with wave.open(wav_path, 'rb') as wf:
+                    frames = wf.getnframes()
+                    rate = wf.getframerate()
+                    if rate > 0:
+                        dur = frames / float(rate)
+            except Exception:
+                dur = get_video_duration_ffprobe(wav_path)
+                if dur <= 0: dur = 2.0
+            return idx, wav_path, dur, sentence
+
         tts_payload = {
             "text": sentence,
             "voice_id": voice_id,
@@ -388,31 +552,24 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
         }
         if not is_kokoro and api_key_openspeaker:
             tts_payload['api_key'] = api_key_openspeaker
-        
+            
         try:
             res = requests.post(tts_url, json=tts_payload, timeout=120)
             if res.status_code != 200:
-                yield 'error', f"Lỗi TTS câu {i+1}: {res.text}"
-                return
+                raise Exception(f"Lỗi TTS câu {idx+1}: {res.text}")
         except Exception as e:
-            yield 'error', f"Lỗi gọi API TTS câu {i+1}: {str(e)}"
-            return
-        
+            raise Exception(f"Lỗi gọi API TTS câu {idx+1}: {str(e)}")
+            
         audio_path = os.path.join(sentence_dir, filename)
         if not os.path.exists(audio_path):
-            yield 'error', f"Không tìm thấy file audio câu {i+1}"
-            return
-        
-        # Convert to WAV to avoid MP3 padding/desync issues
-        wav_path = os.path.join(sentence_dir, f"sent_{i}_pcm.wav")
+            raise Exception(f"Không tìm thấy file audio câu {idx+1}")
+            
         try:
             conv_cmd = [ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error', '-i', audio_path, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', wav_path]
             subprocess.run(conv_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except subprocess.CalledProcessError as e:
-            yield 'error', f"Lỗi convert WAV câu {i+1}: {e.stderr.decode()}"
-            return
-        
-        # Đo duration trên file WAV (chính xác tuyệt đối bằng module wave)
+            raise Exception(f"Lỗi convert WAV câu {idx+1}: {e.stderr.decode()}")
+            
         dur = 2.0
         try:
             import wave
@@ -425,13 +582,43 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
             dur = get_video_duration_ffprobe(wav_path)
             if dur <= 0:
                 dur = 2.0
-        
-        audio_segments.append((wav_path, dur, sentence))
-    
-    if not audio_segments:
-        yield 'error', "Không có câu nào để tạo TTS."
+                
+        return idx, wav_path, dur, sentence
+
+    completed_count = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        future_to_idx = {executor.submit(process_sentence, i, s): i for i, s in enumerate(sentences)}
+        for future in concurrent.futures.as_completed(future_to_idx):
+            if check_stop_func and check_stop_func():
+                yield 'error', "STOPPED"
+                return
+                
+            try:
+                res = future.result()
+                if res:
+                    idx, wav_p, dur, sent_text = res
+                    results_map[idx] = (wav_p, dur, sent_text)
+                    completed_count += 1
+                    
+                    step_pct = int(completed_count / total * 100)
+                    overall_pct = int(start_pct + ((end_pct - start_pct) * completed_count / total))
+                    snippet = (sent_text[:35] + '...') if len(sent_text) > 35 else sent_text
+                    yield 'progress', (completed_count, total, step_pct, overall_pct, snippet)
+            except Exception as e:
+                error_holder.append(str(e))
+                yield 'error', str(e)
+                return
+
+    if error_holder:
+        yield 'error', error_holder[0]
         return
-    
+
+    # Sắp xếp đúng thứ tự câu 0 -> total-1
+    audio_segments = [results_map[i] for i in range(total) if i in results_map]
+    if len(audio_segments) != total:
+        yield 'error', f"Lỗi tạo TTS: Chỉ tạo được {len(audio_segments)}/{total} câu."
+        return
+
     # Concat tất cả audio thành 1 file
     concat_list_path = os.path.join(sentence_dir, 'concat.txt')
     with open(concat_list_path, 'w', encoding='utf-8') as f:
@@ -466,17 +653,18 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
     
     yield 'done', (final_audio, final_srt, srt_entries)
 
-def generate_tts_per_sentence(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40):
+def generate_tts_per_sentence(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40, threads=3):
     """Hàm wrapper tương thích ngược chạy generator trả về tuple kết quả cuối."""
     final_audio = None
     final_srt = None
     srt_entries = []
     error = None
-    for msg_type, data in generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct, end_pct):
+    for msg_type, data in generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct, end_pct, threads):
         if msg_type == 'error':
             error = data
         elif msg_type == 'done':
             final_audio, final_srt, srt_entries = data
+    return final_audio, final_srt, srt_entries, error
 def resolve_openai_credentials(payload=None):
     if payload is None:
         payload = {}
@@ -527,6 +715,303 @@ def resolve_openai_credentials(payload=None):
 
     return openai_key, openai_base_url, openai_model
 
+import threading
+import queue
+
+def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chunks, target_words, prompt_map, prompt_reduce, temp_dir, log_func):
+    q = queue.Queue()
+    
+    async def async_worker():
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=openai_key, base_url=openai_base_url)
+            
+            q.put({"type": "log", "msg": f"🔄 Bắt đầu Map: Xử lý {len(chunks)} đoạn song song..."})
+            
+            async def process_chunk(idx, chunk_text):
+                prompt = prompt_map.replace("{SỐ_THỨ_TỰ_CHUNK}", str(idx+1))\
+                                   .replace("{TỔNG_SỐ_CHUNK}", str(len(chunks)))\
+                                   .replace("{NỘI_DUNG_SRT_CHUNK}", chunk_text)\
+                                   .replace("{SỐ_TỪ_MỤC_TIÊU_CHUNK}", str(target_words // max(1, len(chunks))))
+                
+                prev_text = "Không có (đoạn đầu)" if idx == 0 else "\\n".join(chunks[idx-1].splitlines()[-10:])
+                prompt = prompt.replace("{TÓM_TẮT_ĐOẠN_TRƯỚC}", prev_text)
+                prompt = prompt.replace("{MỐC_THỜI_GIAN_BẮT_ĐẦU}", "Đầu đoạn").replace("{MỐC_THỜI_GIAN_KẾT_THÚC}", "Cuối đoạn")
+                
+                cache_key = hashlib.md5((chunk_text + prompt).encode('utf-8')).hexdigest()
+                cache_file = os.path.join(temp_dir, f"chunk_{cache_key}.txt")
+                
+                if os.path.exists(cache_file):
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        q.put({"type": "token", "count": len(f.read())})
+                        return f.read()
+                        
+                response = await client.chat.completions.create(
+                    model=openai_model,
+                    messages=[
+                        {"role": "system", "content": "Bạn là chuyên gia review phim."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    stream=True
+                )
+                
+                result = ""
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        result += content
+                        q.put({"type": "token", "count": len(content)})
+                        
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    f.write(result)
+                return result
+
+            map_tasks = [process_chunk(i, c) for i, c in enumerate(chunks)]
+            map_results = await asyncio.gather(*map_tasks)
+            
+            q.put({"type": "log", "msg": "🔄 Bắt đầu Reduce: Gộp các kịch bản thành một..."})
+            combined = "\n\n--- ĐOẠN TIẾP THEO ---\n\n".join(map_results)
+            prompt_red = prompt_reduce.replace("{NỘI_DUNG_CÁC_ĐOẠN_ĐÃ_GHÉP}", combined)\
+                                      .replace("{SỐ_PHÚT}", str(target_words // 270))\
+                                      .replace("{SỐ_PHÚT x 270}", str(target_words))
+            
+            response = await client.chat.completions.create(
+                model=openai_model,
+                messages=[
+                    {"role": "system", "content": "Bạn là biên tập viên kịch bản."},
+                    {"role": "user", "content": prompt_red}
+                ],
+                stream=True
+            )
+            
+            final_result = ""
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    final_result += content
+                    q.put({"type": "token", "count": len(content)})
+                    
+            q.put({"type": "done", "result": final_result})
+            
+        except Exception as e:
+            q.put({"type": "error", "msg": str(e)})
+            
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(async_worker())
+        
+    t = threading.Thread(target=run_loop)
+    t.start()
+    
+    final_script = ""
+    token_accum = 0
+    last_log = 0
+    while True:
+        try:
+            item = q.get(timeout=300)
+            if item["type"] == "log":
+                yield log_func(item["msg"])
+            elif item["type"] == "token":
+                token_accum += item["count"]
+                if token_accum - last_log >= 1000:
+                    yield log_func(f"⚡ Đang nhận dữ liệu: {token_accum} ký tự...")
+                    last_log = token_accum
+            elif item["type"] == "done":
+                final_script = item["result"]
+                yield log_func(f"✅ Hoàn thành tổng cộng {token_accum} ký tự kịch bản.")
+                break
+            elif item["type"] == "error":
+                yield log_func(f"🛑 Lỗi API (Map/Reduce): {item['msg']}")
+                return None
+        except queue.Empty:
+            yield log_func("🛑 Timeout chờ API OpenAI sau 300s không có phản hồi.")
+            return None
+    return final_script
+
+def run_timeline_map_reduce_pipeline_sync(
+    openai_key, openai_base_url, openai_model,
+    voice_entries, condensed_orig_srt, prompt_json_template,
+    temp_dir, log_func, batch_size=35, max_concurrency=3
+):
+    """
+    Xử lý Step 3 theo cơ chế Map-Reduce / Batching:
+    - Chia voice_entries (e.g. 906 blocks) thành các batch (mỗi batch ~35 blocks).
+    - Gọi API song song với giới hạn concurrency để lấy JSON timeline cho từng batch.
+    - Gộp tất cả JSON timeline và sắp xếp theo voice_ref.
+    - Fallback thông minh nếu có block bị thiếu hoặc model trả về không chuẩn.
+    """
+    q = queue.Queue()
+    total_voice_blocks = len(voice_entries)
+    if total_voice_blocks == 0:
+        return []
+
+    # Tạo các batch voice entries
+    batches = []
+    for i in range(0, total_voice_blocks, batch_size):
+        chunk = voice_entries[i:i + batch_size]
+        start_ref = i + 1
+        end_ref = i + len(chunk)
+        
+        # Format chunk thành chuỗi SRT
+        chunk_lines = []
+        for idx, (s, e, txt) in enumerate(chunk):
+            ref = start_ref + idx
+            chunk_lines.append(f"{ref}\n{format_srt_time(s)} --> {format_srt_time(e)}\n{txt}\n")
+        voice_chunk_text = "\n".join(chunk_lines)
+        
+        batches.append({
+            "batch_idx": len(batches),
+            "start_ref": start_ref,
+            "end_ref": end_ref,
+            "voice_chunk_text": voice_chunk_text,
+            "chunk_entries": chunk
+        })
+
+    total_batches = len(batches)
+
+    async def async_worker():
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=openai_key, base_url=openai_base_url)
+            sem = asyncio.Semaphore(max_concurrency)
+            
+            q.put({"type": "log", "msg": f"🎬 Bắt đầu phân tích timeline theo {total_batches} mẻ (mỗi mẻ ~{batch_size} câu)..."})
+            
+            async def process_batch(batch):
+                b_idx = batch["batch_idx"]
+                s_ref = batch["start_ref"]
+                e_ref = batch["end_ref"]
+                v_text = batch["voice_chunk_text"]
+                
+                # Check cache for this batch
+                cache_key = hashlib.md5((f"step3_{openai_model}_{s_ref}_{e_ref}_" + v_text[:100]).encode('utf-8')).hexdigest()
+                cache_file = os.path.join(temp_dir, f"timeline_batch_{b_idx}_{cache_key}.json")
+                
+                if os.path.exists(cache_file):
+                    try:
+                        with open(cache_file, 'r', encoding='utf-8') as f:
+                            cached_data = json.load(f)
+                            if isinstance(cached_data, list) and len(cached_data) > 0:
+                                q.put({"type": "log", "msg": f"⚡ Mẻ {b_idx+1}/{total_batches} (câu {s_ref}→{e_ref}): Đã tải từ Cache ({len(cached_data)} clips)."})
+                                return cached_data
+                    except Exception:
+                        pass
+                        
+                prompt_user = prompt_json_template.replace("{DÁN_SRT_PHIM_GỐC_VÀO_ĐÂY}", condensed_orig_srt).replace("{DÁN_SRT_VOICE_REVIEW_VÀO_ĐÂY}", v_text)
+                instruction_addon = f"\n\nLƯU Ý QUAN TRỌNG: Chỉ xử lý và trả về mảng JSON cho các voice_ref từ {s_ref} đến {e_ref} xuất hiện trong SRT_VOICE trên."
+                prompt_user += instruction_addon
+                
+                async with sem:
+                    for attempt in range(1, 4):
+                        try:
+                            response = await client.chat.completions.create(
+                                model=openai_model,
+                                messages=[
+                                    {"role": "system", "content": "Bạn là kỹ thuật viên dựng phim. Chỉ trả về duy nhất mảng JSON danh sách các clip cắt [{\"voice_ref\": int, \"start\": float, \"end\": float}], không giải thích gì thêm."},
+                                    {"role": "user", "content": prompt_user}
+                                ]
+                            )
+                            raw_content = response.choices[0].message.content or ""
+                            
+                            # Parse JSON
+                            clean_json = raw_content.strip()
+                            if "```json" in clean_json:
+                                clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+                            elif "```" in clean_json:
+                                clean_json = clean_json.split("```")[1].split("```")[0].strip()
+                                
+                            try:
+                                parsed = json.loads(clean_json)
+                            except Exception:
+                                clean_json = re.sub(r',\s*([\]}])', r'\1', clean_json)
+                                parsed = json.loads(clean_json)
+                                
+                            if isinstance(parsed, list) and len(parsed) > 0:
+                                # Chuẩn hóa format từng item
+                                normalized_batch = []
+                                for idx_item, item in enumerate(parsed):
+                                    if not isinstance(item, dict):
+                                        continue
+                                    def_ref = s_ref + idx_item
+                                    v_ref = item.get("voice_ref") or item.get("ref") or def_ref
+                                    try:
+                                        v_ref = int(v_ref)
+                                    except Exception:
+                                        v_ref = def_ref
+                                    s_val = float(item.get("start") or item.get("start_time") or item.get("time_start") or 0.0)
+                                    e_val = float(item.get("end") or item.get("end_time") or item.get("time_end") or (s_val + 2.5))
+                                    if e_val <= s_val:
+                                        e_val = s_val + 2.5
+                                    normalized_batch.append({
+                                        "voice_ref": v_ref,
+                                        "start": round(s_val, 3),
+                                        "end": round(e_val, 3)
+                                    })
+                                
+                                if normalized_batch:
+                                    with open(cache_file, 'w', encoding='utf-8') as f:
+                                        json.dump(normalized_batch, f, indent=2)
+                                    q.put({"type": "log", "msg": f"✅ Mẻ {b_idx+1}/{total_batches} (câu {s_ref}→{e_ref}): Hoàn thành {len(normalized_batch)} phân đoạn."})
+                                    return normalized_batch
+                        except Exception as e:
+                            if attempt == 3:
+                                q.put({"type": "log", "msg": f"⚠️ Mẻ {b_idx+1}/{total_batches} gặp lỗi ({str(e)[:80]}), áp dụng phân bổ dự phòng."})
+                            await asyncio.sleep(2 * attempt)
+                            
+                # Fallback nếu batch này không gọi được hoặc API trả về rỗng
+                fallback_items = []
+                for entry_i, (s_sec, e_sec, _) in enumerate(batch["chunk_entries"]):
+                    ref = s_ref + entry_i
+                    dur = max(0.5, e_sec - s_sec)
+                    fallback_items.append({
+                        "voice_ref": ref,
+                        "start": round(s_sec, 3),
+                        "end": round(s_sec + dur, 3)
+                    })
+                return fallback_items
+
+            tasks = [process_batch(b) for b in batches]
+            results = await asyncio.gather(*tasks)
+            
+            # Gộp tất cả results
+            all_clips = []
+            for r in results:
+                if isinstance(r, list):
+                    all_clips.extend(r)
+                    
+            # Sắp xếp theo voice_ref
+            all_clips.sort(key=lambda x: int(x.get("voice_ref", 0)))
+            q.put({"type": "done", "result": all_clips})
+        except Exception as e:
+            q.put({"type": "error", "msg": str(e)})
+
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(async_worker())
+
+    t = threading.Thread(target=run_loop)
+    t.start()
+
+    final_timeline = []
+    while True:
+        try:
+            item = q.get(timeout=300)
+            if item["type"] == "log":
+                yield log_func(item["msg"])
+            elif item["type"] == "done":
+                final_timeline = item["result"]
+                yield log_func(f"🎉 Hoàn thành phân tích toàn bộ timeline ({len(final_timeline)} phân đoạn).")
+                break
+            elif item["type"] == "error":
+                yield log_func(f"🛑 Lỗi phân tích timeline: {item['msg']}")
+                return []
+        except queue.Empty:
+            yield log_func("🛑 Timeout chờ API phân tích timeline sau 300s.")
+            return []
+
+    return final_timeline
 
 def run_auto_edit_workflow(payload, check_stop_func):
     video_path = payload.get('video_path')
@@ -617,38 +1102,33 @@ def run_auto_edit_workflow(payload, check_stop_func):
             yield log("[PROGRESS] 20")
         else:
             import prompt_vault
-            prompt_script_template = prompt_vault.get_prompt('prompt_script')
-            if not prompt_script_template:
-                yield log("🛑 Không tìm thấy nội dung kịch bản mẫu prompt_script!")
+            prompt_map = prompt_vault.get_prompt('prompt_map_chunk')
+            prompt_reduce = prompt_vault.get_prompt('prompt_reduce_script')
+            if not prompt_map or not prompt_reduce:
+                yield log("🛑 Không tìm thấy nội dung kịch bản mẫu prompt_map_chunk hoặc prompt_reduce_script!")
                 return
                 
             target_minutes = payload.get('target_minutes', 5)
             target_words = int(target_minutes * 270)
-            prompt_script = prompt_script_template.replace("{DÁN_NỘI_DUNG_SRT_VÀO_ĐÂY}", srt_content)\
-                                                  .replace("{SỐ_PHÚT}", str(target_minutes))\
-                                                  .replace("{SỐ_PHÚT x 270}", f"{target_words:,}".replace(",", "."))\
-                                                  .replace("{SỐ_PHÚT x 240}", f"{target_words:,}".replace(",", "."))
-            payload_gpt_1 = {
-                "model": openai_model,
-                "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia review phim."},
-                    {"role": "user", "content": prompt_script}
-                ]
-            }
+            condensed_srt = condense_srt_for_llm(srt_content, max_chars=40000)
             
-            yield log("🤖 Đang gửi phụ đề tới ChatGPT để viết kịch bản review...")
-            res1 = requests.post(url, headers=headers, json=payload_gpt_1, timeout=120)
-            if res1.status_code != 200:
-                yield log(f"🛑 Lỗi API GPT Bước 1: {res1.text}")
+            yield log("Đang phân chia file phụ đề thành các chunk...")
+            srt_chunks = split_srt_by_tokens(condensed_srt, max_tokens=6000, model_name=openai_model)
+            if not srt_chunks:
+                yield log("🛑 File phụ đề rỗng sau khi xử lý!")
                 return
                 
-            res1_json = res1.json()
-            review_script = res1_json['choices'][0]['message']['content']
-            u1 = res1_json.get('usage', {})
-            token_str1 = f" (🪙 Tiêu thụ: {u1.get('total_tokens', 0):,} tokens - Prompt: {u1.get('prompt_tokens', 0):,}, Output: {u1.get('completion_tokens', 0):,})" if u1 else ""
+            review_script = yield from run_map_reduce_pipeline_sync(
+                openai_key, openai_base_url, openai_model, srt_chunks, 
+                target_words, prompt_map, prompt_reduce, temp_dir, log
+            )
+            
+            if not review_script:
+                return
+                
             with open(script_txt_path, 'w', encoding='utf-8') as f:
                 f.write(review_script)
-            yield log(f"✅ Đã viết kịch bản xong, lưu tại {script_txt_path}{token_str1}")
+            yield log(f"✅ Đã viết kịch bản xong, lưu tại {script_txt_path}")
             yield log("[PROGRESS] 20")
         
         # --- BƯỚC 2: TẠO GIỌNG ĐỌC (TỪNG CÂU - CHÍNH XÁC TIMESTAMP) ---
@@ -656,8 +1136,9 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if check_stop_func(): return
         
         voice_speed = float(payload.get('voice_speed', 1.0))
+        tts_threads = int(payload.get('tts_threads', 3))
         
-        if use_cache and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path):
+        if use_cache and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path) and os.path.getsize(voice_audio_path) > 1000:
             yield log("💚 Đã tìm thấy file giọng đọc cũ, tái sử dụng.")
             yield log("[PROGRESS] 40")
         else:
@@ -691,20 +1172,20 @@ def run_auto_edit_workflow(payload, check_stop_func):
                     yield log("🛑 Lỗi: Kịch bản rỗng sau khi tách câu.")
                     return
                 
-                # TTS từng câu, concat, tạo SRT chính xác với cập nhật tiến trình %
-                yield log(f"Đang tạo giọng đọc cho {len(sentences)} câu (Luồng Local)...")
+                # TTS từng câu đa luồng, concat, tạo SRT chính xác với cập nhật tiến trình %
+                yield log(f"Đang tạo giọng đọc cho {len(sentences)} câu (Đa luồng: {tts_threads} workers)...")
                 final_audio = None
                 final_srt = None
                 srt_entries = []
                 error = None
                 
                 for msg_type, data in generate_tts_per_sentence_stream(
-                    sentences, voice_id, voice_speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct=20, end_pct=40
+                    sentences, voice_id, voice_speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct=20, end_pct=40, threads=tts_threads
                 ):
                     if msg_type == 'progress':
-                        curr_i, total_i, pct, snippet = data
-                        yield log(f"🎙️ Đang tạo giọng đọc câu {curr_i}/{total_i} ({pct}%): \"{snippet}\"")
-                        yield log(f"[PROGRESS] {pct}")
+                        curr_i, total_i, step_pct, overall_pct, snippet = data
+                        yield log(f"🎙️ [{curr_i}/{total_i} - {step_pct}%] Đang tạo giọng đọc: \"{snippet}\"")
+                        yield log(f"[PROGRESS] {overall_pct}")
                     elif msg_type == 'error':
                         error = data
                     elif msg_type == 'done':
@@ -727,7 +1208,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
         yield log("Đang chuẩn hóa SRT giọng đọc (tối đa 2 dòng/block)...")
         if check_stop_func(): return
         
-        if use_cache and os.path.exists(voice_srt_cleaned_path):
+        if use_cache and os.path.exists(voice_srt_cleaned_path) and os.path.getsize(voice_srt_cleaned_path) > 10:
             yield log("💚 Đã tìm thấy file SRT giọng đọc đã chuẩn hóa, tái sử dụng.")
         else:
             # Đọc SRT vừa tạo và enforce max 2 dòng
@@ -749,12 +1230,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if check_stop_func(): return
         
         timeline_data = []
-        if use_cache and os.path.exists(json_path):
+        if use_cache and os.path.exists(json_path) and os.path.getsize(json_path) > 10:
             with open(json_path, 'r', encoding='utf-8') as f:
                 try:
-                    timeline_data = json.load(f)
-                    yield log("💚 Đã tìm thấy file timeline cũ, tái sử dụng.")
-                    yield log("[PROGRESS] 50")
+                    loaded = json.load(f)
+                    if isinstance(loaded, list) and len(loaded) > 0:
+                        timeline_data = loaded
+                        yield log(f"💚 Đã tìm thấy file timeline cũ ({len(timeline_data)} phân đoạn), tái sử dụng.")
+                        yield log("[PROGRESS] 50")
                 except Exception:
                     timeline_data = []
         
@@ -765,55 +1248,38 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 yield log("🛑 Không tìm thấy nội dung mẫu prompt_json!")
                 return
             
-            with open(voice_srt_cleaned_path, 'r', encoding='utf-8') as f:
-                voice_srt_content = f.read()
+            # Đọc danh sách block giọng đọc từ file SRT đã chuẩn hóa
+            voice_entries = parse_srt_entries(voice_srt_cleaned_path)
+            if not voice_entries:
+                voice_entries = parse_srt_entries(voice_srt_path)
                 
-            prompt_json_final = prompt_json_template.replace("{DÁN_SRT_PHIM_GỐC_VÀO_ĐÂY}", srt_content).replace("{DÁN_SRT_VOICE_REVIEW_VÀO_ĐÂY}", voice_srt_content)
-            
-            payload_gpt_2 = {
-                "model": openai_model,
-                "messages": [
-                    {"role": "system", "content": "Bạn là kỹ thuật viên dựng phim. Chỉ trả về mảng JSON, không giải thích gì thêm."},
-                    {"role": "user", "content": prompt_json_final}
-                ]
-            }
-            
-            yield log("🤖 Đang gửi yêu cầu đạo diễn & khớp cảnh tới ChatGPT...")
-            res3 = requests.post(url, headers=headers, json=payload_gpt_2, timeout=120)
-            if res3.status_code != 200:
-                yield log(f"🛑 Lỗi API GPT Bước 3: {res3.text}")
+            if not voice_entries:
+                yield log("🛑 Không tìm thấy block giọng đọc nào để phân tích timeline!")
                 return
                 
-            res3_json = res3.json()
-            json_resp = res3_json['choices'][0]['message']['content']
-            u3 = res3_json.get('usage', {})
-            token_str3 = f" (🪙 Tiêu thụ: {u3.get('total_tokens', 0):,} tokens)" if u3 else ""
+            condensed_orig_srt = condense_srt_for_llm(srt_content, max_chars=40000)
             
-            # Auto-repair JSON
-            if "```json" in json_resp:
-                json_resp = json_resp.split("```json")[1].split("```")[0].strip()
-            elif "```" in json_resp:
-                json_resp = json_resp.split("```")[1].split("```")[0].strip()
-                
-            try:
-                timeline_data = json.loads(json_resp)
-            except json.JSONDecodeError as e:
-                yield log(f"Cảnh báo: Lỗi định dạng JSON ({e}). Đang thử auto-repair...")
-                json_resp = re.sub(r',\s*([\]}])', r'\1', json_resp)
-                try:
-                    timeline_data = json.loads(json_resp)
-                except Exception as e2:
-                    yield log(f"🛑 Không thể auto-repair JSON. Lỗi: {e2}\nNội dung trả về: {json_resp}")
-                    return
-                    
-            if not isinstance(timeline_data, list):
-                yield log(f"🛑 JSON trả về không phải dạng mảng (Array).")
+            timeline_data = yield from run_timeline_map_reduce_pipeline_sync(
+                openai_key=openai_key,
+                openai_base_url=openai_base_url,
+                openai_model=openai_model,
+                voice_entries=voice_entries,
+                condensed_orig_srt=condensed_orig_srt,
+                prompt_json_template=prompt_json_template,
+                temp_dir=temp_dir,
+                log_func=log,
+                batch_size=35,
+                max_concurrency=4
+            )
+            
+            if not timeline_data or len(timeline_data) == 0:
+                yield log("🛑 Lỗi: Không tạo được timeline phân đoạn!")
                 return
                 
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(timeline_data, f, indent=4)
                 
-            yield log(f"✅ Đã phân tích xong {len(timeline_data)} phân đoạn sơ bộ.{token_str3}")
+            yield log(f"✅ Đã phân tích xong {len(timeline_data)} phân đoạn.")
             yield log("[PROGRESS] 50")
         
         # --- BƯỚC 3.5: SCENE DETECTION & TIMELINE SANITIZER (CHỐNG NHÁY HÌNH) ---
@@ -874,6 +1340,13 @@ def run_auto_edit_workflow(payload, check_stop_func):
         blur_padding = float(payload.get('blur_padding', 220)) / 1000.0
         blur_ai_boxes = payload.get('ai_boxes') or []
 
+        # Video Zoom parameter
+        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False))
+        video_zoom = float(payload.get('video_zoom', 100.0))
+        zoom_factor = max(1.0, min(2.0, video_zoom / 100.0)) if enable_zoom else 1.0
+        if zoom_factor > 1.0:
+            yield log(f"🔍 Kích hoạt phóng to video (Zoom: {zoom_factor*100:.0f}%)...")
+
         orig_sub_entries = parse_srt_entries(srt_path) if blur_orig_subs else []
         if blur_orig_subs and orig_sub_entries and blur_ai_boxes and isinstance(blur_ai_boxes, list):
             enriched = []
@@ -906,9 +1379,10 @@ def run_auto_edit_workflow(payload, check_stop_func):
             if v_dur <= 0:
                 continue
 
-            progress_pct = int(60 + (30 * (i + 1) / total_clips))
-            yield log(f"🎬 [{i+1}/{total_clips}] ({progress_pct}%) Đang cắt clip câm (Video: {v_dur:.1f}s)...")
-            yield log(f"[PROGRESS] {progress_pct}")
+            step_pct = int((i + 1) / total_clips * 100)
+            overall_pct = int(60 + (30 * (i + 1) / total_clips))
+            yield log(f"🎬 [{i+1}/{total_clips} - {step_pct}%] Đang cắt clip câm (Video: {v_dur:.1f}s)...")
+            yield log(f"[PROGRESS] {overall_pct}")
 
             # Phát hiện phụ đề gốc trong khoảng thời gian clip này
             active_orig_intervals = []
@@ -932,6 +1406,11 @@ def run_auto_edit_workflow(payload, check_stop_func):
             filter_chain = []
             curr_v = "0:v"
 
+            # Phóng to Video (Zoom & Center Crop)
+            if zoom_factor > 1.0:
+                filter_chain.append(f"[{curr_v}]crop=w='iw/{zoom_factor:.4f}':h='ih/{zoom_factor:.4f}':x='(iw-iw/{zoom_factor:.4f})/2':y='(ih-ih/{zoom_factor:.4f})/2',scale=iw:ih:flags=lanczos[v_zoomed]")
+                curr_v = "v_zoomed"
+
             # Làm mờ động phụ đề gốc (tự co giãn độ dài ôm sát chữ)
             if blur_orig_subs and active_orig_intervals:
                 dyn_filters, curr_v = build_dynamic_blur_filter_chain(
@@ -943,6 +1422,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                     lead_sec=blur_lead_offset,
                     pad_sec=blur_padding
                 )
+                filter_chain.extend(dyn_filters)
                 filter_chain.extend(dyn_filters)
 
             if not filter_chain:
@@ -1165,8 +1645,9 @@ def run_narration_workflow(payload, check_stop_func):
                 yield log("🛑 Không tìm thấy nội dung mẫu prompt_narration!")
                 return
 
+            condensed_srt = condense_srt_for_llm(srt_content, max_chars=45000)
             target_words = int(video_minutes * 200)  # ~200 từ/phút (chậm hơn recap để vừa xem)
-            prompt_final = prompt_template.replace("{DÁN_NỘI_DUNG_SRT_VÀO_ĐÂY}", srt_content) \
+            prompt_final = prompt_template.replace("{DÁN_NỘI_DUNG_SRT_VÀO_ĐÂY}", condensed_srt) \
                                            .replace("{SỐ_PHÚT}", f"{video_minutes:.1f}") \
                                            .replace("{SỐ_GIÂY}", f"{video_duration:.0f}") \
                                            .replace("{SỐ_TỪ}", str(target_words))
@@ -1182,15 +1663,18 @@ def run_narration_workflow(payload, check_stop_func):
                 ]
             }
 
-            yield log("Đang gọi AI viết kịch bản kể lại phim...")
-            res = requests.post(url, headers=headers, json=payload_gpt, timeout=180)
-            if res.status_code != 200:
-                yield log(f"🛑 Lỗi API GPT Bước 1: {res.text}")
+            yield log("Đang gọi AI viết kịch bản kể lại phim (Đã tối ưu Token)...")
+            gpt_res, err = call_openai_chat_resilient(
+                url=url, headers=headers, payload=payload_gpt,
+                max_retries=3, initial_timeout=240, check_stop_func=check_stop_func,
+                progress_logger=lambda m: log(m)
+            )
+            if err or not gpt_res:
+                yield log(f"🛑 Lỗi gọi ChatGPT Bước 1: {err or 'Không có phản hồi'}")
                 return
 
-            res_json = res.json()
-            narration_script = res_json['choices'][0]['message']['content']
-            u = res_json.get('usage', {})
+            narration_script = gpt_res['content']
+            u = gpt_res.get('usage', {})
             token_str = f" (🪙 {u.get('total_tokens', 0):,} tokens)" if u else ""
 
             with open(script_txt_path, 'w', encoding='utf-8') as f:
@@ -1235,19 +1719,20 @@ def run_narration_workflow(payload, check_stop_func):
                     yield log("🛑 Kịch bản rỗng sau khi tách câu.")
                     return
 
-                yield log(f"Đang tạo giọng đọc cho {len(sentences)} câu (Luồng Local)...")
+                tts_threads = int(payload.get('tts_threads', 3))
+                yield log(f"Đang tạo giọng đọc cho {len(sentences)} câu (Đa luồng: {tts_threads} workers)...")
                 final_audio = None
                 final_srt = None
                 srt_entries = []
                 error = None
 
                 for msg_type, data in generate_tts_per_sentence_stream(
-                    sentences, voice_id, voice_speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct=20, end_pct=50
+                    sentences, voice_id, voice_speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct=20, end_pct=50, threads=tts_threads
                 ):
                     if msg_type == 'progress':
-                        curr_i, total_i, pct, snippet = data
-                        yield log(f"🎙️ Đang tạo giọng đọc câu {curr_i}/{total_i} ({pct}%): \"{snippet}\"")
-                        yield log(f"[PROGRESS] {pct}")
+                        curr_i, total_i, step_pct, overall_pct, snippet = data
+                        yield log(f"🎙️ [{curr_i}/{total_i} - {step_pct}%] Đang tạo giọng đọc: \"{snippet}\"")
+                        yield log(f"[PROGRESS] {overall_pct}")
                     elif msg_type == 'error':
                         error = data
                     elif msg_type == 'done':
@@ -1270,7 +1755,7 @@ def run_narration_workflow(payload, check_stop_func):
         yield log("[PROGRESS] 50")
 
         # --- BƯỚC 2.5: CHUẨN HÓA SRT (TỐI ĐA 2 DÒNG) ---
-        if use_cache and os.path.exists(voice_srt_cleaned_path):
+        if use_cache and os.path.exists(voice_srt_cleaned_path) and os.path.getsize(voice_srt_cleaned_path) > 10:
             yield log("💚 Tái sử dụng SRT chuẩn hóa.")
         else:
             raw_entries = parse_srt_entries(voice_srt_path)
@@ -1294,6 +1779,17 @@ def run_narration_workflow(payload, check_stop_func):
         # Xây dựng filter
         filter_parts = []
         curr_v = "0:v"
+
+        # Video Zoom parameter
+        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False))
+        video_zoom = float(payload.get('video_zoom', 100.0))
+        zoom_factor = max(1.0, min(2.0, video_zoom / 100.0)) if enable_zoom else 1.0
+
+        # Phóng to video nếu bật
+        if zoom_factor > 1.0:
+            yield log(f"🔍 Kích hoạt phóng to video (Zoom: {zoom_factor*100:.0f}%)...")
+            filter_parts.append(f"[{curr_v}]crop=w='iw/{zoom_factor:.4f}':h='ih/{zoom_factor:.4f}':x='(iw-iw/{zoom_factor:.4f})/2':y='(ih-ih/{zoom_factor:.4f})/2',scale=iw:ih:flags=lanczos[v_zoomed]")
+            curr_v = "v_zoomed"
 
         # Làm mờ phụ đề gốc nếu bật
         if blur_orig_subs:

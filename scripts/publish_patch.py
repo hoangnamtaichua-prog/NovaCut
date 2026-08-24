@@ -46,6 +46,7 @@ PATCH_INCLUDE_FILES = [
     "license_manager.py",
     "updater.py",
     "prompt_vault.py",
+    ".prompt_vault.dat",
     "asr_manager.py",
     "asr_inference.py",
     "capcut_sync.py",

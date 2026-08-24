@@ -94,6 +94,8 @@ def load_all_prompts():
         ('prompt_json', ['prompts/prompt_json.txt', 'prompt_json.txt']),
         ('prompt_narration', ['prompts/prompt_narration.txt', 'prompt_narration.txt']),
         ('prompt_script', ['prompts/prompt_script.txt', 'prompt_script.txt']),
+        ('prompt_map_chunk', ['prompts/prompt_map_chunk.txt', 'prompt_map_chunk.txt']),
+        ('prompt_reduce_script', ['prompts/prompt_reduce_script.txt', 'prompt_reduce_script.txt']),
     ]
 
     for key, paths in known_prompt_files:

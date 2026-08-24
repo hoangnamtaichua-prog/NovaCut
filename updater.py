@@ -373,8 +373,22 @@ def perform_auto_update_async(download_url_or_file_id, target_version):
             _update_progress_state["status"] = "extracting"
             _update_progress_state["percent"] = 98
             _update_progress_state["message"] = "Đang cài đặt và cập nhật các tệp mới..."
-            
             apply_patch_zip(temp_zip, target_version=target_version)
+
+            # 2.5 Cài đặt các thư viện mới (nếu có thay đổi requirements.txt)
+            _update_progress_state["message"] = "Đang kiểm tra và cài đặt thư viện tự động (nếu có)..."
+            req_path = os.path.join(ROOT_DIR, 'requirements.txt')
+            if os.path.exists(req_path):
+                try:
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "-r", req_path],
+                        cwd=ROOT_DIR,
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except Exception as e:
+                    print(f"Lỗi cài đặt pip ẩn: {e}")
 
             # 3. Hoàn thành
             _update_progress_state["status"] = "completed"

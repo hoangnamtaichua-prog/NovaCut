@@ -161,14 +161,33 @@ def _get_vieneu_onnx_dir():
         os.path.join(ROOT_DIR, "models", "vieneu"),
         os.path.join(os.path.dirname(sys.executable), "models", "vieneu"),
     ]
+    chosen_dir = None
     for c in candidates:
         if c and os.path.exists(c):
             if os.path.exists(os.path.join(c, "vieneu_v3_heads.npz")):
-                return c
+                chosen_dir = c
+                break
             sub = os.path.join(c, "onnx_int8")
             if os.path.exists(os.path.join(sub, "vieneu_v3_heads.npz")):
-                return sub
-    return None
+                chosen_dir = sub
+                break
+
+    if chosen_dir:
+        # Tự động đồng bộ speaker_encoder.onnx & denoiser.onnx vào thư mục onnx_int8 nếu thiếu
+        parent_dir = os.path.dirname(chosen_dir)
+        for fn in ["speaker_encoder.onnx", "denoiser.onnx"]:
+            target_file = os.path.join(chosen_dir, fn)
+            parent_file = os.path.join(parent_dir, fn)
+            root_file = os.path.join(ROOT_DIR, "models", "vieneu", fn)
+            if not os.path.exists(target_file):
+                src = parent_file if os.path.exists(parent_file) else (root_file if os.path.exists(root_file) else None)
+                if src:
+                    try:
+                        shutil.copy2(src, target_file)
+                        print(f"[Local Voice] Auto-synced {fn} into {chosen_dir}")
+                    except Exception as err:
+                        print(f"[Local Voice] Warning copying {fn}: {err}")
+    return chosen_dir
 
 _ENGINE_INSTANCE = None
 _ENGINE_LOCK = threading.Lock()
