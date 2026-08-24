@@ -1,7 +1,7 @@
 {
-  "version": "1.0.9",
+  "version": "1.0.10",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "Bản cập nhật v1.0.9: Tích hợp Map-Reduce Phân tích cảnh theo mẻ (35 câu/lần, xử lý bất đồng bộ & Batch Caching), mở khóa YouTube 4K/2K, Turbo Multi-connection Douyin 6 luồng, Role Admin Quản Trị đặc quyền, Multi-Video Deep Scanner Douyin và fix link rút gọn 1p33s.",
+  "changelog": "Hotfix: Khắc phục lỗi tiến trình Python treo ngầm trong RAM, ép hệ thống tự động Hot Reload mã nguồn mới nhất sau khi cập nhật mà không cần khởi động lại thủ công.",
   "is_mandatory": false,
-  "updated_at": "2026-08-24 14:24:03"
+  "updated_at": "2026-08-24 14:43:37"
 }

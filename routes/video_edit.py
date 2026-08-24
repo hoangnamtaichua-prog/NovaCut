@@ -806,6 +806,8 @@ def review_start():
         def api_generate():
             try:
                 import auto_edit_pipeline
+                import importlib
+                importlib.reload(auto_edit_pipeline)
                 yield from auto_edit_pipeline.run_auto_edit_workflow(data, check_stop_func)
             except Exception as e:
                 import traceback
@@ -822,6 +824,9 @@ def review_start():
         
     def generate():
         try:
+            import review_phim
+            import importlib
+            importlib.reload(review_phim)
             yield from review_phim.build_video_workflow(
                 video_path=video_path,
                 script_json=script_json,
