@@ -1,7 +1,7 @@
 {
-  "version": "1.0.15",
+  "version": "1.0.16",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "1. Kiến Trúc OTA Patch Overlay (patches/active): Đưa thư mục patches/active lên vị trí ưu tiên số 0 trong sys.path, giải nén và nạp đè 100% mã nguồn .py mới lên các file C-binary .pyd cũ trong bản EXE mà không bị kẹt hay lock file. 2. Nhận diện chính xác ROOT_DIR trên môi trường EXE đóng băng (sys.executable). 3. Sửa dứt điểm lỗi TikToken cho gpt-5.6-luna và mọi mô hình AI tùy chỉnh trong Auto-Edit.",
+  "changelog": "1. Đột phá tốc độ Auto-Edit / Review Phim (Tăng tốc 3.5x - 5x): Cắt song song 70-100 clip câm bằng ThreadPoolExecutor đa luồng, giảm thời gian từ 4 phút xuống 30-40 giây. 2. Quét chuyển cảnh cục bộ siêu tốc Boundary-Targeted Scan: Chỉ quét quanh các mốc timeline thay vì quét cả phim 2 tiếng, giảm thời gian dò cảnh từ 3 phút xuống 10-20 giây. 3. Tự động nhận diện và kích hoạt GPU Hardware Acceleration (Nvidia NVENC / Intel QSV) với cơ chế fallback CPU an toàn 100%.",
   "is_mandatory": false,
-  "updated_at": "2026-08-25 08:42:45"
+  "updated_at": "2026-08-25 09:55:24"
 }

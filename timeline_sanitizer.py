@@ -9,23 +9,25 @@ def extract_scene_cuts_with_progress(
     video_path: str,
     threshold: float = 27.0,
     cache_dir: str = 'output/auto_edit_temp',
-    check_stop_func = None
+    check_stop_func = None,
+    target_timeline: List[Dict[str, Any]] = None
 ):
     """
     Quét video gốc để phát hiện các điểm chuyển cảnh (scene cuts) tự nhiên bằng PySceneDetect.
-    Tối ưu hóa cực nhanh bằng downscale và frame_skip.
+    Tối ưu hóa siêu tốc bằng Boundary-Targeted Scan (chỉ quét quanh các mốc timeline) + downscale + frame_skip.
     Yields (log_message, scene_cuts_result).
-    Khi đang quét, scene_cuts_result là None và log_message là chuỗi tiến độ.
-    Khi kết thúc, scene_cuts_result là List[float].
     """
     if not os.path.exists(video_path):
         yield ("Không tìm thấy video đầu vào.", [])
         return
 
+    import hashlib
     os.makedirs(cache_dir, exist_ok=True)
     video_base = os.path.splitext(os.path.basename(video_path))[0]
     file_size = os.path.getsize(video_path)
-    cache_filename = f"scene_cuts_{video_base}_{file_size}.json"
+    mtime = int(os.path.getmtime(video_path))
+    cache_hash = hashlib.md5(f"{video_path}_{file_size}_{mtime}_{threshold}".encode()).hexdigest()[:10]
+    cache_filename = f"scene_cuts_{video_base}_{cache_hash}.json"
     cache_path = os.path.join(cache_dir, cache_filename)
 
     # 1. Kiểm tra cache
@@ -34,12 +36,12 @@ def extract_scene_cuts_with_progress(
             with open(cache_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    yield (f"Đã tải {len(data)} điểm chuyển cảnh từ bộ nhớ tạm (Cache).", [float(x) for x in data])
+                    yield (f"Đã tải {len(data)} điểm chuyển cảnh từ bộ nhớ đệm (Cache tức thì).", [float(x) for x in data])
                     return
         except Exception:
             pass
 
-    # 2. Quét tối ưu bằng SceneManager + Downscaling + Frame Skip
+    # 2. Quét tối ưu bằng PySceneDetect + Boundary-Targeted Scan
     try:
         from scenedetect import SceneManager, ContentDetector, open_video
         
@@ -52,51 +54,99 @@ def extract_scene_cuts_with_progress(
         downscale_factor = max(1, int(max_dim / 360))
         frame_skip = 2  # Quét 1 frame mỗi 3 frame để giảm 66% thời gian đọc đĩa
 
-        sm = SceneManager()
-        sm.auto_downscale = False
-        sm.downscale = downscale_factor
-        sm.add_detector(ContentDetector(threshold=threshold))
+        # Xây dựng danh sách các cửa sổ biên cần quét (Boundary Windows) nếu có target_timeline
+        merged_windows = []
+        if target_timeline and isinstance(target_timeline, list) and len(target_timeline) > 0:
+            raw_windows = []
+            for clip in target_timeline:
+                v_s = float(clip.get('start', 0))
+                v_d = float(clip.get('duration', 0))
+                raw_windows.append((max(0.0, v_s - 1.5), min(duration_sec, v_s + 1.5)))
+                raw_windows.append((max(0.0, v_s + v_d - 1.5), min(duration_sec, v_s + v_d + 1.5)))
+            
+            raw_windows.sort(key=lambda x: x[0])
+            for w in raw_windows:
+                if not merged_windows or w[0] > merged_windows[-1][1]:
+                    merged_windows.append([w[0], w[1]])
+                else:
+                    merged_windows[-1][1] = max(merged_windows[-1][1], w[1])
 
-        error_holder = []
-        def detect_worker():
-            try:
-                sm.detect_scenes(video, frame_skip=frame_skip)
-            except Exception as ex:
-                error_holder.append(ex)
+        all_cuts = []
 
-        worker = threading.Thread(target=detect_worker, daemon=True)
-        worker.start()
+        if merged_windows:
+            # Quét siêu tốc theo từng cửa sổ biên (Boundary-Targeted Scan)
+            total_win = len(merged_windows)
+            for idx, (win_s, win_e) in enumerate(merged_windows):
+                if check_stop_func and check_stop_func():
+                    yield ("Đã dừng quét chuyển cảnh theo yêu cầu.", [])
+                    return
+                
+                win_pct = int((idx + 1) / total_win * 100)
+                if idx % 5 == 0 or idx == total_win - 1:
+                    yield (f"Đang quét chuyển cảnh cục bộ: {win_pct}% (Cửa sổ {idx+1}/{total_win} - phát hiện {len(all_cuts)} điểm)...", None)
 
-        last_reported_pct = -1
-        last_report_time = 0
+                try:
+                    sm_win = SceneManager()
+                    sm_win.auto_downscale = False
+                    sm_win.downscale = downscale_factor
+                    sm_win.add_detector(ContentDetector(threshold=threshold))
+                    sm_win.detect_scenes(video, frame_skip=frame_skip, start_time=win_s, end_time=win_e)
+                    scenes = sm_win.get_scene_list()
+                    for s in scenes:
+                        cut_t = round(s[0].seconds, 3)
+                        if cut_t > win_s + 0.1:
+                            all_cuts.append(cut_t)
+                except Exception:
+                    pass
+            
+            cuts = sorted(list(set(all_cuts)))
+        else:
+            # Quét toàn bộ video nếu không có target_timeline
+            sm = SceneManager()
+            sm.auto_downscale = False
+            sm.downscale = downscale_factor
+            sm.add_detector(ContentDetector(threshold=threshold))
 
-        while worker.is_alive():
-            if check_stop_func and check_stop_func():
-                sm.stop()
-                yield ("Đã dừng quét chuyển cảnh theo yêu cầu.", [])
+            error_holder = []
+            def detect_worker():
+                try:
+                    sm.detect_scenes(video, frame_skip=frame_skip)
+                except Exception as ex:
+                    error_holder.append(ex)
+
+            worker = threading.Thread(target=detect_worker, daemon=True)
+            worker.start()
+
+            last_reported_pct = -1
+            last_report_time = 0
+
+            while worker.is_alive():
+                if check_stop_func and check_stop_func():
+                    sm.stop()
+                    yield ("Đã dừng quét chuyển cảnh theo yêu cầu.", [])
+                    return
+
+                cur_frame = getattr(video, 'frame_number', 0)
+                cur_sec = (cur_frame / total_frames) * duration_sec if total_frames > 0 else 0
+                pct = min(99, int((cur_frame / max(1, total_frames)) * 100))
+                now = time.time()
+
+                if (pct >= last_reported_pct + 5 or (now - last_report_time > 2.0 and pct > last_reported_pct)):
+                    cuts_found = len(sm.get_scene_list())
+                    yield (f"Đang quét chuyển cảnh: {pct}% ({cur_sec:.0f}s / {duration_sec:.0f}s - phát hiện {cuts_found} cảnh)...", None)
+                    last_reported_pct = pct
+                    last_report_time = now
+
+                time.sleep(0.1)
+
+            worker.join()
+
+            if error_holder:
+                yield (f"⚠️ Lỗi quét chuyển cảnh ({error_holder[0]}). Tiếp tục với timeline gốc.", [])
                 return
 
-            cur_frame = getattr(video, 'frame_number', 0)
-            cur_sec = (cur_frame / total_frames) * duration_sec if total_frames > 0 else 0
-            pct = min(99, int((cur_frame / max(1, total_frames)) * 100))
-            now = time.time()
-
-            if (pct >= last_reported_pct + 5 or (now - last_report_time > 2.0 and pct > last_reported_pct)):
-                cuts_found = len(sm.get_scene_list())
-                yield (f"Đang quét chuyển cảnh: {pct}% ({cur_sec:.0f}s / {duration_sec:.0f}s - phát hiện {cuts_found} cảnh)...", None)
-                last_reported_pct = pct
-                last_report_time = now
-
-            time.sleep(0.1)
-
-        worker.join()
-
-        if error_holder:
-            yield (f"⚠️ Lỗi quét chuyển cảnh ({error_holder[0]}). Tiếp tục với timeline gốc.", [])
-            return
-
-        scenes = sm.get_scene_list()
-        cuts = [round(s[0].seconds, 3) for i, s in enumerate(scenes) if i > 0]
+            scenes = sm.get_scene_list()
+            cuts = [round(s[0].seconds, 3) for i, s in enumerate(scenes) if i > 0]
 
         # Lưu cache
         try:

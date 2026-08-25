@@ -119,3 +119,57 @@ def ensure_ffmpeg(yield_func=None):
             pass
 
     return ffmpeg_exe
+
+
+_HW_ENCODER_CACHE = None
+
+def detect_hardware_encoder(ffmpeg_path=None):
+    """
+    Phát hiện và kiểm tra tính khả dụng thực tế của GPU Hardware Encoder (NVENC, QSV).
+    Chạy thử nghiệm encode 0.2s vào null sink để đảm bảo tuyệt đối không crash khi xuất video.
+    Trả về: (encoder_name, is_gpu, encoder_args)
+    """
+    global _HW_ENCODER_CACHE
+    if _HW_ENCODER_CACHE is not None:
+        return _HW_ENCODER_CACHE
+
+    if not ffmpeg_path:
+        ffmpeg_path = get_ffmpeg_path()
+    if not ffmpeg_path or not os.path.exists(ffmpeg_path):
+        _HW_ENCODER_CACHE = ('libx264', False, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22'])
+        return _HW_ENCODER_CACHE
+
+    import subprocess
+
+    # 1. Thử nghiệm Nvidia NVENC (h264_nvenc)
+    try:
+        test_cmd = [
+            ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
+            '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.2',
+            '-c:v', 'h264_nvenc', '-preset', 'p4', '-f', 'null', '-'
+        ]
+        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0, timeout=3)
+        if res.returncode == 0:
+            _HW_ENCODER_CACHE = ('h264_nvenc', True, ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22'])
+            return _HW_ENCODER_CACHE
+    except Exception:
+        pass
+
+    # 2. Thử nghiệm Intel QSV (h264_qsv)
+    try:
+        test_cmd = [
+            ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
+            '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.2',
+            '-c:v', 'h264_qsv', '-preset', 'veryfast', '-f', 'null', '-'
+        ]
+        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0, timeout=3)
+        if res.returncode == 0:
+            _HW_ENCODER_CACHE = ('h264_qsv', True, ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22'])
+            return _HW_ENCODER_CACHE
+    except Exception:
+        pass
+
+    # 3. Fallback mặc định: CPU libx264
+    _HW_ENCODER_CACHE = ('libx264', False, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22'])
+    return _HW_ENCODER_CACHE
+

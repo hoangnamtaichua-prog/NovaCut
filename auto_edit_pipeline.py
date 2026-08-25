@@ -1306,16 +1306,18 @@ def run_auto_edit_workflow(payload, check_stop_func):
         # --- BƯỚC 3.5: SCENE DETECTION & TIMELINE SANITIZER (CHỐNG NHÁY HÌNH) ---
         scene_cuts = []
         if enable_scene_detect:
-            yield log("Đang quét điểm chuyển cảnh phim gốc (Scene Detection)...")
+            yield log("Đang quét điểm chuyển cảnh phim gốc (Boundary-Targeted Scene Detection)...")
             if check_stop_func(): return
             
-            for msg, cuts in timeline_sanitizer.extract_scene_cuts_with_progress(video_path, threshold=27.0, cache_dir=temp_dir, check_stop_func=check_stop_func):
+            for msg, cuts in timeline_sanitizer.extract_scene_cuts_with_progress(
+                video_path, threshold=27.0, cache_dir=temp_dir, check_stop_func=check_stop_func, target_timeline=timeline_data
+            ):
                 if check_stop_func(): return
                 if msg:
                     yield log(msg)
-                    if "Đang quét chuyển cảnh: " in msg:
+                    if "Đang quét chuyển cảnh" in msg and "%" in msg:
                         try:
-                            detect_pct = int(msg.split("Đang quét chuyển cảnh: ")[1].split("%")[0].strip())
+                            detect_pct = int(msg.split("%")[0].split(":")[-1].strip())
                             overall_pct = int(50 + (8 * detect_pct / 100))
                             yield log(f"[PROGRESS] {overall_pct}")
                         except Exception:
@@ -1343,16 +1345,23 @@ def run_auto_edit_workflow(payload, check_stop_func):
         yield log(f"✅ Đã lưu timeline tối ưu tại {sanitized_json_path}")
         yield log("[PROGRESS] 60")
         
-        # --- BƯỚC 4: CẮT GHÉP & ĐỒNG BỘ ÂM THANH THEO TỪNG CLIP (FFmpeg) ---
-        yield log("Đang tiến hành cắt video câm (Bước 4)...", step=4)
-        if check_stop_func(): return
-        
-        silent_clip_files = []
+        # --- BƯỚC 4: CẮT GHÉP & ĐỒNG BỘ ÂM THANH THEO TỪNG CLIP (PARALLEL FFMPEG) ---
+        detected_enc, is_gpu_enc, _ = ffmpeg_installer.detect_hardware_encoder(ffmpeg_path)
+        encoder = payload.get('encoder') or detected_enc
+        if is_gpu_enc:
+            yield log(f"⚡ Đã kích hoạt tăng tốc phần cứng GPU ({detected_enc}) để cắt và xuất video siêu tốc!")
+        else:
+            yield log(f"⚙️ Sử dụng động cơ CPU Multithread tối ưu ({encoder} veryfast).")
+
         total_clips = len(sanitized_timeline)
-        
         if total_clips == 0:
             yield log("🛑 Lỗi: Timeline sau khi tối ưu rỗng!")
             return
+
+        cpu_cores = os.cpu_count() or 4
+        num_workers = min(4, max(2, cpu_cores // 2))
+        yield log(f"🎬 Đang tiến hành cắt song song {total_clips} clip câm ({num_workers} workers song song)...", step=4)
+        if check_stop_func(): return
 
         blur_orig_subs = payload.get('blur_original_subtitles', True)
         blur_sz = max(3, min(40, int(payload.get('blur_intensity', 15))))
@@ -1391,19 +1400,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if blur_orig_subs and orig_sub_entries:
             yield log(f"✨ Kích hoạt làm mờ phụ đề gốc theo thời gian ({len(orig_sub_entries)} đoạn phát hiện, độ mờ: {blur_sz}px).")
 
-        for i, clip in enumerate(sanitized_timeline):
-            if check_stop_func(): return
-            
+        def render_single_clip(i, clip):
+            if check_stop_func and check_stop_func():
+                return i, None, "STOPPED"
+
             v_start = float(clip['start'])
             v_dur = float(clip['duration'])
-            
             if v_dur <= 0:
-                continue
-
-            step_pct = int((i + 1) / total_clips * 100)
-            overall_pct = int(60 + (30 * (i + 1) / total_clips))
-            yield log(f"🎬 [{i+1}/{total_clips} - {step_pct}%] Đang cắt clip câm (Video: {v_dur:.1f}s)...")
-            yield log(f"[PROGRESS] {overall_pct}")
+                return i, None, None
 
             # Phát hiện phụ đề gốc trong khoảng thời gian clip này
             active_orig_intervals = []
@@ -1423,7 +1427,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                                 active_orig_intervals.append((rel_s, rel_e, item[2] if len(item) >= 3 else ''))
 
             # Xây dựng filter_complex cho VIDEO CÂM
-            clip_silent_path = os.path.join(temp_dir, f"clip_silent_{i}.mp4")
+            clip_silent_path = os.path.join(temp_dir, f"clip_silent_{i:04d}.mp4")
             filter_chain = []
             curr_v = "0:v"
 
@@ -1444,7 +1448,6 @@ def run_auto_edit_workflow(payload, check_stop_func):
                     pad_sec=blur_padding
                 )
                 filter_chain.extend(dyn_filters)
-                filter_chain.extend(dyn_filters)
 
             if not filter_chain:
                 vf_filter = "[0:v]null[v]"
@@ -1452,25 +1455,81 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 last = filter_chain[-1]
                 filter_chain[-1] = re.sub(r'\[[a-zA-Z0-9_]+\]$', '[v]', last)
                 vf_filter = ";".join(filter_chain)
-                
+
+            # Cấu hình encoder args phù hợp
+            if encoder == 'h264_nvenc':
+                enc_cmd = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p']
+            elif encoder == 'h264_qsv':
+                enc_cmd = ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22', '-pix_fmt', 'yuv420p']
+            else:
+                enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-threads', '2']
+
             cmd_mux = [
                 ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
                 '-ss', str(v_start), '-t', str(v_dur),
                 '-i', video_path,
                 '-filter_complex', vf_filter,
                 '-map', '[v]',
-                '-c:v', encoder, '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+                *enc_cmd,
                 '-an',
                 clip_silent_path
             ]
-            
+
             proc_m = subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
             if proc_m.returncode != 0:
-                yield log(f"🛑 Lỗi FFmpeg khi dựng clip #{i+1}: {proc_m.stderr}")
-                return
-                
-            if os.path.exists(clip_silent_path):
-                silent_clip_files.append(clip_silent_path)
+                # Nếu GPU bị lỗi, thử lại 1 lần với CPU libx264
+                if encoder != 'libx264':
+                    cmd_mux_fallback = [
+                        ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
+                        '-ss', str(v_start), '-t', str(v_dur),
+                        '-i', video_path,
+                        '-filter_complex', vf_filter,
+                        '-map', '[v]',
+                        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+                        '-an',
+                        clip_silent_path
+                    ]
+                    proc_fb = subprocess.run(cmd_mux_fallback, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                    if proc_fb.returncode == 0:
+                        return i, clip_silent_path, None
+                return i, None, f"Lỗi FFmpeg clip #{i+1}: {proc_m.stderr}"
+
+            return i, clip_silent_path, None
+
+        results_map = {}
+        completed_count = 0
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_idx = {
+                executor.submit(render_single_clip, idx, clip): idx
+                for idx, clip in enumerate(sanitized_timeline)
+            }
+
+            for future in concurrent.futures.as_completed(future_to_idx):
+                if check_stop_func and check_stop_func():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    yield log("🛑 Đã dừng tiến trình theo yêu cầu.")
+                    return
+
+                idx, clip_path, err = future.result()
+                if err:
+                    if err == "STOPPED":
+                        return
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    yield log(f"🛑 {err}")
+                    return
+
+                if clip_path and os.path.exists(clip_path):
+                    results_map[idx] = clip_path
+
+                completed_count += 1
+                step_pct = int(completed_count / total_clips * 100)
+                overall_pct = int(60 + (30 * completed_count / total_clips))
+                if completed_count % max(1, total_clips // 12) == 0 or completed_count == total_clips:
+                    yield log(f"🎬 [{completed_count}/{total_clips} - {step_pct}%] Đang cắt clip câm song song ({num_workers} workers)...")
+                    yield log(f"[PROGRESS] {overall_pct}")
+
+        silent_clip_files = [results_map[idx] for idx in sorted(results_map.keys()) if results_map.get(idx)]
 
         if not silent_clip_files:
             yield log("🛑 Lỗi: Không dựng được clip nào từ danh sách timeline.")
@@ -1545,12 +1604,19 @@ def run_auto_edit_workflow(payload, check_stop_func):
             v_filters[-1] = re.sub(r'\[[a-zA-Z0-9_]+\]$', '[v_out]', v_filters[-1])
             vf_complex = ";".join(v_filters)
 
+        if encoder == 'h264_nvenc':
+            final_enc_cmd = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p']
+        elif encoder == 'h264_qsv':
+            final_enc_cmd = ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22', '-pix_fmt', 'yuv420p']
+        else:
+            final_enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
+
         cmd_overlay = [
             ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
             *overlay_inputs,
             '-filter_complex', vf_complex,
             '-map', '[v_out]', '-map', '1:a',
-            '-c:v', encoder, '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+            *final_enc_cmd,
             '-c:a', 'aac', '-b:a', '192k',
             '-shortest',
             final_output
