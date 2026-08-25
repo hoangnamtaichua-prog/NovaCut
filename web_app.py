@@ -13,6 +13,32 @@ import threading
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1"
 
+# Khởi tạo cơ chế OTA Patch Overlay (ưu tiên tuyệt đối nạp file .py mới từ patches/active/ trước .pyd / frozen)
+if getattr(sys, 'frozen', False):
+    ROOT_DIR = os.path.dirname(sys.executable)
+else:
+    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+os.chdir(ROOT_DIR)
+
+PATCH_DIR = os.path.join(ROOT_DIR, 'patches', 'active')
+os.makedirs(PATCH_DIR, exist_ok=True)
+
+for p in [ROOT_DIR, PATCH_DIR]:
+    if p in sys.path:
+        sys.path.remove(p)
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, PATCH_DIR)
+
+try:
+    from importlib.machinery import PathFinder
+    for _idx, _finder in enumerate(sys.meta_path):
+        if _finder is PathFinder or getattr(_finder, '__name__', '') == 'PathFinder':
+            sys.meta_path.insert(0, sys.meta_path.pop(_idx))
+            break
+except Exception:
+    pass
+
 # Đăng ký tường minh MIME types để chống lỗi MIME trên Windows Sandbox
 mimetypes.init()
 mimetypes.add_type('text/css', '.css')

@@ -787,8 +787,11 @@ def review_start():
         def narration_generate():
             try:
                 import auto_edit_pipeline
-                import importlib
-                importlib.reload(auto_edit_pipeline)
+                try:
+                    import importlib
+                    importlib.reload(auto_edit_pipeline)
+                except Exception:
+                    pass
                 yield from auto_edit_pipeline.run_narration_workflow(data, check_stop_func)
             except Exception as e:
                 import traceback
@@ -806,8 +809,11 @@ def review_start():
         def api_generate():
             try:
                 import auto_edit_pipeline
-                import importlib
-                importlib.reload(auto_edit_pipeline)
+                try:
+                    import importlib
+                    importlib.reload(auto_edit_pipeline)
+                except Exception:
+                    pass
                 yield from auto_edit_pipeline.run_auto_edit_workflow(data, check_stop_func)
             except Exception as e:
                 import traceback

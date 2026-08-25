@@ -224,6 +224,8 @@ def build_pyinstaller_exe():
         "--collect-all=vieneu",
         "--collect-all=vieneu_utils",
         "--collect-all=soundfile",
+        "--collect-all=tiktoken",
+        "--collect-all=tiktoken_ext",
         "--exclude-module=torch",
         "--exclude-module=torchaudio",
         "--exclude-module=torchvision",

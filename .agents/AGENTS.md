@@ -18,3 +18,12 @@
 - Mỗi khi người dùng báo lỗi hoặc yêu cầu chỉnh sửa/thêm tính năng mới: Sau khi hoàn thành việc sửa mã nguồn, PHẢI ghi nhận và lưu lại chi tiết các thay đổi vào file `TODO.md` (mục "CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH").
 - Khi người dùng ra lệnh phát hành bản mới ("hãy cập nhật", "phát hành bản mới"), hãy đọc danh sách các mục đã ghi nhận này để tổng hợp changelog đầy đủ, chính xác nhất cho phiên bản tiếp theo.
 
+# Autonomous OpenAI Codex Collaboration Rule (Tự Động Phối Hợp Cùng Codex)
+- Mặc định BẮT BUỘC TỰ ĐỘNG phối hợp cùng OpenAI Codex CLI trong toàn bộ quy trình phát triển mà người dùng KHÔNG CẦN phải nhắc hay yêu cầu thủ công:
+  1. **Tự động phân tích Nguyên nhân gốc rễ Bug (Autonomous Debug Loop):** Khi người dùng báo lỗi, crash, exception hoặc hành vi bất thường, tự động kích hoạt quy trình `codex-debug-loop` (gọi runner `node "C:\Users\hoang\.gemini\config\plugins\codex\scripts\codex-runner.mjs"`) để Codex phân tích độc lập Root Cause Analysis trước khi đưa ra bản vá mã nguồn.
+  2. **Tự động thẩm định Kế hoạch (Autonomous Plan Review):** Trước khi trình bày hoặc thực hiện bất kỳ kế hoạch kiến trúc / tính năng mới / refactoring lớn nào, tự động gọi quy trình `codex-plan-review` để Codex phản biện kỹ thuật độc lập.
+  3. **Tự động thẩm định Mã nguồn sau khi sửa (Autonomous Implementation Review):** Sau khi hoàn thành việc chỉnh sửa mã nguồn phức tạp hoặc thay đổi nhiều file, tự động kích hoạt quy trình `codex-implementation-review` để Codex đối soát lại git diff xem có sót lỗi, thiếu test hoặc vi phạm kiến trúc hay không.
+  4. **Tự động kiểm định Bảo mật & Bản quyền (Autonomous Security Audit):** Bất cứ khi nào can thiệp vào `license_manager.py`, xác thực API key, phân quyền tính năng hoặc dữ liệu nhạy cảm, tự động kích hoạt `codex-security-audit`.
+- **Nguyên tắc thực thi:** Luôn giữ nguyên bản (verbatim) phản hồi phân tích kỹ thuật từ Codex khi báo cáo đối chiếu, kết hợp sức mạnh kép của cả 2 mô hình (Gemini + Codex) để tối ưu hóa chất lượng phần mềm.
+
+

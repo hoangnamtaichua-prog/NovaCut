@@ -19,7 +19,11 @@ import re
 import requests
 import license_manager
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    ROOT_DIR = os.path.dirname(sys.executable)
+else:
+    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 VERSION_FILE = os.path.join(ROOT_DIR, 'version.json')
 DEFAULT_VERSION = "1.0.0"
 
@@ -297,23 +301,33 @@ def apply_patch_zip(zip_path, target_version=""):
                 # Bỏ qua không ghi đè tệp bảo vệ
                 continue
 
-            # Giải nén an toàn
+            # 1. Giải nén vào thư mục ứng dụng gốc
             dest_path = os.path.join(ROOT_DIR, filename)
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             with zip_ref.open(file_info) as source, open(dest_path, 'wb') as target:
                 shutil.copyfileobj(source, target)
 
-            # Nếu là file Python .py, tự động xóa sạch các file C-binary (.pyd) cũ cùng tên nếu có để đảm bảo file .py mới được nạp ưu tiên 100%
+            # 2. Cơ chế OTA Patch Overlay: Giải nén bổ sung các file .py và package vào patches/active/ để nạp đè 100% C-binary (.pyd)
+            if filename.endswith('.py') or filename.startswith('routes/'):
+                overlay_path = os.path.join(ROOT_DIR, 'patches', 'active', filename)
+                os.makedirs(os.path.dirname(overlay_path), exist_ok=True)
+                with zip_ref.open(file_info) as source, open(overlay_path, 'wb') as target:
+                    shutil.copyfileobj(source, target)
+
+            # 3. Tự động dọn dẹp các file C-binary (.pyd) cũ cùng tên nếu không bị tiến trình khóa
             if filename.endswith('.py'):
                 base_name = os.path.splitext(dest_path)[0]
                 dir_name = os.path.dirname(dest_path)
                 stem = os.path.basename(base_name)
-                for f in os.listdir(dir_name):
-                    if f.startswith(stem) and f.endswith('.pyd'):
-                        try:
-                            os.remove(os.path.join(dir_name, f))
-                        except Exception:
-                            pass
+                try:
+                    for f in os.listdir(dir_name):
+                        if f.startswith(stem) and f.endswith('.pyd'):
+                            try:
+                                os.remove(os.path.join(dir_name, f))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
     # Cập nhật version mới
     if target_version:

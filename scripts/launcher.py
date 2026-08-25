@@ -33,9 +33,17 @@ else:
     APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 os.chdir(APP_DIR)
-sys.path.insert(0, APP_DIR)
 
-# Ưu tiên tuyệt đối nạp các file mã nguồn .py / .pyc cập nhật bên ngoài ổ cứng (OTA Patch) trước khi tìm trong gói đóng băng PyInstaller
+# Thiết lập thư mục OTA Patch Overlay (ưu tiên tuyệt đối nạp các file .py mới trong patches/active/ trước .pyd đóng băng)
+PATCH_DIR = os.path.join(APP_DIR, "patches", "active")
+os.makedirs(PATCH_DIR, exist_ok=True)
+
+for p in [APP_DIR, PATCH_DIR]:
+    if p in sys.path:
+        sys.path.remove(p)
+sys.path.insert(0, APP_DIR)
+sys.path.insert(0, PATCH_DIR)
+
 try:
     from importlib.machinery import PathFinder
     for _idx, _finder in enumerate(sys.meta_path):

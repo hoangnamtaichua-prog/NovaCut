@@ -10,11 +10,18 @@
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
 *(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
 
-*(Hiện tại chưa có thay đổi nào mới - Tất cả đã được đóng gói và phát hành trong bản v1.0.14).*
+*(Hiện tại chưa có thay đổi nào mới - Tất cả đã được đóng gói và phát hành trong bản v1.0.15).*
 
 ---
 
 ## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
+
+### ✅ Phiên bản v1.0.15 (Đã phát hành ngày 25/08/2026):
+1. **Kiến Trúc OTA Patch Overlay (`patches/active`) - Nạp Đè 100% C-Binary (.pyd):**
+   - Đưa thư mục `patches/active/` lên vị trí ưu tiên số 0 trong `sys.path` tại `launcher.py` và `web_app.py`.
+   - Nâng cấp `updater.py` giải nén trực tiếp các file `.py` và package `routes/` vào `patches/active/`, giải quyết triệt để tình trạng Python ưu tiên nạp file C-binary `.pyd` cũ đóng băng trong bản EXE.
+   - Sửa `ROOT_DIR` trong `updater.py` và `web_app.py` trỏ đúng thư mục cài đặt gốc (`sys.executable`) khi chạy ở chế độ đóng băng PyInstaller.
+   - Đảm bảo các bản vá tính năng (như sửa lỗi TikToken cho `gpt-5.6-luna` / custom model trong Auto-Edit) lập tức có hiệu lực 100% ngay trên máy khách hàng.
 
 ### ✅ Phiên bản v1.0.14 (Đã phát hành ngày 25/08/2026):
 1. **Khắc Phục Lỗi TikToken `Unknown encoding cl100k_base` Trong Auto-Edit:**

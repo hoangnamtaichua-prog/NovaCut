@@ -1,7 +1,7 @@
 {
-  "version": "1.0.14",
+  "version": "1.0.15",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "1. Sửa triệt để lỗi TikToken 'Unknown encoding cl100k_base': Bổ sung cơ chế Fallback Heuristic tự động ước lượng token an toàn, hỗ trợ mọi mô hình AI tùy chỉnh trong Auto-Edit mà không bị crash. 2. Ẩn hoàn toàn 100% cửa sổ đen CMD/FFmpeg nhấp nháy khi biên tập video, lồng tiếng và quét hệ thống ngầm (CREATE_NO_WINDOW). 3. Động cơ kép Dual Pagination Engine quét sạch 100% video kênh Douyin kèm thanh tiến trình trực tiếp & loại bỏ video rác.",
+  "changelog": "1. Kiến Trúc OTA Patch Overlay (patches/active): Đưa thư mục patches/active lên vị trí ưu tiên số 0 trong sys.path, giải nén và nạp đè 100% mã nguồn .py mới lên các file C-binary .pyd cũ trong bản EXE mà không bị kẹt hay lock file. 2. Nhận diện chính xác ROOT_DIR trên môi trường EXE đóng băng (sys.executable). 3. Sửa dứt điểm lỗi TikToken cho gpt-5.6-luna và mọi mô hình AI tùy chỉnh trong Auto-Edit.",
   "is_mandatory": false,
-  "updated_at": "2026-08-25 00:33:32"
+  "updated_at": "2026-08-25 08:42:45"
 }
