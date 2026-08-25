@@ -1,28 +1,74 @@
 CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
 Độc lập - Tự do - Hạnh phúc
 -----------------------------------------------------------------------------
-ĐIỀU KHOẢN SỬ DỤNG VÀ CAM KẾT MIỄN TRỪ TRÁCH NHIỆM BẢN QUYỀN
+CẢNH BÁO VÀ MIỄN TRỪ TRÁCH NHIỆM VỀ BẢN QUYỀN
 ỨNG DỤNG: NOVACUT - AI VIDEO & REVIEW EDITOR (PHIÊN BẢN 1.0.0)
 -----------------------------------------------------------------------------
 
+Vui lòng đọc kỹ toàn bộ nội dung dưới đây trước khi cài đặt và sử dụng bất kỳ tính năng chỉnh sửa video hoặc tạo nội dung review phim bằng AI nào của ứng dụng.
+
 1. GIỚI THIỆU CHUNG
-Ứng dụng NovaCut cung cấp các công cụ được hỗ trợ bởi trí tuệ nhân tạo (AI) nhằm mục đích:
+Ứng dụng này ("Ứng dụng") cung cấp các công cụ được hỗ trợ bởi trí tuệ nhân tạo (AI) nhằm mục đích:
 - Tự động chỉnh sửa, cắt ghép, xử lý video do người dùng tải lên hoặc lựa chọn;
 - Tạo nội dung review, tóm tắt, bình luận về phim ảnh, chương trình truyền hình và các tác phẩm nghe nhìn khác.
 
-Trước khi cài đặt và sử dụng Ứng dụng, người dùng ("Bạn") bắt buộc phải đọc, hiểu rõ và đồng ý với toàn bộ các điều khoản, cảnh báo và cam kết dưới đây.
+Trước khi sử dụng bất kỳ tính năng nào nêu trên, người dùng ("Bạn") bắt buộc phải đọc, hiểu rõ và đồng ý với toàn bộ các điều khoản, cảnh báo và cam kết được trình bày trong văn bản này. Việc tiếp tục sử dụng Ứng dụng đồng nghĩa với việc Bạn đã đọc, hiểu và chấp nhận vô điều kiện các nội dung dưới đây.
 
 2. ĐỊNH NGHĨA VÀ PHẠM VI ÁP DỤNG
-- "Nội dung gốc": Là bất kỳ phim, video, chương trình truyền hình, đoạn trích, hình ảnh, âm thanh, nhạc nền, phụ đề, kịch bản được tạo ra bởi bên thứ ba (hãng phim, nhà sản xuất...).
-- "Sử dụng phi thương mại, cá nhân": Là việc sử dụng nội dung chỉ để xem, lưu trữ, học tập, nghiên cứu riêng tư của cá nhân Bạn, không đăng tải công khai lên mạng xã hội nhằm mục đích thương mại hóa trái phép.
+- "Nội dung gốc": Là bất kỳ phim, video, chương trình truyền hình, đoạn trích, hình ảnh, âm thanh, nhạc nền, phụ đề, kịch bản, hoặc bất kỳ tác phẩm nghe nhìn nào khác được tạo ra bởi bên thứ ba (hãng phim, nhà sản xuất, đài truyền hình, nền tảng phát trực tuyến, cá nhân sáng tạo nội dung...).
+- "Nội dung do người dùng tạo ra": Là video, bài review, bản chỉnh sửa hoặc bất kỳ sản phẩm đầu ra nào được tạo ra thông qua việc Bạn sử dụng các tính năng AI của Ứng dụng, dù có sử dụng một phần hay toàn bộ Nội dung gốc hay không.
+- "Sử dụng phi thương mại, cá nhân": Là việc sử dụng Nội dung do người dùng tạo ra chỉ để xem, lưu trữ, học tập, nghiên cứu riêng tư của cá nhân Bạn, không đăng tải công khai lên bất kỳ nền tảng nào (mạng xã hội, YouTube, TikTok, website, kênh phát sóng...), không chia sẻ cho công chúng dưới bất kỳ hình thức nào, và không nhằm mục đích tạo ra doanh thu, lợi nhuận, lượt xem, lượt tương tác thương mại hoặc bất kỳ lợi ích kinh tế nào, dù trực tiếp hay gián tiếp.
+
+Văn bản này áp dụng cho mọi tính năng của Ứng dụng có khả năng xử lý, trích xuất, sử dụng lại hoặc tái tạo Nội dung gốc thuộc quyền sở hữu của bên thứ ba.
 
 3. CẢNH BÁO VỀ HÀNH VI VI PHẠM BẢN QUYỀN
-- Phim ảnh, video và âm thanh được bảo hộ bởi luật bản quyền (Luật Sở hữu trí tuệ Việt Nam, Đạo luật DMCA Hoa Kỳ...).
-- Việc sao chép, cắt ghép, phát lại mà không có sự cho phép của chủ sở hữu bản quyền có thể dẫn đến trách nhiệm dân sự và hình sự.
+Bạn cần hiểu rõ và ghi nhớ những điều sau:
+- Phim ảnh, video, hình ảnh và âm thanh được bảo hộ bởi luật bản quyền tại hầu hết các quốc gia trên thế giới, bao gồm nhưng không giới hạn ở Luật Sở hữu trí tuệ Việt Nam, Đạo luật Bản quyền Hoa Kỳ (DMCA), và các điều ước quốc tế liên quan (Công ước Berne, Hiệp định TRIPS...).
+- Việc sao chép, cắt ghép, chỉnh sửa, phát lại, phân phối, đăng tải công khai một phần hoặc toàn bộ Nội dung gốc mà không có sự cho phép của chủ sở hữu bản quyền là hành vi vi phạm pháp luật, có thể dẫn đến trách nhiệm dân sự (bồi thường thiệt hại) và/hoặc trách nhiệm hình sự tùy theo mức độ và quy định của từng quốc gia.
+- Việc gắn nhãn nội dung là "review", "bình luận", "phân tích", "giáo dục", hoặc việc chỉ sử dụng một đoạn ngắn của Nội dung gốc không đương nhiên được miễn trừ trách nhiệm vi phạm bản quyền. Khái niệm "sử dụng hợp lý" (fair use / fair dealing) chỉ áp dụng trong những điều kiện rất cụ thể, được đánh giá theo từng trường hợp và khác nhau đáng kể giữa các hệ thống pháp luật.
+- Việc không thu lợi nhuận trực tiếp từ hành vi sử dụng Nội dung gốc không đồng nghĩa với việc hành vi đó là hợp pháp. Ngay cả việc chia sẻ miễn phí, phi lợi nhuận cũng có thể cấu thành hành vi xâm phạm quyền tác giả nếu không được phép.
+- Việc sử dụng công cụ AI để tự động hóa quá trình chỉnh sửa, cắt ghép không làm thay đổi bản chất pháp lý của hành vi sử dụng Nội dung gốc. Trách nhiệm pháp lý vẫn thuộc về người thực hiện và/hoặc người ra lệnh cho hệ thống thực hiện hành vi đó.
 
 4. CAM KẾT CỦA NGƯỜI DÙNG
-- Bạn cam đoan có quyền hợp pháp đối với mọi dữ liệu video tải lên ứng dụng.
-- Bạn là người chịu trách nhiệm pháp lý duy nhất đối với mọi hậu quả phát sinh từ việc sử dụng nội dung do bạn tạo ra.
-- Bạn đồng ý bồi hoàn và giữ cho nhà phát triển ứng dụng không bị thiệt hại trước mọi khiếu nại phát sinh từ việc bạn sử dụng ứng dụng.
+Bằng việc sử dụng các tính năng chỉnh sửa video và review phim bằng AI của Ứng dụng, Bạn xác nhận và cam kết những điều sau:
 
-Bằng việc nhấn "Tôi đồng ý" và hoàn tất cài đặt, bạn xác nhận đã đọc, hiểu và cam kết tuân thủ nghiêm ngặt các quy định trên.
+4.1. Về mục đích sử dụng:
+- Bạn cam kết chỉ sử dụng Nội dung do người dùng tạo ra cho mục đích cá nhân, phi thương mại, theo đúng định nghĩa tại Mục 2 của văn bản này.
+- Bạn không đăng tải, chia sẻ, phát tán, phân phối lại Nội dung do người dùng tạo ra lên bất kỳ nền tảng công khai, mạng xã hội, website, kênh truyền thông, hoặc gửi cho bên thứ ba với mục đích thương mại hóa, kiếm lợi nhuận, thu hút quảng cáo, tăng lượt xem, xây dựng kênh nội dung hoặc bất kỳ hình thức khai thác thương mại nào khác.
+- Bạn không sử dụng Ứng dụng nhằm mục đích tái sản xuất hàng loạt, phát hành lại toàn bộ hoặc phần lớn nội dung của một bộ phim, chương trình dưới danh nghĩa "review" nhằm thay thế trải nghiệm xem tác phẩm gốc.
+
+4.2. Về quyền sở hữu và nguồn gốc nội dung:
+- Bạn cam đoan rằng Bạn có đầy đủ quyền hợp pháp để tải lên, xử lý bất kỳ video, hình ảnh, âm thanh nào mà Bạn cung cấp cho Ứng dụng, hoặc việc sử dụng của Bạn thuộc phạm vi được pháp luật cho phép.
+- Bạn hiểu rằng Ứng dụng không xác minh, không kiểm duyệt và không chịu trách nhiệm về nguồn gốc bản quyền của bất kỳ nội dung nào Bạn tải lên hoặc yêu cầu xử lý.
+- Trường hợp Nội dung gốc thuộc quyền sở hữu của bên thứ ba, Bạn có trách nhiệm tự tìm hiểu và đảm bảo việc sử dụng của mình tuân thủ đầy đủ quy định pháp luật về bản quyền hiện hành, bao gồm cả việc xin phép chủ sở hữu bản quyền nếu cần thiết.
+
+4.3. Về trách nhiệm pháp lý:
+- Bạn hiểu và chấp nhận rằng Bạn là người chịu trách nhiệm pháp lý duy nhất đối với mọi hậu quả phát sinh từ việc sử dụng Nội dung gốc và Nội dung do người dùng tạo ra, bao gồm nhưng không giới hạn ở các khiếu nại, tranh chấp, yêu cầu bồi thường, xử phạt hành chính hoặc truy cứu trách nhiệm hình sự liên quan đến vi phạm bản quyền.
+- Bạn đồng ý bồi hoàn và giữ cho nhà phát triển Ứng dụng không bị thiệt hại (indemnify and hold harmless) trước mọi khiếu nại, tổn thất, chi phí pháp lý phát sinh từ việc Bạn vi phạm các cam kết nêu trong văn bản này.
+
+5. MIỄN TRỪ TRÁCH NHIỆM CỦA NHÀ PHÁT TRIỂN ỨNG DỤNG
+- Ứng dụng là một công cụ hỗ trợ kỹ thuật, cung cấp khả năng xử lý video bằng AI theo yêu cầu của người dùng. Ứng dụng không kiểm duyệt trước, không xác minh và không giám sát nội dung mà người dùng tải lên hoặc tạo ra.
+- Nhà phát triển Ứng dụng không khuyến khích, không cổ suy và không chịu trách nhiệm đối với bất kỳ hành vi sử dụng sai mục đích nào nhằm vi phạm quyền sở hữu trí tuệ của bên thứ ba.
+- Nhà phát triển Ứng dụng không đảm bảo rằng mọi kết quả đầu ra từ tính năng AI đều tuân thủ quy định pháp luật về bản quyền tại quốc gia nơi người dùng cư trú hoặc sử dụng Ứng dụng, do sự khác biệt pháp lý giữa các quốc gia.
+- Trong phạm vi tối đa mà pháp luật cho phép, nhà phát triển Ứng dụng từ chối mọi trách nhiệm pháp lý, trực tiếp hoặc gián tiếp, phát sinh từ hoặc liên quan đến việc người dùng sử dụng tính năng của Ứng dụng để vi phạm bản quyền, bao gồm cả thiệt hại trực tiếp, gián tiếp, ngẫu nhiên, đặc biệt hoặc hệ quả.
+- Nhà phát triển Ứng dụng có quyền, nhưng không có nghĩa vụ, thực hiện các biện pháp kỹ thuật (giới hạn thời lượng xử lý, watermark, giới hạn độ phân giải xuất bản, chặn tải lên nội dung nghi vi phạm...) nhằm hạn chế nguy cơ lạm dụng tính năng cho mục đích vi phạm bản quyền.
+- Nhà phát triển Ứng dụng có quyền tạm ngưng hoặc chấm dứt quyền truy cập của người dùng bị phát hiện hoặc bị khiếu nại có hành vi vi phạm bản quyền thông qua việc sử dụng Ứng dụng, mà không cần báo trước.
+
+6. CÁC HÀNH VI BỊ NGHIÊM CẤM
+Người dùng nghiêm cấm sử dụng Ứng dụng vào các mục đích sau:
+- Tái sản xuất, sao chép hàng loạt nội dung có bản quyền nhằm mục đích thương mại hoặc phân phối công khai;
+- Phát hành lại toàn bộ hoặc phần lớn thời lượng của một tác phẩm điện ảnh, chương trình truyền hình dưới bất kỳ hình thức "review", "tóm tắt", "phân tích" nào có khả năng thay thế việc xem tác phẩm gốc;
+- Né tránh, vô hiệu hóa hoặc phá vỡ các biện pháp bảo vệ bản quyền kỹ thuật số (DRM) của Nội dung gốc;
+- Sử dụng Nội dung do người dùng tạo ra để xây dựng, phát triển kênh nội dung, trang mạng xã hội, website nhằm mục đích thu hút quảng cáo, tài trợ hoặc bất kỳ hình thức kiếm tiền nào khác;
+- Bán, cho thuê, chuyển nhượng hoặc cấp phép sử dụng Nội dung do người dùng tạo ra cho bên thứ ba.
+
+Việc vi phạm bất kỳ điều khoản nào nêu trên có thể dẫn đến việc chấm dứt quyền sử dụng Ứng dụng ngay lập tức, đồng thời Bạn tự chịu trách nhiệm toàn bộ trước pháp luật và trước bên thứ ba bị xâm phạm quyền lợi.
+
+7. KHUYẾN NGHỊ DÀNH CHO NGƯỜI DÙNG
+- Trước khi sử dụng bất kỳ đoạn phim, hình ảnh, âm thanh nào không do chính Bạn tạo ra, hãy cân nhắc liên hệ và xin phép chủ sở hữu bản quyền.
+- Ưu tiên sử dụng nội dung thuộc phạm vi công cộng (public domain), nội dung được cấp phép mở (Creative Commons phù hợp), hoặc nội dung do chính Bạn tự sản xuất.
+- Nếu có ý định đăng tải nội dung công khai hoặc mang tính thương mại, hãy tìm hiểu kỹ về khái niệm "sử dụng hợp lý" (fair use/fair dealing) tại quốc gia liên quan, và tốt nhất nên tham khảo ý kiến luật sư chuyên về sở hữu trí tuệ.
+
+8. XÁC NHẬN ĐỒNG Ý
+Bằng việc nhấn "Tôi đồng ý" (I accept the agreement) và hoàn tất cài đặt hoặc sử dụng ứng dụng:
+Tôi xác nhận đã đọc, hiểu rõ và đồng ý với toàn bộ nội dung cảnh báo và miễn trừ trách nhiệm nêu trên. Tôi cam kết chỉ sử dụng Nội dung do tôi tạo ra thông qua Ứng dụng cho mục đích cá nhân, phi thương mại, không đăng tải công khai và không tìm kiếm bất kỳ lợi ích kinh tế nào từ việc sử dụng Nội dung gốc thuộc bản quyền của bên thứ ba. Tôi hiểu rằng tôi là người chịu trách nhiệm pháp lý duy nhất đối với hành vi sử dụng của mình.

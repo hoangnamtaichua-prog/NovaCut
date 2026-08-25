@@ -10,10 +10,13 @@ import shutil
 from pathlib import Path
 import ffmpeg_installer
 
-def extract_prompt_from_video(video_path, custom_srt_path=None):
+def extract_prompt_from_video(video_path, custom_srt_path=None, review_style="dramatic", custom_style_prompt=None):
     """
-    Looks for the SRT file corresponding to the video path and generates a ChatGPT prompt.
+    Looks for the SRT file corresponding to the video path and generates a ChatGPT prompt with review style.
     """
+    import review_styles
+    style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
+    
     video_name = os.path.basename(video_path)
     movie_title = os.path.splitext(video_name)[0]
     
@@ -40,8 +43,10 @@ def extract_prompt_from_video(video_path, custom_srt_path=None):
     prompt = f"""Tôi đang làm một video tóm tắt phim (Movie Recap) cho bộ phim "{movie_title}".
 Dưới đây là phụ đề của phim (hoặc một phần của phụ đề).
 
+{style_directive}
+
 Nhiệm vụ của bạn:
-1. Đọc phụ đề và tóm tắt lại cốt truyện một cách hấp dẫn, kịch tính để làm video ngắn (Shorts/Tiktok).
+1. Đọc phụ đề và tóm tắt lại cốt truyện theo đúng PHONG CÁCH VĂN PHONG đã yêu cầu ở trên để làm video ngắn (Shorts/Tiktok/YouTube).
 2. Viết lời thoại (narration) cho người dẫn truyện.
 3. Chọn ra các khoảng thời gian (start, end) tương ứng trong phụ đề thể hiện những cảnh quay đắt giá nhất, phù hợp với câu thoại đó.
 

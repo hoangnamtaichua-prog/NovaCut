@@ -512,6 +512,7 @@ PACKAGE_TIERS = {
         "features": {
             "can_access_review": True,
             "can_access_editor": True,
+            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
             "can_clone_voice": True,
             "clone_voice_limit": 2,
             "allow_save_cloned_voice": False,
@@ -529,6 +530,7 @@ PACKAGE_TIERS = {
         "features": {
             "can_access_review": True,
             "can_access_editor": True,
+            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
             "can_clone_voice": True,
             "clone_voice_limit": 1,
             "allow_save_cloned_voice": True,
@@ -546,6 +548,7 @@ PACKAGE_TIERS = {
         "features": {
             "can_access_review": True,
             "can_access_editor": True,
+            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
             "can_clone_voice": True,
             "clone_voice_limit": 5,
             "allow_save_cloned_voice": True,
@@ -563,6 +566,7 @@ PACKAGE_TIERS = {
         "features": {
             "can_access_review": True,
             "can_access_editor": True,
+            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
             "can_clone_voice": True,
             "clone_voice_limit": 99,
             "allow_save_cloned_voice": True,
@@ -580,6 +584,7 @@ PACKAGE_TIERS = {
         "features": {
             "can_access_review": True,
             "can_access_editor": True,
+            "can_access_batch": True,
             "can_clone_voice": True,
             "clone_voice_limit": 9999,
             "allow_save_cloned_voice": True,
@@ -598,6 +603,7 @@ PACKAGE_TIERS = {
         "features": {
             "can_access_review": False,
             "can_access_editor": False,
+            "can_access_batch": False,
             "can_clone_voice": False,
             "clone_voice_limit": 0,
             "allow_save_cloned_voice": False,

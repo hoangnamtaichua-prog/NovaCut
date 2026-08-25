@@ -95,6 +95,7 @@ from routes.license import license_bp
 from routes.project import project_bp
 from routes.updater import updater_bp
 from routes.audio import audio_bp
+from routes.batch_queue import batch_queue_bp
 
 app.register_blueprint(core_bp)
 app.register_blueprint(video_edit_bp)
@@ -107,6 +108,7 @@ app.register_blueprint(license_bp)
 app.register_blueprint(project_bp)
 app.register_blueprint(updater_bp)
 app.register_blueprint(audio_bp)
+app.register_blueprint(batch_queue_bp)
 
 def main():
     import threading

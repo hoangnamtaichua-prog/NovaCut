@@ -57,6 +57,8 @@ PATCH_INCLUDE_FILES = [
     "custom_voices.py",
     "custom_voices.json",
     "review_phim.py",
+    "review_styles.py",
+    "batch_queue_manager.py",
     "timeline_sanitizer.py",
     "vietnamese_text_normalizer.py",
     "local_voice_engine.py",

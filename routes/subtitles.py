@@ -127,6 +127,52 @@ def parse_subtitles_file():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'subtitles': []})
 
+def _format_srt_timestamp_helper(seconds):
+    if seconds is None or seconds < 0:
+        seconds = 0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000:
+        s += 1
+        ms = 0
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+@subtitles_bp.route('/api/subtitles/export_temp', methods=['POST'])
+def export_temp_srt():
+    data = request.json or {}
+    subtitles = data.get('subtitles', [])
+    video_path = data.get('video_path', '')
+    
+    if not subtitles:
+        return jsonify({'success': False, 'error': 'Danh sách phụ đề rỗng'}), 400
+        
+    try:
+        if video_path and os.path.exists(video_path):
+            base_dir = os.path.dirname(os.path.abspath(video_path))
+            video_name = os.path.splitext(os.path.basename(video_path))[0]
+            out_path = os.path.join(base_dir, f"{video_name}_extracted.srt")
+        else:
+            temp_dir = os.path.join(ROOT_DIR, 'auto_edit_temp')
+            os.makedirs(temp_dir, exist_ok=True)
+            out_path = os.path.join(temp_dir, f"subtitles_transfer_{int(time.time())}.srt")
+            
+        with open(out_path, 'w', encoding='utf-8') as f:
+            for idx, sub in enumerate(subtitles):
+                start_sec = sub.get('startSeconds', 0.0)
+                end_sec = sub.get('endSeconds', start_sec + 2.0)
+                if end_sec <= start_sec:
+                    end_sec = start_sec + 2.0
+                text = (sub.get('translation') or sub.get('text') or sub.get('original_text') or '').strip()
+                f.write(f"{idx + 1}\n")
+                f.write(f"{_format_srt_timestamp_helper(start_sec)} --> {_format_srt_timestamp_helper(end_sec)}\n")
+                f.write(f"{text}\n\n")
+                
+        return jsonify({'success': True, 'srt_path': out_path})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @subtitles_bp.route('/api/read_srt', methods=['POST'])
 def read_srt():
     data = request.json

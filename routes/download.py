@@ -93,14 +93,20 @@ def api_download_start():
 def api_download_open_folder():
     import subprocess
     data = request.json or {}
-    file_path = data.get('file_path', '')
-    if not file_path or not os.path.exists(file_path):
-        folder = os.path.join(ROOT_DIR, 'downloads')
-        os.makedirs(folder, exist_ok=True)
-        subprocess.Popen(f'explorer "{folder}"')
+    folder_path = data.get('folder_path', '').strip()
+    file_path = data.get('file_path', '').strip()
+    
+    target_path = folder_path or file_path
+    if target_path and os.path.exists(target_path):
+        if os.path.isdir(target_path):
+            subprocess.Popen(f'explorer "{os.path.normpath(target_path)}"')
+        else:
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(target_path)}"')
         return jsonify({'success': True})
     
-    subprocess.Popen(f'explorer /select,"{file_path}"')
+    default_folder = os.path.join(ROOT_DIR, 'downloads')
+    os.makedirs(default_folder, exist_ok=True)
+    subprocess.Popen(f'explorer "{os.path.normpath(default_folder)}"')
     return jsonify({'success': True})
 
 
@@ -220,6 +226,7 @@ def api_download_douyin_batch_download():
     data = request.json or {}
     videos = data.get('videos', [])
     output_dir = data.get('output_dir', '').strip()
+    channel_name = data.get('channel_name', '').strip()
 
     if not videos or not isinstance(videos, list):
         return jsonify({'error': 'Danh sách video tải xuống rỗng'}), 400
@@ -246,7 +253,8 @@ def api_download_douyin_batch_download():
             downloaded_files = douyin_browser_downloader.download_channel_batch(
                 video_list=videos,
                 output_dir=output_dir,
-                max_workers=2,
+                channel_name=channel_name,
+                max_workers=3,
                 progress_cb=progress_callback
             )
             q.put({
@@ -276,5 +284,35 @@ def api_download_douyin_batch_download():
                 yield "data: {\"status\": \"heartbeat\"}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@download_bp.route('/api/download/douyin/cancel_batch', methods=['POST'])
+def api_download_douyin_cancel_batch():
+    """
+    API dừng/hủy tác vụ tải hàng loạt video Douyin ngay lập tức.
+    """
+    import douyin_browser_downloader
+    try:
+        douyin_browser_downloader.cancel_active_batch_download()
+        return jsonify({'success': True, 'message': 'Đã gửi tín hiệu dừng tiến trình tải.'})
+    except Exception as e:
+        return jsonify({'error': f"Lỗi dừng tải: {str(e)}"}), 500
+
+
+@download_bp.route('/api/download/douyin/open_login', methods=['POST'])
+def api_download_douyin_open_login():
+    """
+    API mở trình duyệt để người dùng đăng nhập Douyin 1 lần duy nhất (vượt giới hạn 18 video của khách).
+    """
+    import douyin_browser_downloader, threading
+    try:
+        crawler = douyin_browser_downloader.DouyinBrowserDownloader(headless=False)
+        t = threading.Thread(target=crawler.open_login_window, daemon=True)
+        t.start()
+        return jsonify({'success': True, 'message': 'Đang mở cửa sổ trình duyệt để đăng nhập...'})
+    except Exception as e:
+        return jsonify({'error': f"Lỗi mở trình duyệt đăng nhập: {str(e)}"}), 500
+
+
 
 

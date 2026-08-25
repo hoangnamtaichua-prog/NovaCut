@@ -773,7 +773,7 @@ def resolve_openai_credentials(payload=None):
 import threading
 import queue
 
-def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chunks, target_words, prompt_map, prompt_reduce, temp_dir, log_func):
+def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chunks, target_words, prompt_map, prompt_reduce, temp_dir, log_func, style_directive=""):
     q = queue.Queue()
     
     async def async_worker():
@@ -793,6 +793,9 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                 prompt = prompt.replace("{TÓM_TẮT_ĐOẠN_TRƯỚC}", prev_text)
                 prompt = prompt.replace("{MỐC_THỜI_GIAN_BẮT_ĐẦU}", "Đầu đoạn").replace("{MỐC_THỜI_GIAN_KẾT_THÚC}", "Cuối đoạn")
                 
+                if style_directive:
+                    prompt = f"{style_directive}\n\n{prompt}"
+
                 cache_key = hashlib.md5((chunk_text + prompt).encode('utf-8')).hexdigest()
                 cache_file = os.path.join(temp_dir, f"chunk_{cache_key}.txt")
                 
@@ -804,7 +807,7 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                 response = await client.chat.completions.create(
                     model=openai_model,
                     messages=[
-                        {"role": "system", "content": "Bạn là chuyên gia review phim."},
+                        {"role": "system", "content": "Bạn là chuyên gia review phim hàng đầu."},
                         {"role": "user", "content": prompt}
                     ],
                     stream=True
@@ -824,16 +827,19 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
             map_tasks = [process_chunk(i, c) for i, c in enumerate(chunks)]
             map_results = await asyncio.gather(*map_tasks)
             
-            q.put({"type": "log", "msg": "🔄 Bắt đầu Reduce: Gộp các kịch bản thành một..."})
+            q.put({"type": "log", "msg": "🔄 Bắt đầu Reduce: Gộp các kịch bản thành một kịch bản hoàn chỉnh..."})
             combined = "\n\n--- ĐOẠN TIẾP THEO ---\n\n".join(map_results)
             prompt_red = prompt_reduce.replace("{NỘI_DUNG_CÁC_ĐOẠN_ĐÃ_GHÉP}", combined)\
                                       .replace("{SỐ_PHÚT}", str(target_words // 270))\
                                       .replace("{SỐ_PHÚT x 270}", str(target_words))
             
+            if style_directive:
+                prompt_red = f"{style_directive}\n\n{prompt_red}"
+
             response = await client.chat.completions.create(
                 model=openai_model,
                 messages=[
-                    {"role": "system", "content": "Bạn là biên tập viên kịch bản."},
+                    {"role": "system", "content": "Bạn là biên tập viên kịch bản review phim chuyên nghiệp."},
                     {"role": "user", "content": prompt_red}
                 ],
                 stream=True
@@ -1157,12 +1163,19 @@ def run_auto_edit_workflow(payload, check_stop_func):
             yield log("[PROGRESS] 20")
         else:
             import prompt_vault
+            import review_styles
             prompt_map = prompt_vault.get_prompt('prompt_map_chunk')
             prompt_reduce = prompt_vault.get_prompt('prompt_reduce_script')
             if not prompt_map or not prompt_reduce:
                 yield log("🛑 Không tìm thấy nội dung kịch bản mẫu prompt_map_chunk hoặc prompt_reduce_script!")
                 return
                 
+            review_style = payload.get('review_style', 'dramatic')
+            custom_style_prompt = payload.get('custom_style_prompt', '')
+            style_info = review_styles.get_style_by_id(review_style)
+            style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
+            yield log(f"🎭 Phong cách Review: {style_info.get('icon', '🎬')} {style_info.get('name', 'Mặc định')}")
+
             target_minutes = payload.get('target_minutes', 5)
             target_words = int(target_minutes * 270)
             condensed_srt = condense_srt_for_llm(srt_content, max_chars=40000)
@@ -1175,7 +1188,8 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 
             review_script = yield from run_map_reduce_pipeline_sync(
                 openai_key, openai_base_url, openai_model, srt_chunks, 
-                target_words, prompt_map, prompt_reduce, temp_dir, log
+                target_words, prompt_map, prompt_reduce, temp_dir, log,
+                style_directive=style_directive
             )
             
             if not review_script:
@@ -1761,10 +1775,17 @@ def run_narration_workflow(payload, check_stop_func):
         else:
             # Đọc prompt narration qua Vault bảo mật
             import prompt_vault
+            import review_styles
             prompt_template = prompt_vault.get_prompt('prompt_narration')
             if not prompt_template:
                 yield log("🛑 Không tìm thấy nội dung mẫu prompt_narration!")
                 return
+
+            review_style = payload.get('review_style', 'dramatic')
+            custom_style_prompt = payload.get('custom_style_prompt', '')
+            style_info = review_styles.get_style_by_id(review_style)
+            style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
+            yield log(f"🎭 Phong cách Kể lại: {style_info.get('icon', '🎙️')} {style_info.get('name', 'Mặc định')}")
 
             condensed_srt = condense_srt_for_llm(srt_content, max_chars=45000)
             target_words = int(video_minutes * 200)  # ~200 từ/phút (chậm hơn recap để vừa xem)
@@ -1772,6 +1793,9 @@ def run_narration_workflow(payload, check_stop_func):
                                            .replace("{SỐ_PHÚT}", f"{video_minutes:.1f}") \
                                            .replace("{SỐ_GIÂY}", f"{video_duration:.0f}") \
                                            .replace("{SỐ_TỪ}", str(target_words))
+
+            if style_directive:
+                prompt_final = f"{style_directive}\n\n{prompt_final}"
 
             headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
             url = f"{openai_base_url.rstrip('/')}/chat/completions"

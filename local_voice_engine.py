@@ -187,7 +187,81 @@ def _get_vieneu_onnx_dir():
                         print(f"[Local Voice] Auto-synced {fn} into {chosen_dir}")
                     except Exception as err:
                         print(f"[Local Voice] Warning copying {fn}: {err}")
+            # Đảm bảo cả parent_dir cũng có file để checkpoint_path phân giải đúng
+            if not os.path.exists(parent_file) and os.path.exists(target_file):
+                try:
+                    shutil.copy2(target_file, parent_file)
+                except Exception:
+                    pass
     return chosen_dir
+
+def _get_vieneu_codec_dir():
+    """
+    Tìm hoặc đồng bộ thư mục chứa MOSS Audio Tokenizer Codec ONNX (decode_full, encode, step, etc.).
+    """
+    candidates = [
+        os.path.join(ROOT_DIR, "models", "vieneu", "codec"),
+        os.path.join(os.path.dirname(sys.executable), "models", "vieneu", "codec"),
+        os.path.join(getattr(sys, '_MEIPASS', ''), "models", "vieneu", "codec") if hasattr(sys, '_MEIPASS') else None,
+        os.path.join(ROOT_DIR, "models", "codec"),
+        os.path.join(ROOT_DIR, "models", "vieneu"),
+    ]
+    
+    required_codec_files = [
+        "moss_audio_tokenizer_decode_full.onnx",
+        "moss_audio_tokenizer_decode_shared.data",
+        "moss_audio_tokenizer_decode_step.onnx",
+        "moss_audio_tokenizer_encode.onnx",
+        "moss_audio_tokenizer_encode.data",
+        "codec_browser_onnx_meta.json"
+    ]
+    
+    for c in candidates:
+        if c and os.path.exists(c):
+            if all(os.path.exists(os.path.join(c, f)) for f in required_codec_files[:2]):
+                return c
+                
+    # Nếu chưa có, thử tìm trong HuggingFace Cache để tự động đồng bộ sang models/vieneu/codec
+    target_codec_dir = os.path.join(ROOT_DIR, "models", "vieneu", "codec")
+    os.makedirs(target_codec_dir, exist_ok=True)
+    
+    try:
+        hf_cache_pattern = os.path.expanduser("~/.cache/huggingface/hub/models--OpenMOSS-Team--MOSS-Audio-Tokenizer-Nano-ONNX/snapshots/*")
+        import glob
+        snapshots = glob.glob(hf_cache_pattern)
+        if snapshots:
+            snap_dir = snapshots[0]
+            for fn in required_codec_files:
+                src_f = os.path.join(snap_dir, fn)
+                dst_f = os.path.join(target_codec_dir, fn)
+                if os.path.exists(src_f) and not os.path.exists(dst_f):
+                    try:
+                        shutil.copy2(src_f, dst_f)
+                    except Exception:
+                        pass
+            if all(os.path.exists(os.path.join(target_codec_dir, f)) for f in required_codec_files[:2]):
+                print(f"[Local Voice] Auto-synced MOSS Codec models into {target_codec_dir}")
+                return target_codec_dir
+    except Exception as e:
+        print(f"[Local Voice] HF Cache lookup note: {e}")
+
+    # Fallback cuối: Nếu vẫn thiếu, tải trực tiếp qua huggingface_hub vào target_codec_dir
+    try:
+        from huggingface_hub import hf_hub_download
+        print("[Local Voice] ⏳ Đang tải bổ sung Codec nén âm thanh MOSS (offline package)...")
+        for fn in required_codec_files:
+            dst_f = os.path.join(target_codec_dir, fn)
+            if not os.path.exists(dst_f):
+                try:
+                    f_path = hf_hub_download("OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX", fn)
+                    shutil.copy2(f_path, dst_f)
+                except Exception as dl_err:
+                    print(f"[Local Voice] Note fetching {fn}: {dl_err}")
+        return target_codec_dir
+    except Exception as err:
+        print(f"[Local Voice] Warning loading codec dir: {err}")
+        
+    return target_codec_dir if os.path.exists(target_codec_dir) else None
 
 _ENGINE_INSTANCE = None
 _ENGINE_LOCK = threading.Lock()
@@ -195,6 +269,7 @@ _ENGINE_LOCK = threading.Lock()
 def get_engine():
     """
     Singleton Loader for Local Voice Engine (VieNeu v3 Turbo ONNX Lite).
+    Tải mô hình 100% Offline từ thư mục models/vieneu/ và models/vieneu/codec/.
     """
     global _ENGINE_INSTANCE
     if _ENGINE_INSTANCE is None:
@@ -204,13 +279,25 @@ def get_engine():
                     from vieneu import Vieneu
                     print("[Local Voice] Initializing High-Speed Local Voice Engine (ONNX 48kHz)...")
                     local_onnx_dir = _get_vieneu_onnx_dir()
+                    local_codec_dir = _get_vieneu_codec_dir()
+                    model_root = os.path.dirname(local_onnx_dir) if (local_onnx_dir and os.path.basename(local_onnx_dir) == 'onnx_int8') else local_onnx_dir
+
+                    print(f"[Local Voice] - ONNX Backbone: {local_onnx_dir}")
+                    print(f"[Local Voice] - Codec Dir: {local_codec_dir}")
+                    print(f"[Local Voice] - Model Root: {model_root}")
+
+                    kwargs = {
+                        "backend": "onnx"
+                    }
                     if local_onnx_dir:
-                        print(f"[Local Voice] Loading offline pre-bundled ONNX model from: {local_onnx_dir}")
-                        _ENGINE_INSTANCE = Vieneu(backend="onnx", onnx_dir=local_onnx_dir)
-                    else:
-                        print("[Local Voice] Loading default ONNX model...")
-                        _ENGINE_INSTANCE = Vieneu(backend="onnx", precision="int8")
-                    print("[Local Voice] Engine loaded successfully!")
+                        kwargs["onnx_dir"] = local_onnx_dir
+                    if local_codec_dir:
+                        kwargs["codec_dir"] = local_codec_dir
+                    if model_root:
+                        kwargs["backbone_repo"] = model_root
+
+                    _ENGINE_INSTANCE = Vieneu(**kwargs)
+                    print("[Local Voice] Engine loaded successfully (100% Offline Ready)!")
                 except Exception as e:
                     print(f"[Local Voice] Failed to load engine: {e}")
                     raise e

@@ -8,13 +8,64 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
-*(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
-
-*(Hiện tại chưa có thay đổi nào mới - Tất cả đã được đóng gói và phát hành trong bản v1.1.0).*
+*(Hiện tại chưa có thay đổi mới đang chờ. Mọi cải tiến đã được đóng gói và phát hành vào v1.2.0).*
 
 ---
 
 ## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
+
+### ✅ Phiên bản v1.2.0 (Đã phát hành ngày 25/08/2026):
+1. **Chế Độ Xử Lý Hàng Loạt Hàng Đợi (Batch Processing Queue Studio & Overnight Engine - Phân quyền Admin độc quyền):**
+   - **Động cơ chạy qua đêm bất đồng bộ (Overnight FIFO Engine):** Module `batch_queue_manager.py` và `routes/batch_queue.py` xử lý tuần tự từng video với cơ chế chịu lỗi cao (*Fault-Tolerant*): tự động bỏ qua video lỗi mạng/API để tiếp tục xử lý các video tiếp theo mà không làm gián đoạn cả đêm.
+   - **Nạp đa nguồn (Multi-Source Ingestion):** Hỗ trợ dán 10 - 50 URL (Douyin, TikTok, YouTube, Bilibili), nạp nguyên một folder video từ ổ cứng, hoặc chuyển trực tiếp các video đã quét từ Tab Tải Kênh Douyin sang Hàng Đợi chỉ bằng 1 nút bấm *"⚡ Nạp Vào Hàng Đợi"*.
+   - **Bộ 3 Preset xử lý tự động:**
+     - *Preset 1:* Auto Review Phim AI (Whisper ASR $\rightarrow$ LLM Recap $\rightarrow$ Kokoro/Edge TTS $\rightarrow$ Cắt ghép phân cảnh 9:16).
+     - *Preset 2:* Auto Biên Tập Lồng Tiếng Phim (Tách âm thanh SFX $\rightarrow$ Dịch phụ đề $\rightarrow$ TTS $\rightarrow$ Xuất).
+     - *Preset 3:* Auto Clean 9:16 Chống Bản Quyền (Lật gương, Zoom 1.05x, Tốc độ 1.05x, chèn sub, xuất 9:16).
+   - **Giao diện Dashboard Quản lý Hiện đại (Dark Pro Studio):** Bảng tiến trình thời gian thực kết nối qua SSE Stream `/api/batch/stream`, 4 thẻ KPI đếm số lượng (Tổng, Đang chạy, Thành công, Lỗi), điều khiển Bắt đầu / Tạm dừng / Hủy / Chạy lại các mục lỗi.
+   - **Tự động lưu trạng thái & Tắt máy an toàn:** Lưu trạng thái hàng đợi vào `user_data/batch_queue_state.json` (khôi phục sau khi tắt app/mất điện); tích hợp tùy chọn đếm ngược 60s tự động tắt máy tính (*Auto Shutdown PC*) khi hoàn tất toàn bộ hàng đợi.
+   - **Bảo Vệ & Khóa Chặt Bản Quyền 2 Tầng:** Khóa chức năng xử lý hàng loạt chỉ cho phép tài khoản Admin Quản Trị sử dụng (`can_access_batch: True` cho Admin, `False` cho mọi gói khác).
+
+2. **Tùy Chỉnh Phong Cách Kịch Bản Review Phim (Review Styles & Tone Directives):**
+   - **Module Quản lý Phong cách (`review_styles.py`):** Cung cấp 7 phong cách kịch bản chuyên nghiệp được tối ưu riêng cho video triệu view:
+     1. 🎭 *Kịch Tính & Hồi Hộp (Dramatic & Suspenseful):* Căng thẳng, nghẹt thở, nhấn mạnh plot twists và những cú lừa kinh điển.
+     2. 😂 *Hài Hước & Cà Khịa (Humorous & Sarcastic):* Dí dỏm, châm biếm, ví von lầy lội các pha xử lý ngớ ngẩn của nhân vật.
+     3. 🧠 *Phân Tích & Triết Lý (Deep Analysis & Psychological):* Đi sâu vào tâm lý, ẩn dụ nghệ thuật, thông điệp nhân văn và bài học cuộc sống.
+     4. ⚡ *Tóm Tắt Nhanh / Mì Ăn Liền (Fast-Paced Recap):* Tiết tấu siêu tốc, câu ngắn gọn, dồn dập, đi thẳng vào các cảnh then chốt cho Shorts/TikTok.
+     5. 👻 *Kinh Dị & Rùng Rợn (Horror & Dark Thriller):* Không khí u ám, lạnh lẽo, cảm giác rình rập và đe dọa vô hình.
+     6. 💖 *Tình Cảm & Lắng Đọng (Emotional & Touching):* Giàu cảm xúc, tha thiết, chạm đến trái tim người nghe.
+     7. ✍️ *Tùy Chỉnh Riêng (Custom User Style):* Tự do nhập prompt chỉ thị văn phong và ngôi xưng theo ý muốn.
+   - **Tích hợp sâu vào Prompt đa tầng:** Map-Reduce Chunk (`auto_edit_pipeline.py`), Single-shot Recap (`review_phim.py`), và Batch Processing Queue (`batch_queue_manager.py`).
+
+3. **Tùy Chọn Bật / Tắt Toàn Bộ Phụ Đề & Làm Mờ (Master Subtitles & Blur Toggle Switch):**
+   - **Công Tắc Chủ Phụ Đề (Master Subtitle Switch):** Tích hợp công tắc Bật/Tắt `#subtitlesEnabled` ngay trên header của Card *"PHỤ ĐỀ & LÀM MỜ"* trong Tab Biên tập phim.
+   - **Ẩn / Hiện Trực Quan Trên Video Player:** Khi tắt phụ đề, tự động ẩn toàn bộ khung xem trước (`subPreviewBox`), ẩn khung nét đứt 8 điểm neo, làm mờ bảng cấu hình bên dưới và hiển thị trạng thái đã tắt trên hộp phụ đề mẫu.
+   - **Xuất Video Không Phụ Đề (No-Sub Exporting):** Cập nhật `routes/video_edit.py` và `web/app.js` gửi cờ `subtitles_enabled`. Khi tắt, FFmpeg bỏ qua hoàn toàn bộ lọc hardcode phụ đề, xuất video sạch chữ 100%.
+   - **Đồng Bộ Bộ Lọc Làm Mờ Phụ Đề Gốc (Dynamic Blur):** Kiểm soát độc lập việc bật/tắt làm mờ vùng phụ đề cũ (`#reviewBlurOriginalSubtitles`), ẩn overlay tức thì và bỏ qua filter blur khi người dùng không có nhu cầu làm mờ.
+
+4. **Khắc Phục Lỗi Nhân Bản Giọng Nói Trên Máy Khách (Fix Local Voice Cloning "os error 2" on Client Machines):**
+   - Đóng gói sẵn trọn bộ 6 tệp MOSS Tokenizer Codec vào thư mục cục bộ `models/vieneu/codec/`.
+   - Cập nhật `local_voice_engine.py` tự động nạp `codec_dir`, `onnx_dir`, và `backbone_repo` trỏ trực tiếp đến `models/vieneu/`, giúp engine khởi chạy 100% Offline hoàn chỉnh.
+   - Bổ sung cơ chế tự động đồng bộ 2 chiều và tự tải bù (auto-heal / auto-download fallback) nếu phát hiện thiếu file trên máy khách.
+   - Cập nhật `routes/tts.py` kiểm tra xác thực file mẫu âm thanh đầu vào trước khi tổng hợp, ngăn chặn crash và trả về thông báo lỗi rõ ràng.
+
+5. **Nâng Cấp Động Cơ Tải Toàn Bộ Kênh Douyin Pro (Douyin Channel Batch Downloader 2.0):**
+   - Tối ưu chất lượng 1080p, hỗ trợ Album Ảnh / Slide Photo Notes, cuộn trang Human-like & bắt API thông minh bypass giới hạn 18-20 video, trích xuất chỉ số kênh chi tiết, lọc & sắp xếp realtime, tính năng Đăng nhập Douyin 1 lần lưu phiên vĩnh viễn.
+
+6. **Tái Thiết Kế Toàn Diện Giao Diện Thẻ Tải Video (NovaCut Dark Pro Modern UI):**
+   - Thanh chuyển Segmented Pill Switcher, Khung nhập liệu Hero Glassmorphic, Banner Creator Showcase Card, Lưới Card Video 9:16 Reels hover.
+
+7. **Bộ Chọn Thư Mục Lưu Video Tùy Biến (Custom Output Directory Selector):**
+   - Tích hợp bộ chọn thư mục trực quan với nút *"📂 Chọn Thư Mục"* mở cửa sổ native của OS, lưu & đồng bộ cấu hình vào `localStorage`, nút *"📂 Mở Thư Mục"* thông minh.
+
+8. **Nút Chuyển Nhanh 1-Click Từ Trích Xuất Phụ Đề Sang Review Phim (`btnTransferToReview`):**
+   - Tích hợp nút bấm **"🎬 Review Phim"** trực tiếp trên thanh tiêu đề của thẻ Trích Xuất Phụ Đề, chuyển nhanh toàn bộ dữ liệu video và subtitle sang Review Phim trong 1 cú click.
+
+9. **Đồng Bộ Bản Quyền Vào Trình Cài Đặt (Setup Wizard) & Giới Hạn Hiển Thị 1 Lần Duy Nhất:**
+   - Đồng bộ toàn văn bản pháp lý vào Bộ cài đặt Inno Setup `LICENSE_DISCLAIMER.txt`, hiển thị đúng 1 lần duy nhất khi khởi chạy lần đầu và lưu vĩnh viễn sau khi chấp thuận.
+
+10. **Khắc Phục Triệt Để Lỗi Toàn Bộ Ứng Dụng Không Nhận Sự Kiện Click:**
+    - Loại bỏ định nghĩa trùng lặp `selectDirectory`, thiết lập `pointer-events: none` cho `.toast-container`, nâng cấp Cache-Busting lên `v=20260825_1350`.
 
 ### ✅ Phiên bản v1.1.0 (Đã phát hành ngày 25/08/2026):
 1. **Triệt Tiêu 100% Hiện Tượng Cửa Sổ Đen Console/CMD Nháy Lên Khi Cắt Video (Stealth Subprocess Engine):**
@@ -93,6 +144,16 @@
 
 ---
 
+## 🎯 DANH SÁCH VIỆC CẦN LÀM & TỐI ƯU (TODO / PENDING TASKS)
+
+1. ⏳ **Tinh Chỉnh & Khống Chế Thời Lượng Video Đầu Ra Chuẩn Xác (Target Duration Accuracy):**
+   - **Hiện trạng:** Khi người dùng chọn thời lượng mục tiêu 17 phút (hoặc số phút bất kỳ), video kết quả xuất ra thực tế bị dôi lên tới 28 phút (lệch nhiều so với cấu hình người dùng thiết lập).
+   - **Nội dung cần xử lý:**
+     - **Tối ưu bước sinh kịch bản (Bước 1):** Cân chỉnh số lượng từ / độ dài tóm tắt kịch bản theo tốc độ đọc trung bình (WPM - Words Per Minute ~ 160-190 từ/phút cho tiếng Việt) để kịch bản AI sinh ra khớp chính xác với số phút mong muốn.
+     - **Kiểm soát phân cảnh timeline (Bước 3 & Bước 4):** Chuẩn hóa cơ chế cắt ghép clip, nhịp độ video và thời lượng hiển thị cảnh tương ứng với từng câu thoại / audio lồng tiếng, đảm bảo tổng thời lượng video hoàn thiện bám sát số phút người dùng đã chọn (sai số chấp nhận được trong khoảng ±30 giây - 1 phút).
+
+---
+
 ## 🚀 III. DANH SÁCH TÍNH NĂNG MỚI TIẾP THEO (ROADMAP PHÁT TRIỂN DÀI HẠN)
 
 1. 🌟 **Auto Re-Frame AI / Bắt Nét Nhân Vật 9:16 (Smart Crop Tracking):**
@@ -106,8 +167,8 @@
    - Bộ sound effect trend (Whoosh, Pop, Ting, Boom, Cười hài hước).
    - Tự động giảm âm lượng nhạc nền xuống 15-20% khi giọng đọc cất lên và tăng lại khi dứt câu.
 
-4. ⚡ **Chế Độ Xử Lý Hàng Loạt Hàng Đợi (Batch Processing Queue):**
-   - Dán 1 danh sách 10 - 20 link Douyin / thư mục video $\rightarrow$ App tự động chạy qua đêm xuất 20 video Shorts hoàn chỉnh chỉ với 1 click.
+4. ✅ ⚡ **Chế Độ Xử Lý Hàng Loạt Hàng Đợi (Batch Processing Queue Studio):**
+   - Đã hoàn thành và tích hợp đầy đủ tại Tab *"⚡ Xử Lý Hàng Loạt"*, sẵn sàng đóng gói vào bản phát hành tiếp theo.
 
 5. 🎨 **AI Tự Động Tạo Thumbnail Bắt Mắt (CTR Booster):**
    - Trích xuất 3-5 khung hình kịch tính nhất và ghép chữ tiêu đề giật tít bắt mắt chuẩn tỉ lệ 9:16 cho TikTok / YouTube Shorts.

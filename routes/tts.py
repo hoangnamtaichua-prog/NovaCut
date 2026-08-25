@@ -666,8 +666,11 @@ def api_clone_voice_preview():
     if not audio_path and not voice_id:
         return jsonify({'success': False, 'error': 'Vui lòng cung cấp file âm thanh mẫu hoặc chọn giọng'}), 400
 
-    if audio_path and not os.path.isabs(audio_path):
-        audio_path = os.path.join(ROOT_DIR, audio_path)
+    if audio_path:
+        if not os.path.isabs(audio_path):
+            audio_path = os.path.join(ROOT_DIR, audio_path)
+        if not os.path.exists(audio_path):
+            return jsonify({'success': False, 'error': f'Không tìm thấy file âm thanh mẫu: {audio_path}'}), 400
 
     temp_out = os.path.join(ROOT_DIR, "output", f"preview_{int(time.time()*1000)}.wav")
     try:
@@ -675,7 +678,7 @@ def api_clone_voice_preview():
         local_voice_engine.synthesize(
             text=text,
             voice_id=voice_id or None,
-            ref_audio=audio_path if audio_path and os.path.exists(audio_path) else None,
+            ref_audio=audio_path if audio_path else None,
             speed=speed,
             output_path=temp_out
         )

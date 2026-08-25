@@ -1,5 +1,6 @@
 import { loadCapCutDrafts } from './js/features/capcut.js';
 import { initCloneVoiceModule, loadClonedVoicesList } from './js/features/clone_voice.js';
+import { initBatchQueueModule } from './js/features/batch_queue.js';
 import { appendLog, showToast, showConfirmModal, showAlertModal, showPromptModal, formatTimeSec, parseTimeToSeconds, formatSrtTimestamp, formatDurationStr } from './js/utils.js';
 
 export let currentLicenseState = {
@@ -86,6 +87,17 @@ mainNavTabs.forEach(tab => {
                         message: 'Gói Pro của bạn đã chọn cố định Module "Biên tập phim".\n\nĐể mở khóa và sử dụng đồng thời cả 2 Module (Biên tập phim & Review Phim), vui lòng Nâng cấp lên Gói VIP!',
                         theme: 'primary'
                     });
+                    return;
+                }
+            }
+        }
+
+        // Kiểm tra phân quyền Xử Lý Hàng Loạt (Chỉ dành riêng cho Admin Quản Trị)
+        if (targetId === 'viewBatchQueue') {
+            if (typeof checkFeaturePermission === 'function') {
+                if (!checkFeaturePermission('can_access_batch', 'Xử Lý Hàng Loạt (Dành Riêng Cho Admin)')) {
+                    e.preventDefault();
+                    e.stopPropagation();
                     return;
                 }
             }
@@ -581,6 +593,17 @@ async function executeExportPipeline() {
         manualSrt: manualSrtPath.value,
         dubbing: dubbingConfig,
         subtitles: (typeof srtData !== 'undefined' && Array.isArray(srtData)) ? srtData : [],
+        subtitles_enabled: document.getElementById('subtitlesEnabled')?.checked ?? true,
+        subtitle_style: {
+            font: document.getElementById('subFont')?.value || 'Montserrat',
+            size: parseInt(document.getElementById('subSize')?.value) || 24,
+            color: document.getElementById('subColorPicker')?.value || '#ffffff',
+            outline_color: document.getElementById('subOutlineColorPicker')?.value || '#000000',
+            outline: parseInt(document.getElementById('subOutline')?.value) || 1,
+            bold: isSubBold,
+            italic: isSubItalic,
+            uppercase: isSubUppercase
+        },
         blur_original_subtitles: blurEnabled,
         blur_intensity: blurIntensity,
         blur_use_ai_scan: document.getElementById('blurUseAiScan')?.checked ?? true,
@@ -2985,10 +3008,23 @@ function applySubStylesToElement(el) {
 }
 
 function updateSubPreview() {
+    const isSubEnabled = document.getElementById('subtitlesEnabled')?.checked ?? true;
+
     // 1. Update Live Preview Box inside the card
     const liveBox = document.getElementById('subLivePreviewBox');
     if (liveBox) {
-        applySubStylesToElement(liveBox);
+        if (!isSubEnabled) {
+            liveBox.textContent = 'Phụ đề đang TẮT (Video xuất ra sẽ không có phụ đề) 🚫';
+            liveBox.style.opacity = '0.45';
+            liveBox.style.fontStyle = 'italic';
+            liveBox.style.color = '#94a3b8';
+            liveBox.style.textShadow = 'none';
+        } else {
+            liveBox.style.opacity = '1';
+            liveBox.style.fontStyle = 'normal';
+            applySubStylesToElement(liveBox);
+            liveBox.textContent = 'Phụ đề mẫu hiển thị trực tiếp ✨';
+        }
     }
 
     // 2. Update Overlay on Video Player
@@ -3008,6 +3044,11 @@ function updateSubPreview() {
     }
     
     if (subPreviewBox) {
+        if (!isSubEnabled) {
+            subPreviewBox.style.display = 'none';
+            return;
+        }
+
         applySubStylesToElement(subPreviewBox);
         
         const isEditedMode = btnPreviewEdited && btnPreviewEdited.classList.contains('active');
@@ -3251,6 +3292,27 @@ if (btnResetSubStyle) {
     });
 }
 
+// Master Subtitle Switch Listener (Bật / Tắt Toàn Bộ Phụ Đề & Mờ)
+const subtitlesEnabled = document.getElementById('subtitlesEnabled');
+const subtitleToggleLabel = document.getElementById('subtitleToggleLabel');
+const subtitleCardBody = document.getElementById('subtitleCardBody');
+
+if (subtitlesEnabled) {
+    subtitlesEnabled.addEventListener('change', (e) => {
+        const isEnabled = e.target.checked;
+        if (subtitleToggleLabel) {
+            subtitleToggleLabel.textContent = isEnabled ? 'Bật sub' : 'Tắt sub';
+            subtitleToggleLabel.style.color = isEnabled ? '#38bdf8' : '#94a3b8';
+        }
+        if (subtitleCardBody) {
+            subtitleCardBody.style.opacity = isEnabled ? '1' : '0.45';
+            subtitleCardBody.style.pointerEvents = isEnabled ? 'auto' : 'none';
+        }
+        updateSubPreview();
+        showToast(isEnabled ? '✨ Đã BẬT chèn phụ đề vào video.' : '🚫 Đã TẮT toàn bộ phụ đề. Video xuất ra sẽ không có phụ đề.', isEnabled ? 'info' : 'warning');
+    });
+}
+
 // Bind Color Picker <-> Text Inputs
 function bindColorPair(pickerId, textId) {
     const picker = document.getElementById(pickerId);
@@ -3462,6 +3524,7 @@ const filterRadios = document.querySelectorAll('input[name="srtFilter"]');
 
 async function loadSrtToEditor(path) {
     try {
+        window.currentExtractedSrtPath = path;
         const response = await fetch('/api/read_srt', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -3495,6 +3558,11 @@ async function loadSrtToEditor(path) {
         if(configView) configView.style.display = 'none';
         if(editorView) editorView.style.display = 'flex';
         
+        const btnTransferToReview = document.getElementById('btnTransferToReview');
+        if (btnTransferToReview) {
+            btnTransferToReview.style.display = (srtData && srtData.length > 0) ? 'inline-flex' : 'none';
+        }
+        
         renderSrtTable();
         showToast('Đã tải bản SRT thành công!', 'success');
         
@@ -3515,6 +3583,11 @@ async function loadSrtToEditor(path) {
 }
 
 function renderSrtTable() {
+    const btnTransferToReview = document.getElementById('btnTransferToReview');
+    if (btnTransferToReview) {
+        btnTransferToReview.style.display = (srtData && srtData.length > 0) ? 'inline-flex' : 'none';
+    }
+
     if (srtData.length === 0) {
         if(configView) configView.style.display = 'flex';
         if(editorView) editorView.style.display = 'none';
@@ -3807,6 +3880,66 @@ if (btnDownloadTranslatedSrt) {
         URL.revokeObjectURL(url);
         
         showToast("Đã tải file SRT đã dịch về thư mục Downloads!", "success");
+    });
+}
+
+// 🎬 Chuyển Video & Phụ Đề đã trích xuất sang Studio Review Phim
+const btnTransferToReview = document.getElementById('btnTransferToReview');
+if (btnTransferToReview) {
+    btnTransferToReview.addEventListener('click', async () => {
+        if (!checkFeaturePermission('can_access_review', 'Review Phim')) return;
+
+        const videoPath = (document.getElementById('editorInputVideoPath')?.value || '').trim();
+        if (!videoPath) {
+            showToast('⚠️ Vui lòng chọn video đầu vào trước khi chuyển sang Review Phim!', 'warning');
+            return;
+        }
+
+        if (!srtData || srtData.length === 0) {
+            showToast('⚠️ Chưa có nội dung phụ đề nào được trích xuất!', 'warning');
+            return;
+        }
+
+        let targetSrtPath = window.currentExtractedSrtPath || '';
+
+        // Tự động lưu/xuất file SRT chuẩn (bao gồm cả nội dung đã dịch/chỉnh sửa)
+        try {
+            const res = await fetch('/api/subtitles/export_temp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    subtitles: srtData,
+                    video_path: videoPath
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.srt_path) {
+                targetSrtPath = data.srt_path;
+                window.currentExtractedSrtPath = targetSrtPath;
+            }
+        } catch (e) {
+            console.warn('Lỗi lưu tạm SRT:', e);
+        }
+
+        // Chuyển video sang thẻ Review Phim
+        sendVideoToReview(videoPath);
+
+        // Nạp phụ đề vào thẻ Review Phim
+        const reviewSrtInput = document.getElementById('reviewInputSrtPath');
+        if (reviewSrtInput && targetSrtPath) {
+            reviewSrtInput.value = targetSrtPath;
+            if (typeof autoParseReviewSrt === 'function') {
+                autoParseReviewSrt(targetSrtPath);
+            }
+        }
+
+        // Chuyển tab sang Review Phim
+        const reviewTab = document.querySelector('.nav-tab[data-target="viewReview"]');
+        if (reviewTab) {
+            reviewTab.click();
+        }
+
+        showToast('🎬 Đã chuyển Video & Phụ đề sang Studio Review Phim thành công!', 'success');
     });
 }
 
@@ -6030,6 +6163,33 @@ if (reviewTargetMinutes && reviewEstimatedWords) {
     });
 }
 
+// Review Style Selector (Tone & Vibe)
+const reviewStyleSelect = document.getElementById('reviewStyleSelect');
+const reviewSelectedStyleBadge = document.getElementById('reviewSelectedStyleBadge');
+const reviewCustomStyleContainer = document.getElementById('reviewCustomStyleContainer');
+
+const styleBadgeMap = {
+    'dramatic': '🎭 Kịch Tính',
+    'humorous': '😂 Hài Hước',
+    'deep_analysis': '🧠 Triết Lý',
+    'fast_paced': '⚡ Mì Ăn Liền',
+    'horror': '👻 Kinh Dị',
+    'emotional': '💖 Tình Cảm',
+    'custom': '✍️ Tùy Chỉnh'
+};
+
+if (reviewStyleSelect) {
+    reviewStyleSelect.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (reviewSelectedStyleBadge) {
+            reviewSelectedStyleBadge.textContent = styleBadgeMap[val] || '🎭 Kịch Tính';
+        }
+        if (reviewCustomStyleContainer) {
+            reviewCustomStyleContainer.style.display = (val === 'custom') ? 'block' : 'none';
+        }
+    });
+}
+
 // Aspect Ratio Toggles & Preview Frame Transformation
 function updateReviewPlayerAspectRatio(ratio) {
     const rContainer = document.getElementById('reviewVideoContainer');
@@ -6327,6 +6487,8 @@ if (btnStartReview) {
             voice_speed: voiceSpeed,
             tts_threads: parseInt(document.getElementById('reviewTtsThreads')?.value || 3),
             target_minutes: document.getElementById('reviewTargetMinutes') ? (parseInt(document.getElementById('reviewTargetMinutes').value) || 5) : 5,
+            review_style: document.getElementById('reviewStyleSelect')?.value || 'dramatic',
+            custom_style_prompt: document.getElementById('reviewCustomStylePrompt')?.value || '',
             aspect_ratio: reviewAspectRatio,
             pacing: reviewPacing,
             enable_zoom: document.getElementById('reviewEnableZoom')?.checked ?? true,
@@ -7149,7 +7311,7 @@ const downloadHistoryList = document.getElementById('downloadHistoryList');
 const downloadHistoryEmpty = document.getElementById('downloadHistoryEmpty');
 const btnClearDownloadHistory = document.getElementById('btnClearDownloadHistory');
 
-// Helper: Format seconds to MM:SS or HH:MM:SS
+// Helper: Open Native Windows Folder Picker Dialog (using shared selectDirectory defined at line 314)
 
 
 // 1. Paste URL from Clipboard
@@ -7196,8 +7358,7 @@ if (btnDownloadFormatVideo && btnDownloadFormatAudio) {
     });
 }
 
-
-// 3. Select Output Directory
+// 3. Select Output Directory (Single Video Mode)
 if (downloadOutputDir) {
     const savedDir = localStorage.getItem('download_output_dir');
     if (savedDir) {
@@ -7210,6 +7371,8 @@ if (btnSelectDownloadDir && downloadOutputDir) {
         const path = await selectDirectory('Chọn thư mục lưu video tải về');
         if (path) {
             downloadOutputDir.value = path;
+            const batchDirInput = document.getElementById('douyinBatchOutputDir');
+            if (batchDirInput) batchDirInput.value = path;
             localStorage.setItem('download_output_dir', path);
             showToast('Đã chọn thư mục lưu: ' + path, 'info');
         }
@@ -7220,6 +7383,8 @@ const btnClearDownloadDir = document.getElementById('btnClearDownloadDir');
 if (btnClearDownloadDir && downloadOutputDir) {
     btnClearDownloadDir.addEventListener('click', () => {
         downloadOutputDir.value = '';
+        const batchDirInput = document.getElementById('douyinBatchOutputDir');
+        if (batchDirInput) batchDirInput.value = '';
         localStorage.removeItem('download_output_dir');
         showToast('Đã đặt lại thư mục lưu về mặc định (/downloads)', 'info');
     });
@@ -7565,6 +7730,10 @@ function sendVideoToReview(filePath) {
         reviewInput.value = filePath;
     }
 
+    if (typeof loadReviewVideoPlayer === 'function') {
+        loadReviewVideoPlayer(filePath);
+    }
+
     const reviewInsightBox = document.getElementById('reviewVideoInsightBox');
     const reviewInsightDuration = document.getElementById('reviewInsightDuration');
     if (reviewInsightBox) {
@@ -7577,10 +7746,11 @@ function sendVideoToReview(filePath) {
 }
 
 function openDownloadFileFolder(filePath) {
+    const customDir = downloadOutputDir?.value.trim() || '';
     fetch('/api/download/open_folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_path: filePath })
+        body: JSON.stringify({ file_path: filePath || '', folder_path: customDir })
     }).then(() => {
         showToast('Đang mở thư mục trong File Explorer...', 'info');
     }).catch(e => {
@@ -7668,7 +7838,11 @@ if (btnClearDownloadHistory) {
 }
 
 // Render history on startup
-window.addEventListener('DOMContentLoaded', renderDownloadHistory);
+try {
+    renderDownloadHistory();
+} catch (e) {
+    console.error("Error rendering download history:", e);
+}
 
 // ==========================================
 // DOUYIN CHANNEL BATCH DOWNLOADER CONTROLLER
@@ -7691,13 +7865,53 @@ function initDouyinChannelDownloader() {
     const douyinChannelAvatar = document.getElementById('douyinChannelAvatar');
     const douyinChannelNickname = document.getElementById('douyinChannelNickname');
     const douyinChannelSignature = document.getElementById('douyinChannelSignature');
+    const douyinChannelFollowersBadge = document.getElementById('douyinChannelFollowersBadge');
+    const douyinChannelLikesBadge = document.getElementById('douyinChannelLikesBadge');
     const douyinChannelVideoCountBadge = document.getElementById('douyinChannelVideoCountBadge');
 
     const douyinBatchActionsBar = document.getElementById('douyinBatchActionsBar');
     const douyinSelectAllCheckbox = document.getElementById('douyinSelectAllCheckbox');
     const douyinSelectedSummary = document.getElementById('douyinSelectedSummary');
+    const douyinSubfolderCheckbox = document.getElementById('douyinSubfolderCheckbox');
     const btnStartDouyinBatchDownload = document.getElementById('btnStartDouyinBatchDownload');
+    const btnStopDouyinBatchDownload = document.getElementById('btnStopDouyinBatchDownload');
     const btnDouyinOpenFolder = document.getElementById('btnDouyinOpenFolder');
+    const douyinBatchOutputDir = document.getElementById('douyinBatchOutputDir');
+    const btnSelectDouyinBatchDir = document.getElementById('btnSelectDouyinBatchDir');
+    const btnClearDouyinBatchDir = document.getElementById('btnClearDouyinBatchDir');
+
+    // Initialize custom directory from localStorage
+    if (douyinBatchOutputDir) {
+        const savedDir = localStorage.getItem('download_output_dir');
+        if (savedDir) {
+            douyinBatchOutputDir.value = savedDir;
+        }
+    }
+
+    if (btnSelectDouyinBatchDir && douyinBatchOutputDir) {
+        btnSelectDouyinBatchDir.addEventListener('click', async () => {
+            const path = await selectDirectory('Chọn thư mục lưu video tải hàng loạt');
+            if (path) {
+                douyinBatchOutputDir.value = path;
+                if (downloadOutputDir) downloadOutputDir.value = path;
+                localStorage.setItem('download_output_dir', path);
+                showToast('Đã chọn thư mục lưu: ' + path, 'info');
+            }
+        });
+    }
+
+    if (btnClearDouyinBatchDir && douyinBatchOutputDir) {
+        btnClearDouyinBatchDir.addEventListener('click', () => {
+            douyinBatchOutputDir.value = '';
+            if (downloadOutputDir) downloadOutputDir.value = '';
+            localStorage.removeItem('download_output_dir');
+            showToast('Đã đặt lại thư mục lưu về mặc định (/downloads)', 'info');
+        });
+    }
+
+    const douyinVideoSearchInput = document.getElementById('douyinVideoSearchInput');
+    const douyinFilterSelect = document.getElementById('douyinFilterSelect');
+    const douyinSortSelect = document.getElementById('douyinSortSelect');
 
     const douyinBatchProgressBox = document.getElementById('douyinBatchProgressBox');
     const douyinBatchProgressText = document.getElementById('douyinBatchProgressText');
@@ -7708,18 +7922,14 @@ function initDouyinChannelDownloader() {
     const douyinChannelGrid = document.getElementById('douyinChannelGrid');
     const douyinChannelEmptyPlaceholder = document.getElementById('douyinChannelEmptyPlaceholder');
 
-    // 1. Sub-tab toggle
+    let currentScannedChannelInfo = {};
+    let isDouyinBatchDownloading = false;
+
+    // 1. Sub-tab toggle (Glassmorphic Segmented Pill Switcher)
     if (tabDownloadSingle && tabDownloadChannel && sectionDownloadSingle && sectionDownloadChannel) {
         tabDownloadSingle.addEventListener('click', () => {
             tabDownloadSingle.classList.add('active');
-            tabDownloadSingle.style.borderColor = '#38bdf8';
-            tabDownloadSingle.style.color = '#38bdf8';
-            tabDownloadSingle.style.background = 'rgba(56, 189, 248, 0.1)';
-
             tabDownloadChannel.classList.remove('active');
-            tabDownloadChannel.style.borderColor = '#334155';
-            tabDownloadChannel.style.color = '#94a3b8';
-            tabDownloadChannel.style.background = 'transparent';
 
             sectionDownloadSingle.style.display = 'block';
             sectionDownloadChannel.style.display = 'none';
@@ -7727,14 +7937,7 @@ function initDouyinChannelDownloader() {
 
         tabDownloadChannel.addEventListener('click', () => {
             tabDownloadChannel.classList.add('active');
-            tabDownloadChannel.style.borderColor = '#a855f7';
-            tabDownloadChannel.style.color = '#c084fc';
-            tabDownloadChannel.style.background = 'rgba(168, 85, 247, 0.1)';
-
             tabDownloadSingle.classList.remove('active');
-            tabDownloadSingle.style.borderColor = '#334155';
-            tabDownloadSingle.style.color = '#94a3b8';
-            tabDownloadSingle.style.background = 'transparent';
 
             sectionDownloadSingle.style.display = 'none';
             sectionDownloadChannel.style.display = 'block';
@@ -7750,6 +7953,35 @@ function initDouyinChannelDownloader() {
                 showToast('Đã dán liên kết kênh!', 'info');
             } catch (e) {
                 showToast('Không thể đọc clipboard: ' + e.message, 'warning');
+            }
+        });
+    }
+
+    // 2.1. Open Douyin Login Window
+    const btnDouyinOpenLogin = document.getElementById('btnDouyinOpenLogin');
+    if (btnDouyinOpenLogin) {
+        btnDouyinOpenLogin.addEventListener('click', async () => {
+            try {
+                btnDouyinOpenLogin.disabled = true;
+                btnDouyinOpenLogin.innerHTML = `<span>⏳ Đang mở...</span>`;
+                const res = await fetch('/api/download/douyin/open_login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast('🌐 Cửa sổ trình duyệt đang mở. Vui lòng quét mã QR / đăng nhập Douyin (chỉ cần làm 1 lần duy nhất)!', 'success');
+                } else {
+                    showToast('Lỗi: ' + (data.error || ''), 'error');
+                }
+            } catch (e) {
+                showToast('Lỗi kết nối: ' + e.message, 'error');
+            } finally {
+                setTimeout(() => {
+                    btnDouyinOpenLogin.disabled = false;
+                    btnDouyinOpenLogin.innerHTML = `🔑 Đăng Nhập Douyin`;
+                }, 3000);
             }
         });
     }
@@ -7806,7 +8038,6 @@ function initDouyinChannelDownloader() {
                 if (barEl && pct !== undefined) barEl.style.width = `${Math.min(100, Math.max(5, pct))}%`;
                 if (pctEl && pct !== undefined) pctEl.textContent = `${pct}%`;
                 
-                // Trích xuất số lượng video từ text nếu có
                 if (countEl && msg) {
                     const match = msg.match(/(\d+)\s+video/i);
                     if (match) {
@@ -7842,7 +8073,7 @@ function initDouyinChannelDownloader() {
 
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split('\n');
-                    buffer = lines.pop(); // giữ lại phần chưa hoàn chỉnh
+                    buffer = lines.pop();
 
                     for (const line of lines) {
                         const trimmed = line.trim();
@@ -7876,16 +8107,28 @@ function initDouyinChannelDownloader() {
 
                 // Render Channel Info Banner
                 const info = finalData.channel_info || {};
+                currentScannedChannelInfo = info;
                 if (douyinChannelInfoBanner) douyinChannelInfoBanner.style.display = 'block';
                 if (douyinChannelAvatar) douyinChannelAvatar.src = info.avatar || '';
                 if (douyinChannelNickname) douyinChannelNickname.textContent = info.nickname || 'Kênh Douyin';
                 if (douyinChannelSignature) douyinChannelSignature.textContent = info.signature || 'Không có mô tả';
+                
+                const fmtNum = (num) => {
+                    if (!num) return '0';
+                    if (num >= 10000000) return (num / 10000000).toFixed(1) + '千万';
+                    if (num >= 10000) return (num / 10000).toFixed(1) + 'w';
+                    if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+                    return num.toLocaleString();
+                };
+
+                if (douyinChannelFollowersBadge) douyinChannelFollowersBadge.textContent = fmtNum(info.follower_count || 0);
+                if (douyinChannelLikesBadge) douyinChannelLikesBadge.textContent = fmtNum(info.total_favorited || 0);
                 if (douyinChannelVideoCountBadge) douyinChannelVideoCountBadge.textContent = `${scannedDouyinVideos.length} Video`;
 
                 // Render Video Grid
                 renderDouyinVideoGrid();
 
-                showToast(`Đã phân tích thành công ${scannedDouyinVideos.length} video từ kênh!`, 'success');
+                showToast(`Đã phân tích thành công ${scannedDouyinVideos.length} video từ kênh ${info.nickname || ''}!`, 'success');
             } catch (e) {
                 showToast('Lỗi khi phân tích kênh: ' + e.message, 'error');
                 if (douyinChannelEmptyPlaceholder) {
@@ -7901,10 +8144,52 @@ function initDouyinChannelDownloader() {
         });
     }
 
-    // 4. Render Video Grid Function
+    // 4. Filter & Sort Helper
+    function getFilteredAndSortedDouyinVideos() {
+        if (!scannedDouyinVideos || scannedDouyinVideos.length === 0) return [];
+        let list = [...scannedDouyinVideos];
+
+        // Search query
+        const query = (douyinVideoSearchInput?.value || '').trim().toLowerCase();
+        if (query) {
+            list = list.filter(v => (v.title || '').toLowerCase().includes(query));
+        }
+
+        // Filter
+        const filterVal = douyinFilterSelect?.value || 'all';
+        if (filterVal === 'video_only') {
+            list = list.filter(v => !v.is_images);
+        } else if (filterVal === 'images_only') {
+            list = list.filter(v => v.is_images);
+        } else if (filterVal === 'likes_10k') {
+            list = list.filter(v => (v.digg_count || 0) >= 10000);
+        } else if (filterVal === 'likes_100k') {
+            list = list.filter(v => (v.digg_count || 0) >= 100000);
+        } else if (filterVal === 'dur_60s') {
+            list = list.filter(v => (v.duration || 0) >= 60);
+        }
+
+        // Sort
+        const sortVal = douyinSortSelect?.value || 'original';
+        if (sortVal === 'likes_desc') {
+            list.sort((a, b) => (b.digg_count || 0) - (a.digg_count || 0));
+        } else if (sortVal === 'comments_desc') {
+            list.sort((a, b) => (b.comment_count || 0) - (a.comment_count || 0));
+        } else if (sortVal === 'dur_desc') {
+            list.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+        } else if (sortVal === 'dur_asc') {
+            list.sort((a, b) => (a.duration || 0) - (b.duration || 0));
+        }
+
+        return list;
+    }
+
+    // 5. Render Video Grid Function
     function renderDouyinVideoGrid() {
         if (!douyinChannelGrid) return;
         douyinChannelGrid.innerHTML = '';
+
+        const displayVideos = getFilteredAndSortedDouyinVideos();
 
         if (scannedDouyinVideos.length === 0) {
             if (douyinChannelGridContainer) douyinChannelGridContainer.style.display = 'none';
@@ -7919,60 +8204,113 @@ function initDouyinChannelDownloader() {
 
         updateSelectionSummary();
 
-        scannedDouyinVideos.forEach((video, idx) => {
+        if (displayVideos.length === 0) {
+            douyinChannelGrid.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: #94a3b8; font-size: 13px; background: #1e293b; border-radius: 10px; border: 1px dashed #334155;">
+                    🔍 Không tìm thấy video nào phù hợp với bộ lọc hoặc từ khóa tìm kiếm.
+                </div>
+            `;
+            return;
+        }
+
+        displayVideos.forEach((video, idx) => {
             const isSelected = selectedDouyinVideoIds.has(video.aweme_id);
             const card = document.createElement('div');
-            card.className = 'card douyin-video-card';
-            card.style.cssText = `
-                background: #1e293b;
-                border: 1px solid ${isSelected ? '#38bdf8' : '#334155'};
-                border-radius: 10px;
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-                transition: all 0.2s;
-                position: relative;
-            `;
+            card.className = `douyin-reel-card ${isSelected ? 'selected' : ''}`;
 
             const thumb = video.cover_url || '';
+            const isViral = (video.digg_count || 0) >= 100000;
+            const viralBadge = isViral 
+                ? `<span style="background: linear-gradient(135deg, #ef4444, #f59e0b); color: #fff; font-size: 9.5px; font-weight: 800; padding: 2px 6px; border-radius: 4px; box-shadow: 0 2px 6px rgba(239, 68, 68, 0.4); display: flex; align-items: center; gap: 2px;">🔥 Viral</span>`
+                : '';
+
+            const typeBadge = video.is_images 
+                ? `<span style="background: linear-gradient(135deg, #a855f7, #ec4899); color: #fff; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(168,85,247,0.4);">🖼️ ${(video.image_urls || []).length} Ảnh</span>`
+                : `<span style="background: rgba(15, 23, 42, 0.85); color: #38bdf8; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.35); backdrop-filter: blur(4px);">⏱️ ${video.duration_formatted || '00:00'}</span>`;
+
             card.innerHTML = `
-                <div style="position: relative; width: 100%; aspect-ratio: 16/9; background: #0f172a; overflow: hidden;">
-                    <img src="${thumb}" alt="thumb" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none';">
-                    <span style="position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,0.8); color: #fff; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;">
-                        ${video.duration_formatted || '00:00'}
-                    </span>
-                    <label style="position: absolute; top: 6px; left: 6px; background: rgba(15,23,42,0.85); padding: 4px 8px; border-radius: 6px; display: flex; align-items: center; gap: 5px; cursor: pointer;">
-                        <input type="checkbox" class="douyin-item-checkbox" data-id="${video.aweme_id}" ${isSelected ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #38bdf8; cursor: pointer;">
-                        <span style="font-size: 11px; font-weight: 700; color: #38bdf8;">#${idx + 1}</span>
-                    </label>
+                <div class="douyin-reel-thumb-box">
+                    <img src="${thumb}" alt="thumb" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'140\\' fill=\\'%231e293b\\'><rect width=\\'100%\\' height=\\'100%\\'/></svg>';">
+                    <div class="douyin-reel-overlay">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 6px;">
+                            <label style="background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); padding: 3px 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid rgba(51, 65, 85, 0.8);" onclick="event.stopPropagation();">
+                                <input type="checkbox" class="douyin-item-checkbox" data-id="${video.aweme_id}" ${isSelected ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: #38bdf8; cursor: pointer;">
+                                <span style="font-size: 11px; font-weight: 800; color: #38bdf8;">#${idx + 1}</span>
+                            </label>
+                            ${viralBadge}
+                        </div>
+                        <div style="display: flex; justify-content: flex-end;">
+                            ${typeBadge}
+                        </div>
+                    </div>
                 </div>
-                <div style="padding: 12px; flex: 1; display: flex; flex-direction: column; justify-content: space-between;">
-                    <div style="font-size: 12.5px; font-weight: 600; color: #f8fafc; line-height: 1.4; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" title="${video.title}">
+                <div class="douyin-reel-info">
+                    <div class="douyin-reel-title" title="${video.title || 'Video Douyin'}">
                         ${video.title || 'Video Douyin'}
                     </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #334155; padding-top: 8px;">
-                        <span>❤️ ${(video.digg_count || 0).toLocaleString()}</span>
-                        <span>💬 ${(video.comment_count || 0).toLocaleString()}</span>
-                        <a href="${video.url}" target="_blank" style="color: #38bdf8; text-decoration: none; font-weight: 600;">Xem ↗</a>
+                    <div class="douyin-reel-meta">
+                        <span style="display: flex; align-items: center; gap: 4px; color: #f43f5e; font-weight: 600;">
+                            ❤️ ${(video.digg_count || 0).toLocaleString()}
+                        </span>
+                        <span style="display: flex; align-items: center; gap: 4px;">
+                            💬 ${(video.comment_count || 0).toLocaleString()}
+                        </span>
+                        <a href="${video.url}" target="_blank" style="color: #38bdf8; text-decoration: none; font-weight: 700; font-size: 11px; display: inline-flex; align-items: center; gap: 2px;" onclick="event.stopPropagation();">
+                            Xem ↗
+                        </a>
                     </div>
                 </div>
             `;
 
-            // Checkbox change handler
+            // Click entire card to toggle checkbox
+            card.addEventListener('click', (e) => {
+                const chk = card.querySelector('.douyin-item-checkbox');
+                if (chk) {
+                    chk.checked = !chk.checked;
+                    if (chk.checked) {
+                        selectedDouyinVideoIds.add(video.aweme_id);
+                        card.classList.add('selected');
+                    } else {
+                        selectedDouyinVideoIds.delete(video.aweme_id);
+                        card.classList.remove('selected');
+                    }
+                    updateSelectionSummary();
+                }
+            });
+
+            // Direct checkbox change
             const chk = card.querySelector('.douyin-item-checkbox');
             chk?.addEventListener('change', (e) => {
+                e.stopPropagation();
                 const checked = e.target.checked;
                 if (checked) {
                     selectedDouyinVideoIds.add(video.aweme_id);
-                    card.style.borderColor = '#38bdf8';
+                    card.classList.add('selected');
                 } else {
                     selectedDouyinVideoIds.delete(video.aweme_id);
-                    card.style.borderColor = '#334155';
+                    card.classList.remove('selected');
                 }
                 updateSelectionSummary();
             });
 
             douyinChannelGrid.appendChild(card);
+        });
+    }
+
+    // Search, Filter & Sort Event Listeners
+    if (douyinVideoSearchInput) {
+        douyinVideoSearchInput.addEventListener('input', () => {
+            renderDouyinVideoGrid();
+        });
+    }
+    if (douyinFilterSelect) {
+        douyinFilterSelect.addEventListener('change', () => {
+            renderDouyinVideoGrid();
+        });
+    }
+    if (douyinSortSelect) {
+        douyinSortSelect.addEventListener('change', () => {
+            renderDouyinVideoGrid();
         });
     }
 
@@ -7988,31 +8326,56 @@ function initDouyinChannelDownloader() {
         }
     }
 
-    // 5. Select All Checkbox
+    // 6. Select All Checkbox
     if (douyinSelectAllCheckbox) {
         douyinSelectAllCheckbox.addEventListener('change', (e) => {
             const checked = e.target.checked;
+            const currentFiltered = getFilteredAndSortedDouyinVideos();
             if (checked) {
-                selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id));
+                currentFiltered.forEach(v => selectedDouyinVideoIds.add(v.aweme_id));
             } else {
-                selectedDouyinVideoIds.clear();
+                currentFiltered.forEach(v => selectedDouyinVideoIds.delete(v.aweme_id));
             }
             renderDouyinVideoGrid();
         });
     }
 
-    // 6. Open Folder
+    // 7. Open Folder
     if (btnDouyinOpenFolder) {
         btnDouyinOpenFolder.addEventListener('click', () => {
+            const customDir = douyinBatchOutputDir?.value.trim() || '';
+            const channelName = douyinSubfolderCheckbox?.checked ? (currentScannedChannelInfo?.nickname || '') : '';
+            let folderPath = customDir;
+            if (channelName && customDir) {
+                folderPath = `${customDir}/Douyin_${channelName}`;
+            }
             fetch('/api/download/open_folder', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
+                body: JSON.stringify({ folder_path: folderPath })
             });
         });
     }
 
-    // 7. Start Batch Download
+    // 8. Stop Batch Download
+    if (btnStopDouyinBatchDownload) {
+        btnStopDouyinBatchDownload.addEventListener('click', async () => {
+            try {
+                btnStopDouyinBatchDownload.disabled = true;
+                btnStopDouyinBatchDownload.textContent = '⏳ Đang dừng...';
+                await fetch('/api/download/douyin/cancel_batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                showToast('🛑 Đã gửi lệnh dừng tiến trình tải!', 'info');
+            } catch (e) {
+                showToast('Lỗi dừng tải: ' + e.message, 'error');
+            }
+        });
+    }
+
+    // 9. Start Batch Download
     if (btnStartDouyinBatchDownload) {
         btnStartDouyinBatchDownload.addEventListener('click', async () => {
             const selectedList = scannedDouyinVideos.filter(v => selectedDouyinVideoIds.has(v.aweme_id));
@@ -8021,12 +8384,21 @@ function initDouyinChannelDownloader() {
                 return;
             }
 
+            isDouyinBatchDownloading = true;
             btnStartDouyinBatchDownload.disabled = true;
             btnStartDouyinBatchDownload.innerHTML = `<span>⏳ Đang tải hàng loạt...</span>`;
+            if (btnStopDouyinBatchDownload) {
+                btnStopDouyinBatchDownload.style.display = 'inline-flex';
+                btnStopDouyinBatchDownload.disabled = false;
+                btnStopDouyinBatchDownload.textContent = '🛑 DỪNG TẢI';
+            }
             if (douyinBatchProgressBox) douyinBatchProgressBox.style.display = 'block';
             if (douyinBatchProgressBar) douyinBatchProgressBar.style.width = '0%';
             if (douyinBatchProgressText) douyinBatchProgressText.textContent = `Bắt đầu tải ${selectedList.length} video...`;
             if (douyinBatchProgressPct) douyinBatchProgressPct.textContent = '0%';
+
+            const channelName = douyinSubfolderCheckbox?.checked ? (currentScannedChannelInfo?.nickname || '') : '';
+            const customOutputDir = douyinBatchOutputDir?.value.trim() || '';
 
             try {
                 const response = await fetch('/api/download/douyin/batch_download', {
@@ -8034,7 +8406,8 @@ function initDouyinChannelDownloader() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         videos: selectedList,
-                        output_dir: ''
+                        output_dir: customOutputDir,
+                        channel_name: channelName
                     })
                 });
 
@@ -8097,14 +8470,23 @@ function initDouyinChannelDownloader() {
             } catch (e) {
                 showToast('Lỗi kết nối khi tải hàng loạt: ' + e.message, 'error');
             } finally {
+                isDouyinBatchDownloading = false;
                 btnStartDouyinBatchDownload.disabled = false;
                 btnStartDouyinBatchDownload.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>TẢI CÁC VIDEO ĐÃ CHỌN</span>`;
+                if (btnStopDouyinBatchDownload) {
+                    btnStopDouyinBatchDownload.style.display = 'none';
+                    btnStopDouyinBatchDownload.disabled = false;
+                }
             }
         });
     }
 }
 
-window.addEventListener('DOMContentLoaded', initDouyinChannelDownloader);
+try {
+    initDouyinChannelDownloader();
+} catch (e) {
+    console.error("Error initializing Douyin Channel Downloader:", e);
+}
 
 // Initialize Clone Voice Studio
 try {
@@ -9771,8 +10153,8 @@ async function fetchLicenseInfo(sync = false) {
             showToast('🎉 Chào mừng! Gói Dùng Thử 24h miễn phí đã được tự động kích hoạt để bạn bắt đầu trải nghiệm ngay.', 'success');
         }
 
-        // Tự động kiểm tra hiển thị cam kết bản quyền lần đầu / khi có gói mới
-        checkAndShowCopyrightDisclaimer(false, data);
+        // Tự động kiểm tra hiển thị cam kết bản quyền lần đầu tiên khi cài đặt
+        checkAndShowCopyrightDisclaimer();
 
         return data;
     } catch (err) {
@@ -10580,8 +10962,9 @@ if (closeLicenseSuccessBtn) {
     closeLicenseSuccessBtn.addEventListener('click', () => {
         if (licenseSuccessModal) licenseSuccessModal.classList.remove('active');
         celebrationFX.stop();
-        // Kiểm tra và hiển thị cam kết bản quyền sau khi đóng celebration
-        checkAndShowCopyrightDisclaimer(true, currentLicenseState);
+        if (currentLicenseState && currentLicenseState.tier === 'pro' && !currentLicenseState.pro_selected_module) {
+            openProModuleRequiredModal('editor');
+        }
     });
 }
 
@@ -10589,8 +10972,9 @@ if (btnStartUsingLicense) {
     btnStartUsingLicense.addEventListener('click', () => {
         if (licenseSuccessModal) licenseSuccessModal.classList.remove('active');
         celebrationFX.stop();
-        // Bắt buộc hiển thị cam kết bản quyền sau khi mua/kích hoạt gói thành công
-        checkAndShowCopyrightDisclaimer(true, currentLicenseState);
+        if (currentLicenseState && currentLicenseState.tier === 'pro' && !currentLicenseState.pro_selected_module) {
+            openProModuleRequiredModal('editor');
+        }
     });
 }
 
@@ -10599,7 +10983,9 @@ if (licenseSuccessModal) {
         if (e.target === licenseSuccessModal) {
             licenseSuccessModal.classList.remove('active');
             celebrationFX.stop();
-            checkAndShowCopyrightDisclaimer(true, currentLicenseState);
+            if (currentLicenseState && currentLicenseState.tier === 'pro' && !currentLicenseState.pro_selected_module) {
+                openProModuleRequiredModal('editor');
+            }
         }
     });
 }
@@ -10613,36 +10999,25 @@ const chkAgreeCopyrightDisclaimer = document.getElementById('chkAgreeCopyrightDi
 const btnAcceptCopyrightDisclaimer = document.getElementById('btnAcceptCopyrightDisclaimer');
 const btnRejectCopyrightDisclaimer = document.getElementById('btnRejectCopyrightDisclaimer');
 
-function getLicenseSignature(licenseData) {
-    if (!licenseData) return 'unlicensed';
-    return `${licenseData.tier || 'unlicensed'}_${licenseData.expire_epoch || licenseData.created_at || 'sig'}`;
-}
-
-export function checkAndShowCopyrightDisclaimer(forceForNewLicense = false, licenseData = null) {
+export function checkAndShowCopyrightDisclaimer() {
     if (!modalCopyrightDisclaimer) return;
 
-    const lic = licenseData || currentLicenseState;
-    const currentSig = getLicenseSignature(lic);
+    // Chỉ hiển thị 1 lần duy nhất khi cài đặt xong và khởi chạy lần đầu.
+    // Sau khi đã ấn đồng ý (ams_copyright_disclaimer_accepted === 'true'), không bao giờ hiển thị lại nữa.
     const hasAgreedGeneral = localStorage.getItem('ams_copyright_disclaimer_accepted') === 'true';
-    const lastAgreedSig = localStorage.getItem('ams_disclaimer_license_sig');
-
-    // Điều kiện hiển thị:
-    // 1. Lần đầu tiên khi cài app (chưa từng đồng ý cam kết)
-    // 2. Lần đầu tiên sau khi kích hoạt/mua gói mới (currentSig khác lastAgreedSig và đang có gói ACTIVE)
-    // 3. Được ép gọi trực tiếp (forceForNewLicense === true)
-    const isNewPurchasedLicense = lic && lic.is_valid && lic.status === 'ACTIVE' && lic.tier !== 'unlicensed' && lastAgreedSig !== currentSig;
-
-    if (!hasAgreedGeneral || isNewPurchasedLicense || forceForNewLicense) {
-        if (chkAgreeCopyrightDisclaimer) chkAgreeCopyrightDisclaimer.checked = false;
-        if (btnAcceptCopyrightDisclaimer) {
-            btnAcceptCopyrightDisclaimer.disabled = true;
-            btnAcceptCopyrightDisclaimer.style.background = '#334155';
-            btnAcceptCopyrightDisclaimer.style.color = '#64748b';
-            btnAcceptCopyrightDisclaimer.style.cursor = 'not-allowed';
-            btnAcceptCopyrightDisclaimer.style.boxShadow = 'none';
-        }
-        modalCopyrightDisclaimer.style.display = 'flex';
+    if (hasAgreedGeneral) {
+        return;
     }
+
+    if (chkAgreeCopyrightDisclaimer) chkAgreeCopyrightDisclaimer.checked = false;
+    if (btnAcceptCopyrightDisclaimer) {
+        btnAcceptCopyrightDisclaimer.disabled = true;
+        btnAcceptCopyrightDisclaimer.style.background = '#334155';
+        btnAcceptCopyrightDisclaimer.style.color = '#64748b';
+        btnAcceptCopyrightDisclaimer.style.cursor = 'not-allowed';
+        btnAcceptCopyrightDisclaimer.style.boxShadow = 'none';
+    }
+    modalCopyrightDisclaimer.style.display = 'flex';
 }
 
 if (typeof window !== 'undefined') {
@@ -10673,10 +11048,8 @@ if (btnAcceptCopyrightDisclaimer) {
     btnAcceptCopyrightDisclaimer.addEventListener('click', () => {
         if (!chkAgreeCopyrightDisclaimer || !chkAgreeCopyrightDisclaimer.checked) return;
 
-        const currentSig = getLicenseSignature(currentLicenseState);
         localStorage.setItem('ams_copyright_disclaimer_accepted', 'true');
         localStorage.setItem('ams_disclaimer_accepted_at', new Date().toISOString());
-        localStorage.setItem('ams_disclaimer_license_sig', currentSig);
 
         if (modalCopyrightDisclaimer) modalCopyrightDisclaimer.style.display = 'none';
         showToast('✅ Bạn đã xác nhận cam kết bản quyền & miễn trừ trách nhiệm thành công!', 'success');
@@ -11591,6 +11964,13 @@ const appUpdater = {
 
 window.appUpdater = appUpdater;
 appUpdater.init();
+
+// Initialize Batch Queue Studio
+try {
+    initBatchQueueModule();
+} catch (e) {
+    console.warn('Error initializing Batch Queue Module:', e);
+}
 
 
 

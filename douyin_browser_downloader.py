@@ -133,6 +133,45 @@ class DouyinBrowserDownloader:
         self.headless = headless
         os.makedirs(self.profile_dir, exist_ok=True)
 
+    def open_login_window(self):
+        """
+        Mở cửa sổ trình duyệt Edge/Chromium (headless=False) để người dùng quét QR / đăng nhập Douyin 1 lần duy nhất.
+        Phiên đăng nhập và Cookie sẽ được lưu vĩnh viễn trong thư mục temp/douyin_browser_profile.
+        """
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    channel="msedge",
+                    headless=False,
+                    viewport={"width": 1280, "height": 850},
+                    user_agent=DEFAULT_USER_AGENT,
+                    args=["--disable-blink-features=AutomationControlled"]
+                )
+            except Exception:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    headless=False,
+                    viewport={"width": 1280, "height": 850},
+                    user_agent=DEFAULT_USER_AGENT,
+                    args=["--disable-blink-features=AutomationControlled"]
+                )
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto("https://www.douyin.com/", wait_until="domcontentloaded")
+            
+            # Giữ cửa sổ mở để người dùng đăng nhập
+            for _ in range(120):
+                if context.pages:
+                    time.sleep(1)
+                else:
+                    break
+            try:
+                context.close()
+            except Exception:
+                pass
+        return True
+
     def scan_channel_videos(self, channel_url_or_sec_uid, limit=30, progress_cb=None):
         """
         Cào danh sách video từ 1 kênh Douyin bằng cách lắng nghe API /aweme/v1/web/aweme/post/.
@@ -229,11 +268,11 @@ class DouyinBrowserDownloader:
                     if not aweme_id or aweme_id in seen_aweme_ids:
                         continue
                     
-                    # Trích xuất thông tin video
+                    # Trích xuất thông tin video & bài viết
                     desc = str(item.get("desc") or "Video Douyin").strip()
                     video_obj = item.get("video") or {}
                     
-                    # Cover Thumbnail
+                    # Cover Thumbnail HD
                     cover_list = (
                         (video_obj.get("cover") or {}).get("url_list") or
                         (video_obj.get("origin_cover") or {}).get("url_list") or
@@ -241,13 +280,37 @@ class DouyinBrowserDownloader:
                     )
                     cover_url = cover_list[0] if cover_list else ""
 
-                    # Direct MP4 URL
-                    play_addr_list = (video_obj.get("play_addr") or {}).get("url_list") or []
+                    # Direct MP4 URL (Trích xuất luồng 1080p/Bitrate cao nhất)
                     play_url = ""
-                    if play_addr_list:
-                        play_url = play_addr_list[-1]
-                        if "playwm" in play_url:
-                            play_url = play_url.replace("playwm", "play")
+                    bit_rate_list = video_obj.get("bit_rate") or []
+                    if bit_rate_list and isinstance(bit_rate_list, list):
+                        try:
+                            # Sắp xếp theo bitrate giảm dần để lấy chất lượng cao nhất
+                            bit_rate_sorted = sorted(bit_rate_list, key=lambda b: int(b.get("bit_rate") or 0), reverse=True)
+                            for b_item in bit_rate_sorted:
+                                p_addrs = (b_item.get("play_addr") or {}).get("url_list") or []
+                                if p_addrs:
+                                    play_url = p_addrs[-1].replace("playwm", "play")
+                                    break
+                        except Exception:
+                            pass
+
+                    if not play_url:
+                        play_addr_list = (video_obj.get("play_addr") or {}).get("url_list") or []
+                        if play_addr_list:
+                            play_url = play_addr_list[-1].replace("playwm", "play")
+
+                    # Hỗ trợ bài đăng Album Ảnh / Slide (Photo Note)
+                    is_images = bool(item.get("images") or item.get("aweme_type") == 68)
+                    image_urls = []
+                    if is_images:
+                        raw_images = item.get("images") or []
+                        for img_obj in raw_images:
+                            u_list = img_obj.get("url_list") or []
+                            if u_list:
+                                image_urls.append(u_list[-1])
+                        if not cover_url and image_urls:
+                            cover_url = image_urls[0]
 
                     duration_ms = int(video_obj.get("duration") or 0)
                     duration_sec = duration_ms // 1000 if duration_ms > 1000 else duration_ms
@@ -256,12 +319,18 @@ class DouyinBrowserDownloader:
                     digg_count = stats.get("digg_count", 0)
                     comment_count = stats.get("comment_count", 0)
                     share_count = stats.get("share_count", 0)
+                    collect_count = stats.get("collect_count", 0)
 
                     author_obj = item.get("author") or {}
-                    if author_obj.get("nickname") and channel_info["nickname"] == "Kênh Douyin":
-                        channel_info["nickname"] = author_obj.get("nickname")
-                        channel_info["avatar"] = ((author_obj.get("avatar_thumb") or {}).get("url_list") or [""])[0]
-                        channel_info["signature"] = author_obj.get("signature", "")
+                    if author_obj:
+                        if author_obj.get("nickname") and channel_info["nickname"] == "Kênh Douyin":
+                            channel_info["nickname"] = author_obj.get("nickname")
+                            channel_info["avatar"] = ((author_obj.get("avatar_thumb") or {}).get("url_list") or [""])[0]
+                            channel_info["signature"] = author_obj.get("signature", "")
+                        if "follower_count" not in channel_info or not channel_info["follower_count"]:
+                            channel_info["follower_count"] = author_obj.get("follower_count") or stats.get("follower_count") or 0
+                            channel_info["total_favorited"] = author_obj.get("total_favorited") or stats.get("total_favorited") or 0
+                            channel_info["aweme_count"] = author_obj.get("aweme_count") or 0
 
                     video_item = {
                         "aweme_id": aweme_id,
@@ -270,11 +339,14 @@ class DouyinBrowserDownloader:
                         "url": f"https://www.douyin.com/video/{aweme_id}",
                         "download_url": play_url,
                         "cover_url": cover_url,
+                        "is_images": is_images,
+                        "image_urls": image_urls,
                         "duration": duration_sec,
                         "duration_formatted": f"{duration_sec // 60:02d}:{duration_sec % 60:02d}",
                         "digg_count": digg_count,
                         "comment_count": comment_count,
                         "share_count": share_count,
+                        "collect_count": collect_count,
                         "author": author_obj.get("nickname", channel_info["nickname"]),
                         "create_time": item.get("create_time", int(time.time()))
                     }
@@ -312,7 +384,7 @@ class DouyinBrowserDownloader:
                 page.keyboard.press("Escape")
                 page.mouse.click(962, 198)
                 page.evaluate("""() => {
-                    const closeBtns = document.querySelectorAll('[class*="close"], [class*="login-mask"] svg, .YoNA2Hyj');
+                    const closeBtns = document.querySelectorAll('[class*="close"], [class*="login-mask"] svg, .YoNA2Hyj, .dy-account-close');
                     closeBtns.forEach(b => { try { b.click(); } catch(e){} });
                 }""")
             except Exception:
@@ -324,8 +396,8 @@ class DouyinBrowserDownloader:
             except Exception:
                 pass
 
-            # Vòng lặp cuộn trang & kích hoạt phân trang đa tầng
-            max_scrolls = 60 if limit is None or limit > 50 else math.ceil(limit / 10) + 12
+            # Vòng lặp cuộn trang Human-like & trigger đa tầng
+            max_scrolls = 80 if limit is None or limit > 50 else math.ceil(limit / 8) + 12
             no_new_count = 0
             prev_len = len(collected_videos)
 
@@ -339,54 +411,44 @@ class DouyinBrowserDownloader:
                     channel_name_str = f" từ kênh [{channel_info['nickname']}]" if channel_info.get("nickname") and channel_info["nickname"] != "Kênh Douyin" else ""
                     progress_cb(pct, f"Đang phân tích danh sách{channel_name_str}... Đã tìm thấy {current_count} video.")
 
-                # Cơ chế 1: Gọi Direct In-Browser Fetch với max_cursor tiếp theo (chuẩn xác & siêu tốc)
-                if pagination_state["last_url"] and pagination_state["max_cursor"] and pagination_state["has_more"] == 1:
-                    try:
-                        parsed = urllib.parse.urlparse(pagination_state["last_url"])
-                        qs = urllib.parse.parse_qs(parsed.query)
-                        qs["max_cursor"] = [str(pagination_state["max_cursor"])]
-                        qs["count"] = ["18"]
-                        new_query = urllib.parse.urlencode(qs, doseq=True)
-                        next_fetch_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
-
-                        fetch_js = f"""async () => {{
-                            try {{
-                                const res = await window.fetch('{next_fetch_url}', {{
-                                    credentials: 'include',
-                                    headers: {{ 'accept': 'application/json, text/plain, */*' }}
-                                }});
-                                return await res.json();
-                            }} catch(e) {{
-                                return null;
-                            }}
-                        }}"""
-                        fetch_data = page.evaluate(fetch_js)
-                        if fetch_data and isinstance(fetch_data, dict) and "aweme_list" in fetch_data:
-                            pagination_state["max_cursor"] = fetch_data.get("max_cursor", 0)
-                            pagination_state["has_more"] = fetch_data.get("has_more", 0)
-                            process_aweme_list(fetch_data.get("aweme_list", []))
-                    except Exception:
-                        pass
-
-                # Cơ chế 2: Kích hoạt sự kiện cuộn đa tầng trên container nội dung của Douyin
+                # Kích hoạt sự kiện cuộn đa tầng đồng bộ trên các container nội dung của Douyin & gỡ bỏ lớp chặn
                 try:
+                    # 1. Gỡ bỏ popup login/mask và cuộn DOM
                     page.evaluate("""() => {
-                        const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"]');
+                        // Gỡ bỏ mọi modal login hoặc lớp mask làm chặn sự kiện cuộn
+                        const blockers = document.querySelectorAll('[class*="login-mask"], [class*="login-guide"], [class*="semi-modal"], [class*="YoNA2Hyj"], [class*="dy-account-close"]');
+                        blockers.forEach(b => {
+                            try { b.click(); } catch(e){}
+                            try { b.remove(); } catch(e){}
+                        });
+                        document.body.style.overflow = 'auto';
+                        document.documentElement.style.overflow = 'auto';
+
+                        // Kích hoạt sự kiện cuộn trên toàn bộ các container tiềm năng
+                        const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"], #slidelist');
                         containers.forEach(c => {
-                            c.scrollTop += 3500;
+                            c.scrollTop += 3200;
                             c.dispatchEvent(new Event('scroll', { bubbles: true }));
                         });
-                        window.scrollBy(0, 3500);
+                        window.scrollBy(0, 3200);
                         window.dispatchEvent(new Event('scroll', { bubbles: true }));
                     }""")
-                    page.mouse.move(640, 500)
-                    page.mouse.wheel(0, 3500)
-                    page.keyboard.press("PageDown")
-                    page.keyboard.press("End")
+                    
+                    # 2. Giả lập chuột lăn tự nhiên tại nhiều vị trí
+                    jitter_x = 640 + random.randint(-60, 60)
+                    jitter_y = 520 + random.randint(-60, 60)
+                    page.mouse.move(jitter_x, jitter_y)
+                    page.mouse.wheel(0, 3200 + random.randint(-200, 500))
+                    
+                    # 3. Giả lập phím PageDown & End
+                    if scroll_idx % 2 == 0:
+                        page.keyboard.press("PageDown")
+                    else:
+                        page.keyboard.press("End")
                 except Exception:
                     pass
 
-                time.sleep(1.5 + random.uniform(0.2, 0.4))
+                time.sleep(1.3 + random.uniform(0.2, 0.4))
 
                 # Kiểm tra nếu không có video nào sau 6 lượt cuộn đầu tiên -> Dừng sớm
                 if current_count == 0 and scroll_idx >= 6:
@@ -398,16 +460,16 @@ class DouyinBrowserDownloader:
                         # Cuộn ngược nhẹ rồi cuộn mạnh xuống đáy để ép Douyin kích hoạt Infinite Pagination
                         try:
                             page.evaluate("""() => {
-                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"]');
+                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
                                 containers.forEach(c => {
-                                    c.scrollTop -= 600;
+                                    c.scrollTop -= 1000;
                                     c.dispatchEvent(new Event('scroll', { bubbles: true }));
                                 });
-                                window.scrollBy(0, -600);
+                                window.scrollBy(0, -1000);
                             }""")
-                            time.sleep(0.5)
+                            time.sleep(0.4)
                             page.evaluate("""() => {
-                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"]');
+                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
                                 containers.forEach(c => {
                                     c.scrollTop = c.scrollHeight;
                                     c.dispatchEvent(new Event('scroll', { bubbles: true }));
@@ -416,17 +478,54 @@ class DouyinBrowserDownloader:
                                 window.dispatchEvent(new Event('scroll', { bubbles: true }));
                             }""")
                             page.mouse.click(640, 500)
-                            page.mouse.wheel(0, 4000)
+                            page.mouse.wheel(0, 4500)
                             page.keyboard.press("End")
-                            time.sleep(1.5)
+                            time.sleep(1.2)
                         except Exception:
                             pass
-                        if len(collected_videos) == prev_len and no_new_count >= 8:
-                            if pagination_state["has_more"] == 0 or len(collected_videos) > 0:
-                                break
+                        if len(collected_videos) == prev_len and no_new_count >= 5:
+                            break
                 else:
                     no_new_count = 0
                     prev_len = len(collected_videos)
+
+            # --- GIAI ĐOẠN 2: QUÉT CÁC BỘ SƯU TẬP (合集 - COLLECTIONS / MIXES) CỦA KÊNH ---
+            if (limit is None or len(collected_videos) < limit):
+                if progress_cb: progress_cb(75, "Đang quét thêm các Bộ sưu tập (合集) và Tuyển tập video của kênh...")
+                try:
+                    # Chuyển sang tab 合集 và tìm danh sách ID bộ sưu tập
+                    mix_ids = page.evaluate("""async () => {
+                        const allTabs = Array.from(document.querySelectorAll('div, span, button'));
+                        const hejiTab = allTabs.find(el => el.innerText && el.innerText.trim() === '合集' && el.className.includes('semi-tabs-tab'));
+                        if (hejiTab) hejiTab.click();
+                        await new Promise(r => setTimeout(r, 1800));
+
+                        const links = Array.from(document.querySelectorAll('a[href*="collection"], a[href*="mix"], [class*="mix"] a')).map(a => a.href);
+                        const ids = [];
+                        links.forEach(l => {
+                            const m = l.match(/collection\\/(\\d+)/) || l.match(/mix_id=(\\d+)/);
+                            if (m && !ids.includes(m[1])) ids.push(m[1]);
+                        });
+                        return ids;
+                    }""") or []
+
+                    if mix_ids:
+                        for m_idx, m_id in enumerate(mix_ids):
+                            if limit and len(collected_videos) >= limit:
+                                break
+                            if progress_cb:
+                                progress_cb(80 + int((m_idx + 1) / len(mix_ids) * 15), f"Đang trích xuất Bộ sưu tập {m_idx + 1}/{len(mix_ids)}... (Hiện có {len(collected_videos)} video)")
+                            
+                            mix_data = page.evaluate(f"""async () => {{
+                                try {{
+                                    const res = await window.fetch('/aweme/v1/web/mix/aweme/?device_platform=webapp&aid=6383&channel=channel_pc_web&mix_id={m_id}&cursor=0&count=50');
+                                    return await res.json();
+                                }} catch(e) {{ return null; }}
+                            }}""")
+                            if mix_data and mix_data.get("aweme_list"):
+                                process_aweme_list(mix_data["aweme_list"])
+                except Exception:
+                    pass
 
             context.close()
 
@@ -707,36 +806,92 @@ def download_stream_file(video_url, output_path, progress_cb=None, num_threads=4
     return output_path
 
 
-def download_channel_batch(video_list, output_dir=None, max_workers=2, progress_cb=None):
+BATCH_CANCEL_EVENT = threading.Event()
+
+def cancel_active_batch_download():
+    """Kích hoạt cờ hủy tải hàng loạt."""
+    BATCH_CANCEL_EVENT.set()
+    return True
+
+def reset_batch_cancel_event():
+    """Xóa cờ hủy tải."""
+    BATCH_CANCEL_EVENT.clear()
+
+
+def download_channel_batch(video_list, output_dir=None, channel_name=None, max_workers=3, progress_cb=None):
     """
-    Tải hàng loạt danh sách video Douyin qua ThreadPoolExecutor (2-3 workers).
+    Tải hàng loạt danh sách video Douyin qua ThreadPoolExecutor (2-4 workers) với cơ chế hủy tức thì.
+    Hỗ trợ cả Video MP4 1080p và Album ảnh / Slide Photo Notes.
     """
+    reset_batch_cancel_event()
+
     if not output_dir:
         output_dir = DOWNLOAD_DIR
+        
+    if channel_name:
+        clean_ch_name = sanitize_filename(channel_name, max_len=50)
+        output_dir = os.path.join(output_dir, f"Douyin_{clean_ch_name}")
+
     os.makedirs(output_dir, exist_ok=True)
 
     total_count = len(video_list)
     results = []
     completed_count = 0
+    lock = threading.Lock()
 
     def _worker(idx, video_info):
         nonlocal completed_count
+        if BATCH_CANCEL_EVENT.is_set():
+            return None
+
         vid_id = video_info.get("aweme_id") or f"vid_{idx}"
         title = video_info.get("clean_title") or f"video_{vid_id}"
+
+        # 1. Nếu là Album Ảnh / Slide Photo Note
+        if video_info.get("is_images") and video_info.get("image_urls"):
+            album_dir_name = f"{idx+1:03d}_{title}_Album"
+            album_path = os.path.join(output_dir, album_dir_name)
+            os.makedirs(album_path, exist_ok=True)
+            
+            img_urls = video_info.get("image_urls") or []
+            saved_images = []
+            for img_idx, img_u in enumerate(img_urls):
+                if BATCH_CANCEL_EVENT.is_set():
+                    break
+                img_file_path = os.path.join(album_path, f"photo_{img_idx+1:02d}.jpg")
+                if not os.path.exists(img_file_path):
+                    try:
+                        r = requests.get(img_u, headers={"User-Agent": DEFAULT_USER_AGENT, "Referer": "https://www.douyin.com/"}, timeout=12)
+                        if r.status_code == 200:
+                            with open(img_file_path, 'wb') as im_f:
+                                im_f.write(r.content)
+                            saved_images.append(img_file_path)
+                    except Exception:
+                        pass
+                else:
+                    saved_images.append(img_file_path)
+
+            with lock:
+                completed_count += 1
+                if progress_cb:
+                    progress_cb(completed_count, total_count, video_info, album_path, "album_success")
+            return album_path
+
+        # 2. Nếu là Video MP4
         file_name = f"{idx+1:03d}_{title}.mp4"
         file_path = os.path.join(output_dir, file_name)
 
-        # Tránh ghi đè nếu đã tồn tại và đủ dung lượng
+        # Tránh tải lại nếu file đã tồn tại và đủ dung lượng
         if os.path.exists(file_path) and os.path.getsize(file_path) > 100000:
-            completed_count += 1
-            if progress_cb:
-                progress_cb(completed_count, total_count, video_info, file_path, "existed")
+            with lock:
+                completed_count += 1
+                if progress_cb:
+                    progress_cb(completed_count, total_count, video_info, file_path, "existed")
             return file_path
 
-        # Lấy URL tải
+        # Lấy URL tải trực tiếp
         dl_url = video_info.get("download_url")
         if not dl_url:
-            # Lấy link mới nếu link cũ rỗng
             try:
                 crawler = DouyinBrowserDownloader()
                 single_info = crawler.get_single_video_info(video_info.get("url") or vid_id)
@@ -744,25 +899,37 @@ def download_channel_batch(video_list, output_dir=None, max_workers=2, progress_
             except Exception:
                 pass
 
-        if not dl_url:
+        if not dl_url or BATCH_CANCEL_EVENT.is_set():
             return None
 
-        # Tải stream
-        time.sleep(random.uniform(0.3, 0.8)) # Delay nhẹ chống rate-limit
+        # Tải stream video đa kết nối
+        time.sleep(random.uniform(0.2, 0.6))
         try:
             download_stream_file(dl_url, file_path)
-            completed_count += 1
-            if progress_cb:
-                progress_cb(completed_count, total_count, video_info, file_path, "success")
+            if BATCH_CANCEL_EVENT.is_set():
+                if os.path.exists(file_path):
+                    try: os.remove(file_path)
+                    except Exception: pass
+                return None
+
+            with lock:
+                completed_count += 1
+                if progress_cb:
+                    progress_cb(completed_count, total_count, video_info, file_path, "success")
             return file_path
         except Exception as e:
-            if progress_cb:
-                progress_cb(completed_count, total_count, video_info, None, f"error: {str(e)}")
+            with lock:
+                if progress_cb:
+                    progress_cb(completed_count, total_count, video_info, None, f"error: {str(e)}")
             return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_worker, i, v) for i, v in enumerate(video_list)]
+    workers_num = max(1, min(max_workers, 4))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers_num) as executor:
+        futures = {executor.submit(_worker, i, v): i for i, v in enumerate(video_list)}
         for f in concurrent.futures.as_completed(futures):
+            if BATCH_CANCEL_EVENT.is_set():
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
             res = f.result()
             if res:
                 results.append(res)

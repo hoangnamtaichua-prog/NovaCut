@@ -20,6 +20,8 @@ def start_generation():
     manual_srt = data.get('manualSrt')
     dubbing = data.get('dubbing', {})
     subtitles = data.get('subtitles', [])
+    subtitles_enabled = bool(data.get('subtitles_enabled', True))
+    subtitle_style = data.get('subtitle_style') or {}
     blur_original_subtitles = data.get('blur_original_subtitles', False)
     blur_intensity = data.get('blur_intensity', 15)
     original_srt_path = data.get('original_srt_path', '')
@@ -353,13 +355,29 @@ def start_generation():
                 v_filters.append(f"[{curr_v}]scale=3840:2160:force_original_aspect_ratio=decrease,pad=3840:2160:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
                 curr_v = "v_aspect"
 
-            # 3.4 Subtitles (Hardcode)
-            srt_target = temp_srt_path or manual_srt or original_srt_path
-            
-            if srt_target and os.path.exists(srt_target):
-                escaped_srt = srt_target.replace('\\', '/').replace(':', '\\:')
-                v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=25'[v_sub]")
-                curr_v = "v_sub"
+            # 3.4 Subtitles (Hardcode / Burn-In)
+            if subtitles_enabled:
+                srt_target = temp_srt_path or manual_srt or original_srt_path
+                if srt_target and os.path.exists(srt_target):
+                    escaped_srt = srt_target.replace('\\', '/').replace(':', '\\:')
+                    font_name = str(subtitle_style.get('font', 'Arial')).replace("'", "").replace('"', '')
+                    font_size = int(subtitle_style.get('size', 18))
+                    def hex_to_ass(hex_val, default='&H00FFFFFF'):
+                        if not hex_val: return default
+                        h = str(hex_val).lstrip('#')
+                        if len(h) == 6:
+                            return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+                        return default
+                    primary_col = hex_to_ass(subtitle_style.get('color'), '&H00FFFFFF')
+                    outline_col = hex_to_ass(subtitle_style.get('outline_color'), '&H00000000')
+                    outline_w = int(subtitle_style.get('outline', 2))
+                    bold_flag = 1 if subtitle_style.get('bold') else 0
+                    italic_flag = 1 if subtitle_style.get('italic') else 0
+                    style_str = f"Fontname={font_name},Fontsize={font_size},PrimaryColour={primary_col},OutlineColour={outline_col},BorderStyle=1,Outline={outline_w},Bold={bold_flag},Italic={italic_flag},Alignment=2,MarginV=25"
+                    v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='{style_str}'[v_sub]")
+                    curr_v = "v_sub"
+            else:
+                yield "data: ℹ️ [Phụ đề] Tùy chọn chèn phụ đề đang TẮT -> Video xuất ra sẽ KHÔNG có phụ đề.\n\n"
 
             # Inputs initialization
             inputs = ['-i', input_video]
@@ -706,6 +724,13 @@ def ocr_scan_preview_boxes():
 
     return Response(generate(), mimetype='text/event-stream')
 
+@video_edit_bp.route('/api/review/styles', methods=['GET'])
+def review_get_styles():
+    import review_styles
+    return jsonify({
+        'styles': review_styles.REVIEW_STYLES
+    })
+
 @video_edit_bp.route('/api/review/generate_prompt', methods=['POST'])
 def review_generate_prompt():
     import license_manager
@@ -714,13 +739,21 @@ def review_generate_prompt():
         return jsonify({'error': perm_msg}), 403
 
     import review_phim
-    data = request.json
+    data = request.json or {}
     video_path = data.get('video_path')
     srt_path = data.get('srt_path')
+    review_style = data.get('review_style', 'dramatic')
+    custom_style_prompt = data.get('custom_style_prompt', '')
+    
     if not video_path or not os.path.exists(video_path):
         return jsonify({'error': 'Video path is invalid or missing'}), 400
     
-    prompt, err = review_phim.extract_prompt_from_video(video_path, custom_srt_path=srt_path)
+    prompt, err = review_phim.extract_prompt_from_video(
+        video_path,
+        custom_srt_path=srt_path,
+        review_style=review_style,
+        custom_style_prompt=custom_style_prompt
+    )
     if err:
         return jsonify({'error': err}), 400
         
