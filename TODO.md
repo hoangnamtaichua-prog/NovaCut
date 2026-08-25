@@ -8,7 +8,18 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
-*(Hiện tại chưa có thay đổi mới đang chờ. Mọi cải tiến đã được đóng gói và phát hành vào v1.2.0).*
+*(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
+
+1. **Khắc Phục Triệt Để Lỗi Treo Auto-Updater (% Nhảy 1 -> 2 -> 1 Rồi Đứng Im):**
+   - **Nguyên nhân gốc rễ (Root Cause):**
+     1. Gói cập nhật `patch.zip` trước đây vô tình chứa 164 file audio tạm trong `web/outputs/`, `tts_cache/` và bộ cài Edge WebView2 nặng >60MB, khiến dung lượng bị phình to lên 51.21 MB. Khi tải file dung lượng lớn từ GitHub Release CDN qua mạng quốc tế, stream kết nối bị ngắt (`urllib3.exceptions.IncompleteRead: IncompleteRead at 2.18MB`).
+     2. Hàm `download_file_direct` cũ không có cơ chế tự động thử lại (Retry) và tiếp tục tải từ byte bị đứt (Resume HTTP Range), khiến quá trình tải bị lỗi và văng exception.
+     3. Thiếu cơ chế khóa đơn luồng (Thread Lock / Singleton Guard) trên backend và disable click pointer-events trên frontend: khi người dùng bấm nút nhiều lần hoặc khi bắt đầu lại, một thread mới được sinh ra và reset `percent = 0`, dẫn tới hiện tượng phần trăm nhảy lên 1%, 2% rồi tụt về 1% và treo.
+   - **Giải pháp xử lý triệt để:**
+     1. Tinh chỉnh bộ lọc đóng gói `scripts/publish_patch.py`: loại bỏ 100% file rác, file tạm audio `*.wav`, `*.mp3`, `outputs/`, `tts_cache/` và `.exe`, giảm dung lượng `patch.zip` từ 51.21 MB xuống chỉ còn **7.60 MB** siêu nhẹ.
+     2. Nâng cấp `updater.py` với cơ chế tải luồng 2 pha (2-Phase 302 Redirect): bóc tách URL Storage sạch, hỗ trợ tải tiếp HTTP `Range: bytes=...`, tự động thử lại 5 lần nếu chập chờn mạng và tăng kích thước chunk lên 256KB.
+     3. Thêm khóa an toàn đa luồng `_UPDATE_THREAD_LOCK` trong `updater.py` và vô hiệu hóa `pointer-events: none` cho nút bấm trên giao diện `web/app.js` khi đang tải.
+   - **Kết quả kiểm thử:** Quá trình tải và áp dụng bản vá chạy trơn tru từ 0% -> 95% -> 98% -> 100% trong 1-2 giây, tự động giải nén và khởi động lại hoàn hảo.
 
 ---
 
