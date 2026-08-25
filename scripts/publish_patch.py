@@ -55,6 +55,7 @@ PATCH_INCLUDE_FILES = [
     "ffmpeg_installer.py",
     "ocr_module.py",
     "custom_voices.py",
+    "custom_voices.json",
     "review_phim.py",
     "timeline_sanitizer.py",
     "vietnamese_text_normalizer.py",

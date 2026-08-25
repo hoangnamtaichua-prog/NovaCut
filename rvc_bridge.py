@@ -116,7 +116,8 @@ print("SUCCESS")
             f.write(py_script)
 
         cmd = [rvc_python, temp_script]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", creationflags=0x08000000 if os.name == 'nt' else 0)
+        import ffmpeg_installer
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", **ffmpeg_installer.get_stealth_subprocess_kwargs())
 
         if proc.returncode != 0 or not os.path.exists(intermediate_wav):
             err_msg = proc.stderr.strip() or proc.stdout.strip()
@@ -124,10 +125,9 @@ print("SUCCESS")
 
         # Convert to MP3 if needed
         if is_mp3:
-            import ffmpeg_installer
             ff = ffmpeg_installer.ensure_ffmpeg()
             conv_cmd = [ff, '-y', '-i', intermediate_wav, '-ar', '44100', '-b:a', '192k', output_audio]
-            subprocess.run(conv_cmd, capture_output=True, check=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            subprocess.run(conv_cmd, capture_output=True, check=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
             if os.path.exists(intermediate_wav):
                 try:
                     os.remove(intermediate_wav)

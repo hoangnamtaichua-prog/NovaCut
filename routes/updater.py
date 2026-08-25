@@ -25,17 +25,7 @@ def get_progress_api():
 @updater_bp.route('/api/system/restart', methods=['POST'])
 def restart_app_api():
     """Khởi động lại ứng dụng tự động."""
-    import threading
-    import time
-    import os
-    import sys
-    
-    def delayed_restart():
-        time.sleep(1)
-        # Sử dụng os.execl để thay thế tiến trình hiện tại bằng một tiến trình Python mới
-        os.execl(sys.executable, sys.executable, *sys.argv)
-        
-    threading.Thread(target=delayed_restart).start()
+    updater.restart_application()
     return jsonify({"success": True, "message": "Đang khởi động lại ứng dụng..."})
 
 

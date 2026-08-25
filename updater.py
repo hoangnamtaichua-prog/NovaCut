@@ -401,26 +401,30 @@ def perform_auto_update_async(download_url_or_file_id, target_version):
             _update_progress_state["message"] = "Đang cài đặt và cập nhật các tệp mới..."
             apply_patch_zip(temp_zip, target_version=target_version)
 
-            # 2.5 Cài đặt các thư viện mới (nếu có thay đổi requirements.txt)
-            _update_progress_state["message"] = "Đang kiểm tra và cài đặt thư viện tự động (nếu có)..."
-            req_path = os.path.join(ROOT_DIR, 'requirements.txt')
-            if os.path.exists(req_path):
-                try:
-                    subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "-r", req_path],
-                        cwd=ROOT_DIR,
-                        check=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        creationflags=0x08000000 if os.name == 'nt' else 0
-                    )
-                except Exception as e:
-                    print(f"Lỗi cài đặt pip ẩn: {e}")
+            # 2.5 Cài đặt các thư viện mới (CHỈ chạy khi ở môi trường Python source code, KHÔNG chạy trên EXE đóng băng)
+            if not getattr(sys, 'frozen', False):
+                req_path = os.path.join(ROOT_DIR, 'requirements.txt')
+                if os.path.exists(req_path):
+                    _update_progress_state["message"] = "Đang kiểm tra và cập nhật thư viện Python..."
+                    try:
+                        import ffmpeg_installer
+                        stealth_kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs()
+                        subprocess.run(
+                            [sys.executable, "-m", "pip", "install", "-r", req_path],
+                            cwd=ROOT_DIR,
+                            check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=15,
+                            **stealth_kwargs
+                        )
+                    except Exception as e:
+                        print(f"Lỗi kiểm tra pip: {e}")
 
             # 3. Hoàn thành
             _update_progress_state["status"] = "completed"
             _update_progress_state["percent"] = 100
-            _update_progress_state["message"] = f"🎉 Cập nhật lên v{target_version} thành công! Đang khởi động lại ứng dụng..."
+            _update_progress_state["message"] = f"🎉 Cập nhật lên v{target_version} thành công! Đang tự động khởi động lại..."
             
             # 4. Tự động khởi động lại sau 1.5 giây
             restart_application()

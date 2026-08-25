@@ -227,8 +227,10 @@ def main():
     def handle_exit_signal(sig, frame):
         print("\n[NovaCut] Dang dong ung dung va giai phong toan bo tien trinh con...")
         try:
-            subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
-            subprocess.run(['taskkill', '/F', '/IM', 'movie_summary_cli.exe'], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            import ffmpeg_installer
+            stealth_kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs()
+            subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, **stealth_kwargs)
+            subprocess.run(['taskkill', '/F', '/IM', 'movie_summary_cli.exe'], capture_output=True, **stealth_kwargs)
         except Exception:
             pass
         os._exit(0)
@@ -258,8 +260,10 @@ def main():
     # Khi người dùng đóng cửa sổ app, dừng triệt để toàn bộ thread và tiến trình ngầm
     print("\n[NovaCut] Cua so ung dung da dong. Dang giai phong tai nguyen...")
     try:
-        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
-        subprocess.run(['taskkill', '/F', '/IM', 'movie_summary_cli.exe'], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+        import ffmpeg_installer
+        stealth_kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs()
+        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, **stealth_kwargs)
+        subprocess.run(['taskkill', '/F', '/IM', 'movie_summary_cli.exe'], capture_output=True, **stealth_kwargs)
     except Exception:
         pass
     os._exit(0)

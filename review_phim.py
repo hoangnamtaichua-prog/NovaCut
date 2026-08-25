@@ -69,7 +69,7 @@ NỘI DUNG PHỤ ĐỀ:
 def _run_cmd_yield(cmd_list, prefix="FFmpeg", check_stop=None):
     yield f"data: ⚙ Chạy lệnh {prefix}: {' '.join(cmd_list)}\n\n"
     try:
-        process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', creationflags=0x08000000 if os.name == 'nt' else 0)
+        process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', **ffmpeg_installer.get_stealth_subprocess_kwargs())
         for line in process.stdout:
             if check_stop and check_stop():
                 process.terminate()
@@ -150,7 +150,7 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
             dur_cmd = [ffprobe_path, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_out_path]
             audio_dur = 3.0 # Default Fallback
             try:
-                audio_dur = float(subprocess.check_output(dur_cmd, creationflags=0x08000000 if os.name == 'nt' else 0).decode('utf-8').strip())
+                audio_dur = float(subprocess.check_output(dur_cmd, **ffmpeg_installer.get_stealth_subprocess_kwargs()).decode('utf-8').strip())
             except Exception:
                 pass
             

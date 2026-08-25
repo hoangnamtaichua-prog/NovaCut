@@ -10,11 +10,27 @@
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
 *(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
 
-*(Hiện tại chưa có thay đổi nào mới - Tất cả đã được đóng gói và phát hành trong bản v1.0.16).*
+*(Hiện tại chưa có thay đổi nào mới - Tất cả đã được đóng gói và phát hành trong bản v1.1.0).*
 
 ---
 
 ## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
+
+### ✅ Phiên bản v1.1.0 (Đã phát hành ngày 25/08/2026):
+1. **Triệt Tiêu 100% Hiện Tượng Cửa Sổ Đen Console/CMD Nháy Lên Khi Cắt Video (Stealth Subprocess Engine):**
+   - Tích hợp cơ chế ẩn cửa sổ 3 lớp `get_stealth_subprocess_kwargs()`: kết hợp đồng thời cờ `creationflags=0x08000000` (`CREATE_NO_WINDOW`), `startupinfo` (`STARTF_USESHOWWINDOW` + `SW_HIDE`), và `stdin=subprocess.DEVNULL` (ngắt kết nối console cha).
+   - Áp dụng triệt để cho toàn bộ các tiến trình gọi FFmpeg, FFprobe, Kokoro TTS, RVC Voice Clone, và Taskkill trong `auto_edit_pipeline.py`, `ffmpeg_installer.py`, `review_phim.py`, `ai_dubbing.py`, `rvc_bridge.py`, `web_app.py`, `routes/video_edit.py`, `routes/tts.py`.
+2. **Khắc Phục Triệt Để Lỗi Treo 98% Khi Tự Động Cập Nhật (OTA Auto-Updater):**
+   - Loại bỏ hoàn toàn bước gọi `pip install` khi ứng dụng đang chạy ở chế độ đóng gói EXE (`getattr(sys, 'frozen', False)`). Trong bản EXE, `sys.executable` là `NovaCut.exe`, lệnh `pip` trước đây vô tình kích hoạt thêm một instance con của app gây deadlock treo tại 98%.
+   - Thêm `timeout=15` và cơ chế non-blocking an toàn khi chạy source code dev mode.
+   - Chuẩn hóa luồng tự động khởi động lại ứng dụng (`restart_application`) giúp quá trình cập nhật nhảy thẳng từ 98% -> 100% và reload êm ái mà khách không cần phải tắt mở thủ công.
+3. **Phân Luồng Chuẩn Giọng Đọc Offline / Local / Clone (Không Còn Gọi Nhầm OpenSpeaker API):**
+   - Nâng cấp toàn diện hàm kiểm tra `is_api_voice` trong `auto_edit_pipeline.py` để phân loại chính xác 100% các giọng Kokoro Offline (`nam_khoa`, `minh_duc`, `ngoc_huyen`, `diem_trinh`, `mai_linh`), giọng Local Clone (`local_*`), RVC Model (`rvc_*`) và Edge-TTS (`edge_*`).
+   - Ngăn chặn hoàn toàn việc gửi nhầm ID giọng Local lên OpenSpeaker Cloud API gây ra cảnh báo `Unsupported voice provider`, giúp quá trình tạo giọng đọc chạy trực tiếp và tức thì.
+4. **Bảo Vệ Khả Năng Tương Thích Ngược Hardware Encoder (AttributeError Fallback):**
+   - Bổ sung các hàm helper dự phòng `detect_hardware_encoder` và `get_stealth_subprocess_kwargs` trực tiếp ngay trong `auto_edit_pipeline.py`, đảm bảo nếu module `ffmpeg_installer` bị cache/chưa nạp mới thì tiến trình Auto-Edit vẫn chạy mượt mà 100%, không bị lỗi `AttributeError`.
+5. **Hỗ Trợ Đóng Gói Tự Động Giọng Clone (Custom Voices) Sang Máy Khách Hàng:**
+   - Tích hợp file danh mục giọng `custom_voices.json` vào gói cập nhật `patch.zip`, sẵn sàng phân phối các giọng đọc clone mới cho toàn bộ người dùng.
 
 ### ✅ Phiên bản v1.0.16 (Đã phát hành ngày 25/08/2026):
 1. **Đột Phá Tốc Độ Auto-Edit / Review Phim (Tăng Tốc 3.5x – 5x):**

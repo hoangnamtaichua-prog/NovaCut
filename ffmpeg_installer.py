@@ -123,6 +123,25 @@ def ensure_ffmpeg(yield_func=None):
 
 _HW_ENCODER_CACHE = None
 
+def get_stealth_subprocess_kwargs():
+    """
+    Trả về cấu hình chuẩn Windows để đảm bảo 100% không bao giờ nháy/bật cửa sổ đen Console/CMD:
+    1. creationflags = 0x08000000 (CREATE_NO_WINDOW)
+    2. startupinfo: STARTF_USESHOWWINDOW + SW_HIDE
+    3. stdin = subprocess.DEVNULL (ngắt kế thừa console stdin)
+    """
+    if os.name != 'nt':
+        return {}
+    import subprocess
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0
+    return {
+        'creationflags': 0x08000000,
+        'startupinfo': si,
+        'stdin': subprocess.DEVNULL
+    }
+
 def detect_hardware_encoder(ffmpeg_path=None):
     """
     Phát hiện và kiểm tra tính khả dụng thực tế của GPU Hardware Encoder (NVENC, QSV).
@@ -140,6 +159,7 @@ def detect_hardware_encoder(ffmpeg_path=None):
         return _HW_ENCODER_CACHE
 
     import subprocess
+    stealth_kwargs = get_stealth_subprocess_kwargs()
 
     # 1. Thử nghiệm Nvidia NVENC (h264_nvenc)
     try:
@@ -148,7 +168,7 @@ def detect_hardware_encoder(ffmpeg_path=None):
             '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.2',
             '-c:v', 'h264_nvenc', '-preset', 'p4', '-f', 'null', '-'
         ]
-        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0, timeout=3)
+        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3, **stealth_kwargs)
         if res.returncode == 0:
             _HW_ENCODER_CACHE = ('h264_nvenc', True, ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22'])
             return _HW_ENCODER_CACHE
@@ -162,7 +182,7 @@ def detect_hardware_encoder(ffmpeg_path=None):
             '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.2',
             '-c:v', 'h264_qsv', '-preset', 'veryfast', '-f', 'null', '-'
         ]
-        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0, timeout=3)
+        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3, **stealth_kwargs)
         if res.returncode == 0:
             _HW_ENCODER_CACHE = ('h264_qsv', True, ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22'])
             return _HW_ENCODER_CACHE
@@ -172,4 +192,5 @@ def detect_hardware_encoder(ffmpeg_path=None):
     # 3. Fallback mặc định: CPU libx264
     _HW_ENCODER_CACHE = ('libx264', False, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22'])
     return _HW_ENCODER_CACHE
+
 

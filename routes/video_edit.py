@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request, send_from_directory, send_file, R
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading
 from routes.state import *
 import asr_manager
+import ffmpeg_installer
 
 video_edit_bp = Blueprint('video_edit', __name__)
 STOP_EXPORT_FLAG = False
@@ -53,14 +54,8 @@ def start_generation():
                 yield "data: 🔒 KHÓA TÍNH NĂNG: Vui lòng gia hạn hoặc kích hoạt bản quyền để xuất video!\n\n"
                 return
 
-            import ffmpeg_installer
+            ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
             
-            ffmpeg_path = ffmpeg_installer.get_ffmpeg_path()
-            if not ffmpeg_path:
-                yield "data: 📥 Không tìm thấy FFmpeg, hệ thống bắt đầu tự động tải về (chỉ tải 1 lần duy nhất). Vui lòng chờ đợi...\n\n"
-                ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
-                yield "data: ✅ Đã cài đặt xong lõi FFmpeg!\n\n"
-
             if not input_video or not os.path.exists(input_video):
                 yield f"data: 🛑 ERROR: Không tìm thấy video đầu vào: {input_video}\n\n"
                 return
@@ -76,7 +71,7 @@ def start_generation():
                             ffprobe_path, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type',
                             '-of', 'json', v_path
                         ]
-                        res_p = subprocess.run(cmd_probe, capture_output=True, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                        res_p = subprocess.run(cmd_probe, capture_output=True, text=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                         if res_p.returncode == 0:
                             info_p = json.loads(res_p.stdout)
                             d_sec = float(info_p.get('format', {}).get('duration', 0.0))
@@ -89,7 +84,7 @@ def start_generation():
                 # Fallback to ffmpeg -i
                 try:
                     cmd = [ffmpeg_path, '-i', v_path]
-                    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=0x08000000 if os.name == 'nt' else 0)
+                    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **ffmpeg_installer.get_stealth_subprocess_kwargs())
                     m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', proc.stderr)
                     if m:
                         h, mins, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
@@ -460,7 +455,7 @@ def start_generation():
                         ffmpeg_path, '-y', '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
                         '-c:v', enc_name, '-f', 'null', '-'
                     ]
-                    res_t = subprocess.run(cmd_t, capture_output=True, text=True, timeout=10, creationflags=0x08000000 if os.name == 'nt' else 0)
+                    res_t = subprocess.run(cmd_t, capture_output=True, text=True, timeout=10, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                     return res_t.returncode == 0, res_t.stderr
                 except Exception as exc:
                     return False, str(exc)
@@ -547,7 +542,7 @@ def start_generation():
                 cwd=ROOT_DIR,
                 encoding='utf-8',
                 errors='replace',
-                creationflags=0x08000000 if os.name == 'nt' else 0
+                **ffmpeg_installer.get_stealth_subprocess_kwargs()
             )
             current_export_process = process
 
@@ -583,7 +578,7 @@ def start_generation():
         except GeneratorExit:
             if process and process.poll() is None:
                 try:
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                     process.kill()
                 except Exception:
                     pass
@@ -611,7 +606,7 @@ def stop_export_process():
     if current_export_process:
         try:
             pid = current_export_process.pid
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
             current_export_process.kill()
             stopped = True
         except Exception as e:
@@ -621,8 +616,8 @@ def stop_export_process():
     
     # Kill any active ffmpeg or movie_summary_cli processes
     try:
-        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
-        subprocess.run(['taskkill', '/F', '/IM', 'movie_summary_cli.exe'], capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
+        subprocess.run(['taskkill', '/F', '/IM', 'movie_summary_cli.exe'], capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
         stopped = True
     except Exception:
         pass

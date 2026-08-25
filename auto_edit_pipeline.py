@@ -19,20 +19,54 @@ import asyncio
 import hashlib
 import concurrent.futures
 
+def get_stealth_subprocess_kwargs():
+    try:
+        if hasattr(ffmpeg_installer, 'get_stealth_subprocess_kwargs'):
+            return ffmpeg_installer.get_stealth_subprocess_kwargs()
+    except Exception:
+        pass
+    if os.name != 'nt':
+        return {}
+    import subprocess
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0
+    return {
+        'creationflags': 0x08000000,
+        'startupinfo': si,
+        'stdin': subprocess.DEVNULL
+    }
+
+def detect_hardware_encoder(ffmpeg_path=None):
+    try:
+        if hasattr(ffmpeg_installer, 'detect_hardware_encoder'):
+            return ffmpeg_installer.detect_hardware_encoder(ffmpeg_path)
+    except Exception:
+        pass
+    return 'libx264', False, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22']
+
 def is_api_voice(voice_id):
     if not voice_id:
         return False
-    if voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh']:
+    vid = str(voice_id).strip().lower()
+    # 1. Các giọng Kokoro Offline chuẩn
+    if vid in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc'] or vid.startswith('kokoro'):
         return False
-    if voice_id.startswith('rvc_') or voice_id.startswith('edge_'):
+    # 2. Các giọng Local Voice Clone, RVC Model Clone, Edge-TTS
+    if vid.startswith(('local_', 'rvc_', 'edge_', 'vi-vn-')):
         return False
+    # 3. Tra cứu profile trong custom_voices.json
     try:
         import custom_voices
-        if custom_voices.get_voice_by_id(voice_id):
-            return False
-    except:
+        v_prof = custom_voices.get_voice_by_id(voice_id)
+        if v_prof:
+            provider = v_prof.get('provider', '').lower()
+            if provider in ['local_voice', 'rvc', 'kokoro', 'edge', 'local']:
+                return False
+    except Exception:
         pass
-    return True
+    # 4. Chỉ coi là OpenSpeaker API khi có tiền tố hoặc được cấu hình rõ ràng là cloud API
+    return vid.startswith(('openspeaker_', 'api_', 'os_'))
 
 def parse_srt_time(t_str):
     t_str = t_str.strip().replace(',', '.')
@@ -427,7 +461,7 @@ def get_video_duration_ffprobe(video_path):
         if os.path.exists(ff_p) or ff_p == 'ffprobe':
             try:
                 cmd = [ff_p, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
-                res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, creationflags=0x08000000 if os.name == 'nt' else 0).strip()
+                res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, **get_stealth_subprocess_kwargs()).strip()
                 val = float(res)
                 if val > 0:
                     return val
@@ -437,7 +471,7 @@ def get_video_duration_ffprobe(video_path):
     # 2. Thử ffmpeg -i stderr inspection (luôn hoạt động vì ffmpeg.exe luôn có sẵn)
     try:
         cmd = [ffmpeg_path, '-i', video_path]
-        proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=0x08000000 if os.name == 'nt' else 0)
+        proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **get_stealth_subprocess_kwargs())
         m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', proc.stderr)
         if m:
             h, mins, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
@@ -471,7 +505,7 @@ def run_ffmpeg_with_progress_yield(cmd, total_duration, start_pct, end_pct, desc
         text=True,
         encoding='utf-8',
         errors='replace',
-        creationflags=0x08000000 if os.name == 'nt' else 0
+        **get_stealth_subprocess_kwargs()
     )
     last_reported_pct = -1
     last_report_time = 0
@@ -587,9 +621,9 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
             
         try:
             conv_cmd = [ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error', '-i', audio_path, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', wav_path]
-            subprocess.run(conv_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0)
+            subprocess.run(conv_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **get_stealth_subprocess_kwargs())
         except subprocess.CalledProcessError as e:
-            raise Exception(f"Lỗi convert WAV câu {idx+1}: {e.stderr.decode()}")
+            raise Exception(f"Lỗi convert WAV câu {idx+1}: {e.stderr.decode() if e.stderr else str(e)}")
             
         dur = 2.0
         try:
@@ -653,7 +687,7 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
         '-c:a', 'pcm_s16le',
         final_audio
     ]
-    proc = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+    proc = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
     if proc.returncode != 0:
         yield 'error', f"Lỗi concat audio: {proc.stderr}"
         return
@@ -1177,7 +1211,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                         '-i', temp_aud_raw, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le',
                         voice_audio_path
                     ]
-                    subprocess.run(cmd_conv, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0)
+                    subprocess.run(cmd_conv, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **get_stealth_subprocess_kwargs())
                     
                     yield log("✅ Đã nhận xong giọng đọc và phụ đề trực tiếp từ API!")
                     yield log("[PROGRESS] 40")
@@ -1346,7 +1380,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
         yield log("[PROGRESS] 60")
         
         # --- BƯỚC 4: CẮT GHÉP & ĐỒNG BỘ ÂM THANH THEO TỪNG CLIP (PARALLEL FFMPEG) ---
-        detected_enc, is_gpu_enc, _ = ffmpeg_installer.detect_hardware_encoder(ffmpeg_path)
+        detected_enc, is_gpu_enc, _ = detect_hardware_encoder(ffmpeg_path)
         encoder = payload.get('encoder') or detected_enc
         if is_gpu_enc:
             yield log(f"⚡ Đã kích hoạt tăng tốc phần cứng GPU ({detected_enc}) để cắt và xuất video siêu tốc!")
@@ -1475,7 +1509,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 clip_silent_path
             ]
 
-            proc_m = subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            proc_m = subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
             if proc_m.returncode != 0:
                 # Nếu GPU bị lỗi, thử lại 1 lần với CPU libx264
                 if encoder != 'libx264':
@@ -1489,7 +1523,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                         '-an',
                         clip_silent_path
                     ]
-                    proc_fb = subprocess.run(cmd_mux_fallback, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                    proc_fb = subprocess.run(cmd_mux_fallback, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
                     if proc_fb.returncode == 0:
                         return i, clip_silent_path, None
                 return i, None, f"Lỗi FFmpeg clip #{i+1}: {proc_m.stderr}"
@@ -1556,7 +1590,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
             '-c', 'copy',
             concat_silent_path
         ]
-        proc_c = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+        proc_c = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
         if proc_c.returncode != 0:
             yield log(f"🛑 Lỗi ghép nối video: {proc_c.stderr}")
             return
@@ -1622,7 +1656,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
             final_output
         ]
         
-        proc_overlay = subprocess.run(cmd_overlay, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+        proc_overlay = subprocess.run(cmd_overlay, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
         if proc_overlay.returncode != 0:
             yield log(f"🛑 Lỗi chèn âm thanh/sub cuối cùng: {proc_overlay.stderr}")
             return
@@ -1791,7 +1825,7 @@ def run_narration_workflow(payload, check_stop_func):
                         '-i', temp_aud_raw, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le',
                         voice_audio_path
                     ]
-                    subprocess.run(cmd_conv, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == 'nt' else 0)
+                    subprocess.run(cmd_conv, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **get_stealth_subprocess_kwargs())
                     
                     yield log("✅ Đã nhận xong giọng đọc và phụ đề trực tiếp từ API!")
                     yield log("[PROGRESS] 50")
@@ -1958,7 +1992,7 @@ def run_narration_workflow(payload, check_stop_func):
         has_orig_audio = True
         try:
             p_cmd = [ffmpeg_path, '-i', video_path]
-            p_proc = subprocess.run(p_cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=0x08000000 if os.name == 'nt' else 0)
+            p_proc = subprocess.run(p_cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **get_stealth_subprocess_kwargs())
             has_orig_audio = 'Audio:' in p_proc.stderr
         except Exception:
             pass
@@ -2042,7 +2076,7 @@ def run_narration_workflow(payload, check_stop_func):
                 '-c:v', 'copy', '-c:a', 'aac',
                 final_output
             ]
-            proc_bgm = subprocess.run(cmd_bgm, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            proc_bgm = subprocess.run(cmd_bgm, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
             if proc_bgm.returncode != 0:
                 yield log(f"⚠️ Lỗi mix BGM, sử dụng bản không nhạc nền: {proc_bgm.stderr[:200]}")
                 shutil.copy2(temp_no_bgm, final_output)

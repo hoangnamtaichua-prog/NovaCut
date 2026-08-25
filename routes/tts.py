@@ -560,7 +560,7 @@ def generate_tts_openspeaker():
         try:
             import ffmpeg_installer
             ff = ffmpeg_installer.get_ffmpeg_path()
-            p = subprocess.run([ff, '-i', audio_path], stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            p = subprocess.run([ff, '-i', audio_path], stderr=subprocess.PIPE, text=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
             import re
             m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', p.stderr)
             if m:

@@ -156,7 +156,7 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
                 "--speed", str(speed),
                 "--device", "cpu"
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', creationflags=0x08000000 if os.name == 'nt' else 0)
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', **ffmpeg_installer.get_stealth_subprocess_kwargs())
             if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 100:
                 return output_path
 
@@ -291,7 +291,7 @@ def synthesize_openspeaker_with_transcript(text, voice_id, speed, output_audio_p
                         try:
                             import ffmpeg_installer
                             ff = ffmpeg_installer.get_ffmpeg_path()
-                            p = subprocess.run([ff, '-i', output_audio_path], stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                            p = subprocess.run([ff, '-i', output_audio_path], stderr=subprocess.PIPE, text=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                             import re
                             m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', p.stderr)
                             if m:
@@ -461,7 +461,7 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                 "-c:a", "pcm_s16le",
                 part_resampled
             ]
-            subprocess.run(cmd_resample, capture_output=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+            subprocess.run(cmd_resample, capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
             
             if os.path.exists(part_raw):
                 try:

@@ -1,7 +1,7 @@
 {
-  "version": "1.0.16",
+  "version": "1.1.0",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "1. Đột phá tốc độ Auto-Edit / Review Phim (Tăng tốc 3.5x - 5x): Cắt song song 70-100 clip câm bằng ThreadPoolExecutor đa luồng, giảm thời gian từ 4 phút xuống 30-40 giây. 2. Quét chuyển cảnh cục bộ siêu tốc Boundary-Targeted Scan: Chỉ quét quanh các mốc timeline thay vì quét cả phim 2 tiếng, giảm thời gian dò cảnh từ 3 phút xuống 10-20 giây. 3. Tự động nhận diện và kích hoạt GPU Hardware Acceleration (Nvidia NVENC / Intel QSV) với cơ chế fallback CPU an toàn 100%.",
+  "changelog": "1. Triệt tiêu 100% hiện tượng cửa sổ đen CMD/Console nháy lên khi cắt video (Stealth Subprocess Engine 3 lớp). 2. Khắc phục triệt để lỗi treo 98% khi cập nhật OTA, tự động hoàn tất 100% và reload app êm ái. 3. Phân luồng chuẩn xác giọng đọc Offline/Local Clone, không còn gọi nhầm OpenSpeaker API. 4. Sửa lỗi AttributeError detect_hardware_encoder và tự động nạp danh mục giọng clone custom_voices.",
   "is_mandatory": false,
-  "updated_at": "2026-08-25 09:55:24"
+  "updated_at": "2026-08-25 10:22:29"
 }
