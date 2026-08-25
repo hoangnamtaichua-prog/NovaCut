@@ -1,7 +1,7 @@
 {
   "version": "1.2.0",
   "download_url": "https://api.github.com/repos/hoangnamtaichua-prog/NovaCut/releases/assets/latest",
-  "changelog": "1. Chế Độ Xử Lý Hàng Loạt Hàng Đợi (Batch Processing Queue Studio & Overnight Engine - Phân quyền Admin Quản trị độc quyền). 2. 7 Tùy Chỉnh Phong Cách Kịch Bản Review Phim (Review Styles & Tone Directives). 3. Master Toggle Switch Bật/Tắt Toàn Bộ Phụ Đề & Làm Mờ trong Tab Biên tập phim. 4. Khắc phục triệt để lỗi Nhân bản giọng nói (Fix Local Voice Cloning OS Error 2) trên máy khách. 5. Nâng cấp Động cơ Tải toàn bộ kênh Douyin Pro 2.0 (hỗ trợ Album ảnh HD, bypass 18 video, tải 1080p, đăng nhập 1 lần). 6. Tái thiết kế Giao diện Thẻ Tải Video Dark Pro Modern UI. 7. Bộ chọn thư mục lưu video tùy biến. 8. Nút chuyển nhanh 1-Click từ Trích xuất phụ đề sang Review phim. 9. Đồng bộ Điều khoản bản quyền & giới hạn hiển thị 1 lần duy nhất trên Setup Wizard. 10. Tối ưu hóa hiệu năng và vòng đời nạp JavaScript giúp giao diện phản hồi tức thì 100%.",
+  "changelog": "1. Tối ưu hóa toàn diện bộ Auto-Updater (Hỗ trợ tải siêu tốc với gói patch sạch 7.6MB, tự động resume & chống đứt kết nối mạng). 2. Chế Độ Xử Lý Hàng Loạt Hàng Đợi (Batch Queue Studio & Overnight Engine - Phân quyền Admin Quản trị độc quyền). 3. 7 Tùy Chỉnh Phong Cách Kịch Bản Review Phim. 4. Master Toggle Switch Bật/Tắt Phụ Đề & Làm Mờ. 5. Khắc phục triệt để lỗi Nhân bản giọng nói trên máy khách. 6. Nâng cấp Động cơ Tải toàn bộ kênh Douyin Pro 2.0. 7. Tái thiết kế Giao diện Thẻ Tải Video Dark Pro Modern UI.",
   "is_mandatory": false,
-  "updated_at": "2026-08-25 20:57:24"
+  "updated_at": "2026-08-25 21:13:21"
 }

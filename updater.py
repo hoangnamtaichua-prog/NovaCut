@@ -246,32 +246,88 @@ def check_for_updates():
 def download_file_direct(url, destination_path, progress_callback=None):
     """
     Tải file patch.zip trực tiếp từ GitHub Private Repository với chunked stream và báo % thời gian thực.
+    Xử lý chuẩn 2 pha chuyển hướng (302 Redirect) và tự động thử lại/tiếp tục tải (Resume/Retry) nếu đứt kết nối mạng.
     """
     headers = _get_auth_headers("application/octet-stream")
-    session = requests.Session()
     
-    response = session.get(url, stream=True, headers=headers, timeout=30, allow_redirects=True)
-
-    if response.status_code != 200:
-        raise Exception(f"Không thể tải file từ máy chủ (Mã lỗi: HTTP {response.status_code})")
-
-    total_size = int(response.headers.get('content-length', 0))
-    downloaded = 0
-    chunk_size = 64 * 1024 # 64KB chunks
+    # Pha 1: Bóc tách URL Storage đích (nếu là GitHub Release Asset)
+    stream_url = url
+    try:
+        res_init = requests.get(url, stream=True, headers=headers, timeout=(10, 30), allow_redirects=False)
+        if res_init.status_code in (301, 302, 307, 308) and 'Location' in res_init.headers:
+            stream_url = res_init.headers['Location']
+    except Exception as e:
+        print(f"[Updater] Initial redirect probe notice: {e}")
 
     os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    
+    max_retries = 5
+    chunk_size = 256 * 1024  # 256KB chunks
+    total_size = 0
+    downloaded = 0
 
-    with open(destination_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=chunk_size):
-            if chunk:
-                f.write(chunk)
-                downloaded += len(chunk)
-                if progress_callback:
-                    percent = int((downloaded / total_size) * 100) if total_size > 0 else 0
-                    progress_callback(percent, downloaded, total_size)
+    # Lấy tổng kích thước tệp trước
+    try:
+        head_res = requests.head(stream_url, timeout=(10, 30))
+        if head_res.status_code == 200 and 'content-length' in head_res.headers:
+            total_size = int(head_res.headers['content-length'])
+    except Exception:
+        pass
 
-    if total_size > 0 and downloaded < (total_size * 0.9):
-        raise Exception(f"Tệp tải về chưa hoàn chỉnh ({downloaded}/{total_size} bytes).")
+    for attempt in range(1, max_retries + 1):
+        try:
+            req_headers = {"User-Agent": "NovaCut-App-Updater/1.0"}
+            if stream_url == url:
+                req_headers.update(headers)
+            
+            # Hỗ trợ tải tiếp (Resume) nếu đã tải được một phần
+            if os.path.exists(destination_path):
+                downloaded = os.path.getsize(destination_path)
+                if total_size > 0 and downloaded >= total_size:
+                    if progress_callback:
+                        progress_callback(95, downloaded, total_size)
+                    return destination_path
+                if downloaded > 0:
+                    req_headers['Range'] = f"bytes={downloaded}-"
+            else:
+                downloaded = 0
+
+            mode = "ab" if downloaded > 0 else "wb"
+            response = requests.get(stream_url, stream=True, headers=req_headers, timeout=(10, 60))
+
+            if response.status_code not in (200, 206):
+                # Nếu Range không được hỗ trợ (416), tải lại từ đầu
+                if response.status_code == 416 or (downloaded > 0 and response.status_code == 200):
+                    downloaded = 0
+                    mode = "wb"
+                    response = requests.get(stream_url, stream=True, timeout=(10, 60))
+
+            if response.status_code not in (200, 206):
+                raise Exception(f"Máy chủ trả về mã HTTP {response.status_code}")
+
+            if total_size == 0 and 'content-length' in response.headers:
+                total_size = downloaded + int(response.headers['content-length'])
+
+            with open(destination_path, mode) as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback:
+                            pct = int((downloaded / total_size) * 95) if total_size > 0 else 0
+                            pct = min(95, max(1, pct))
+                            progress_callback(pct, downloaded, total_size)
+
+            if total_size > 0 and downloaded < (total_size * 0.95):
+                raise Exception(f"Tệp tải về chưa đủ ({downloaded}/{total_size} bytes). Đang thử lại...")
+
+            return destination_path
+
+        except Exception as err:
+            print(f"[Updater] Lần thử {attempt}/{max_retries} gặp lỗi: {err}")
+            if attempt == max_retries:
+                raise Exception(f"Không thể hoàn tất tải bản cập nhật sau {max_retries} lần thử: {str(err)}")
+            time.sleep(1.5)
 
     return destination_path
 
@@ -360,19 +416,30 @@ def restart_application():
     threading.Thread(target=_restart, daemon=True).start()
 
 
+_UPDATE_THREAD_LOCK = threading.Lock()
+
 def perform_auto_update_async(download_url_or_file_id, target_version):
-    """Thực hiện toàn bộ quá trình cập nhật trong background thread."""
+    """Thực hiện toàn bộ quá trình cập nhật trong background thread (Chống xung đột đa luồng)."""
     global _update_progress_state
 
-    def _worker():
-        global _update_progress_state
+    if _update_progress_state.get("is_updating"):
+        print("[Updater] Update process already running in background, ignoring duplicate trigger.")
+        return None
+
+    with _UPDATE_THREAD_LOCK:
+        if _update_progress_state.get("is_updating"):
+            return None
         _update_progress_state["is_updating"] = True
         _update_progress_state["status"] = "downloading"
         _update_progress_state["percent"] = 0
         _update_progress_state["message"] = f"Đang tải bản cập nhật v{target_version} từ kho bảo mật..."
         _update_progress_state["target_version"] = target_version
         _update_progress_state["error"] = None
+        _update_progress_state["downloaded_bytes"] = 0
+        _update_progress_state["total_bytes"] = 0
 
+    def _worker():
+        global _update_progress_state
         temp_zip = os.path.join(ROOT_DIR, 'temp', f'patch_v{target_version}_{int(time.time())}.zip')
 
         def _on_progress(pct, down, total):

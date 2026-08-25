@@ -11867,6 +11867,7 @@ const appUpdater = {
 
         if (btnStart) {
             btnStart.disabled = true;
+            btnStart.style.pointerEvents = 'none';
             btnStart.innerHTML = `<span>⏳</span><span>Đang tải bản cập nhật...</span>`;
         }
         if (btnSkip) btnSkip.style.display = 'none';
@@ -11894,6 +11895,7 @@ const appUpdater = {
             showToast('Lỗi cập nhật: ' + err.message, 'error');
             if (btnStart) {
                 btnStart.disabled = false;
+                btnStart.style.pointerEvents = 'auto';
                 btnStart.innerHTML = `<span>🚀</span><span>Thử Lại</span>`;
             }
         }
@@ -11912,9 +11914,10 @@ const appUpdater = {
                 const res = await fetch('/api/updater/progress');
                 const p = await res.json();
 
+                const pct = Math.min(100, Math.max(0, parseInt(p.percent) || 0));
                 if (statusText) statusText.textContent = p.message || 'Đang cập nhật...';
-                if (percentText) percentText.textContent = `${p.percent || 0}%`;
-                if (barFill) barFill.style.width = `${p.percent || 0}%`;
+                if (percentText) percentText.textContent = `${pct}%`;
+                if (barFill) barFill.style.width = `${pct}%`;
 
                 if (p.total_bytes > 0 && subText) {
                     const mbDown = (p.downloaded_bytes / (1024 * 1024)).toFixed(1);
@@ -11935,6 +11938,7 @@ const appUpdater = {
                     const btnStart = document.getElementById('btnStartAppUpdate');
                     if (btnStart) {
                         btnStart.disabled = true;
+                        btnStart.style.pointerEvents = 'none';
                         const interval = setInterval(() => {
                             btnStart.innerHTML = `<span>🚀</span><span>Khởi động lại trong ${countdown}s...</span>`;
                             countdown--;
@@ -11952,6 +11956,7 @@ const appUpdater = {
                     const btnStart = document.getElementById('btnStartAppUpdate');
                     if (btnStart) {
                         btnStart.disabled = false;
+                        btnStart.style.pointerEvents = 'auto';
                         btnStart.innerHTML = `<span>🚀</span><span>Thử Lại</span>`;
                     }
                 }

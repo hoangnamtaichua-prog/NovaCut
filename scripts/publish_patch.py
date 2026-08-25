@@ -81,6 +81,7 @@ PATCH_EXCLUDES = [
     "movies",
     "downloads",
     "output",
+    "outputs",
     "tiktok_output",
     "temp",
     "scratch",
@@ -89,6 +90,8 @@ PATCH_EXCLUDES = [
     "build",
     "dist",
     ".system_generated",
+    "tts_cache",
+    "temp_uploads",
     "*.log"
 ]
 
@@ -127,7 +130,7 @@ def build_patch_zip(target_version):
         except Exception:
             pass
 
-    log(f"Đang đóng gói bản vá patch.zip cho phiên bản v{target_version}...")
+    log(f"Đang đóng gói bản vá patch.zip sạch cho phiên bản v{target_version}...")
 
     with zipfile.ZipFile(PATCH_ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
         for f in PATCH_INCLUDE_FILES:
@@ -141,15 +144,23 @@ def build_patch_zip(target_version):
                 continue
             for root, dirs, files in os.walk(src_dir):
                 dirs[:] = [sub for sub in dirs if sub not in PATCH_EXCLUDES and not sub.startswith('.')]
+                norm_root = root.replace('\\', '/')
+                if 'tts_cache' in norm_root or 'outputs' in norm_root or 'temp_uploads' in norm_root:
+                    continue
                 for file in files:
                     if file.endswith('.pyc') or file.endswith('.log') or file.startswith('.'):
                         continue
+                    if file.endswith(('.exe', '.wav', '.mp3', '.mp4', '.mkv', '.avi', '.zip', '.tar', '.gz')):
+                        if norm_root.endswith('web/samples') and not file.startswith('clean_') and file.endswith(('.wav', '.mp3')):
+                            pass
+                        else:
+                            continue
                     full_path = os.path.join(root, file)
                     rel_path = os.path.relpath(full_path, ROOT_DIR)
                     zipf.write(full_path, arcname=rel_path)
 
     zip_size_mb = os.path.getsize(PATCH_ZIP) / (1024 * 1024)
-    log(f"✅ Đã tạo file patch.zip thành công! Dung lượng: {zip_size_mb:.2f} MB")
+    log(f"✅ Đã tạo file patch.zip thành công! Dung lượng siêu nhẹ: {zip_size_mb:.2f} MB")
     return PATCH_ZIP
 
 
