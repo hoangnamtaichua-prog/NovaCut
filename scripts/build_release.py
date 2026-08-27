@@ -54,7 +54,10 @@ INCLUDE_FILES = [
     "ffmpeg_installer.py",
     "ocr_module.py",
     "custom_voices.py",
+    "custom_voices.json",
     "review_phim.py",
+    "review_styles.py",
+    "batch_queue_manager.py",
     "timeline_sanitizer.py",
     "vietnamese_text_normalizer.py",
     "local_voice_engine.py",
@@ -64,6 +67,7 @@ INCLUDE_FILES = [
     "tts_cli.py",
     "requirements.txt",
     "version.json",
+    "LICENSE_DISCLAIMER.txt",
     "google_apps_script_template.js",
     "google_apps_script_loader.js"
 ]
@@ -94,6 +98,7 @@ EXCLUDE_PATTERNS = [
     "build",
     "dist",
     "release",
+    "patches",
     ".system_generated",
     "*.log"
 ]
@@ -121,7 +126,7 @@ def copy_project_assets():
         dst = os.path.join(RELEASE_DIR, d)
         if os.path.exists(src):
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
-                "__pycache__", "*.pyc", "*.log", ".git", "outputs", "samples/*"
+                "__pycache__", "*.pyc", "*.log", ".git", "outputs", "tts_cache", "samples/*"
             ))
             log(f" -> Thu muc: {d}")
 
@@ -214,18 +219,45 @@ def build_pyinstaller_exe():
     launcher_src = os.path.join(ROOT_DIR, "scripts", "launcher.py")
     ico_path = os.path.join(ROOT_DIR, "resources", "icon.ico")
     
+    sea_g2p_bin = os.path.join(ROOT_DIR, "models", "vieneu", "sea_g2p.bin")
+    add_data_args = []
+    if os.path.exists(sea_g2p_bin):
+        add_data_args.append(f"--add-data={sea_g2p_bin}{os.pathsep}sea_g2p")
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--onedir",
         "--windowed",
         f"--icon={ico_path}",
+    ] + add_data_args + [
         "--collect-all=rapidocr_onnxruntime",
+        "--collect-all=onnxruntime",
         "--collect-all=vieneu",
         "--collect-all=vieneu_utils",
+        "--collect-all=sea_g2p",
+        "--collect-all=soxr",
+        "--collect-all=kaldi_native_fbank",
         "--collect-all=soundfile",
         "--collect-all=tiktoken",
         "--collect-all=tiktoken_ext",
+        "--hidden-import=review_styles",
+        "--hidden-import=batch_queue_manager",
+        "--hidden-import=routes.batch_queue",
+        "--hidden-import=local_voice_engine",
+        "--hidden-import=mdx_separator",
+        "--hidden-import=audio_separator",
+        "--hidden-import=routes.audio",
+        "--hidden-import=routes.tts",
+        "--hidden-import=routes.video_edit",
+        "--hidden-import=routes.updater",
+        "--hidden-import=routes.douyin",
+        "--hidden-import=routes.projects",
+        "--hidden-import=routes.license",
+        "--hidden-import=routes.ocr",
+        "--hidden-import=routes.asr",
+        "--hidden-import=routes.downloader",
+        "--hidden-import=routes.auto_edit",
         "--exclude-module=torch",
         "--exclude-module=torchaudio",
         "--exclude-module=torchvision",
@@ -240,6 +272,16 @@ def build_pyinstaller_exe():
     dist_novacut = os.path.join(ROOT_DIR, "dist", "NovaCut")
     
     if os.path.exists(dist_novacut):
+        # Post-Build Assertion: Đảm bảo sea_g2p.bin đã được đóng gói chính xác
+        sea_dest = os.path.join(dist_novacut, "_internal", "sea_g2p", "sea_g2p.bin")
+        if not os.path.exists(sea_dest) or os.path.getsize(sea_dest) < 10 * 1024 * 1024:
+            if os.path.exists(sea_g2p_bin):
+                os.makedirs(os.path.dirname(sea_dest), exist_ok=True)
+                shutil.copy2(sea_g2p_bin, sea_dest)
+                log(f" [ASSERTION] Da sao chep sea_g2p.bin ({os.path.getsize(sea_dest):,} bytes) vao _internal/sea_g2p/")
+        else:
+            log(f" [ASSERTION PASS] sea_g2p.bin ton tai dung chuan ({os.path.getsize(sea_dest):,} bytes) trong bundle.")
+
         log(" -> Dang tich hop runtime PyInstaller vao thu muc release...")
         for item in os.listdir(dist_novacut):
             s = os.path.join(dist_novacut, item)

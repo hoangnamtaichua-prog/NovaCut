@@ -3,7 +3,7 @@
  * Integrates Local Voice cloning (VieNeu ONNX engine) with live recording, drag-and-drop, interactive audio playback, real-time logging, full metadata fields & in-place voice editing.
  */
 
-import { appendLog, showToast, showConfirmModal } from '../utils.js';
+import { appendLog, showToast, showConfirmModal, escapeHtml } from '../utils.js';
 
 let currentSamplePath = null;
 let currentSampleUrl = null;
@@ -593,11 +593,9 @@ async function uploadSampleFile(file) {
             if (fileNameEl) fileNameEl.textContent = data.filename || file.name;
             if (durationEl) durationEl.textContent = `${data.duration}s`;
             if (qualityEl) {
-                if (data.quality_score >= 80) {
-                    qualityEl.innerHTML = `<span style="color: #10b981;">🟢 Chất lượng: ${data.quality_desc || 'Rất tốt (24kHz Mono)'}</span>`;
-                } else {
-                    qualityEl.innerHTML = `<span style="color: #f59e0b;">🟡 Chất lượng: ${data.quality_desc || 'Ổn định'}</span>`;
-                }
+                const isGood = Number(data.quality_score) >= 80;
+                qualityEl.textContent = `${isGood ? '🟢' : '🟡'} Chất lượng: ${data.quality_desc || (isGood ? 'Rất tốt (24kHz Mono)' : 'Ổn định')}`;
+                qualityEl.style.color = isGood ? '#10b981' : '#f59e0b';
             }
 
             if (samplePlayer && currentSampleUrl) {
@@ -701,17 +699,17 @@ function renderClonedVoiceCollection() {
         item.innerHTML = `
             <div style="display: flex; align-items: center; gap: 10px; flex: 1; overflow: hidden;">
                 <div style="width: 40px; height: 40px; border-radius: 8px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;">
-                    ${v.avatar || (v.gender === 'Male' ? '👨' : '👩')}
+                    ${escapeHtml(v.avatar || (v.gender === 'Male' ? '👨' : '👩'))}
                 </div>
                 <div style="overflow: hidden; flex: 1;">
                     <div style="display: flex; align-items: center; gap: 6px;">
-                        <span style="font-size: 13.5px; font-weight: 700; color: #f8fafc; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${cleanName}</span>
+                        <span style="font-size: 13.5px; font-weight: 700; color: #f8fafc; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(cleanName)}</span>
                         <span style="font-size: 9.5px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 1px 6px; border-radius: 4px; font-weight: 700; white-space: nowrap;">LOCAL VOICE</span>
                     </div>
                     <div style="display: flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 11px; color: #94a3b8; flex-wrap: wrap;">
                         <span>${v.gender === 'Female' ? '👩 Nữ' : '👨 Nam'}</span>
                         <span>•</span>
-                        <span style="color: #38bdf8;">${v.region || 'Miền Bắc'}</span>
+                        <span style="color: #38bdf8;">${escapeHtml(v.region || 'Miền Bắc')}</span>
                         <span>•</span>
                         <span>${ageBadge}</span>
                         <span>•</span>
@@ -754,7 +752,7 @@ function renderClonedVoiceCollection() {
         btnDel.addEventListener('click', async () => {
             const confirmed = await showConfirmModal({
                 title: 'XÓA GIỌNG CLONE',
-                message: `Bạn có chắc chắn muốn xóa vĩnh viễn giọng "<strong>${v.name}</strong>" khỏi thư viện không?`,
+                message: `Bạn có chắc chắn muốn xóa vĩnh viễn giọng "${v.name}" khỏi thư viện không?`,
                 icon: '🗑️',
                 confirmText: 'Xóa Giọng',
                 confirmType: 'danger'

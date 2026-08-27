@@ -1,30 +1,83 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
-import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, requests
+import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, requests, tempfile, ipaddress, socket, uuid
 from routes.state import *
 import asr_manager
+from routes.security import is_path_allowed, register_user_path, safe_join
+from urllib.parse import urlparse
+from werkzeug.utils import secure_filename
 
 core_bp = Blueprint('core', __name__)
+
+_MEDIA_EXTENSIONS = {
+    '.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.mp4', '.mkv', '.avi',
+    '.mov', '.webm', '.srt', '.vtt', '.ass', '.png', '.jpg', '.jpeg', '.webp', '.gif'
+}
+MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
+_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.gif'}
+
+
+def _validate_external_api_url(value):
+    parsed = urlparse(str(value or '').strip())
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Base URL phải là địa chỉ HTTPS hợp lệ.')
+    allowed_hosts = {'api.openai.com', 'api.ai33.pro'}
+    allowed_hosts.update(
+        item.strip().lower()
+        for item in os.environ.get('NOVACUT_ALLOWED_AI_HOSTS', '').split(',')
+        if item.strip()
+    )
+    if parsed.hostname.lower() not in allowed_hosts:
+        raise ValueError('Tên miền Base URL chưa có trong NOVACUT_ALLOWED_AI_HOSTS.')
+    return str(value).rstrip('/')
+
+
+def _require_any_media_permission():
+    import license_manager
+    status = license_manager.get_current_license_status()
+    features = status.get('features', {})
+    if not status.get('is_valid') or not (features.get('can_access_editor') or features.get('can_access_review')):
+        return jsonify({'success': False, 'error': 'Gói bản quyền hiện tại không cho phép thao tác media.'}), 403
+    return None
+
+def _validated_media_path(raw_path):
+    path = os.path.realpath(str(raw_path or '').strip('\'"'))
+    if not is_path_allowed(path, must_exist=True, extensions=_MEDIA_EXTENSIONS):
+        return None
+    return path
+
+def _ps_literal(value):
+    return "'" + str(value or '').replace("'", "''") + "'"
 
 @core_bp.after_request
 def add_no_cache_headers(response):
     if response.mimetype in ['text/html', 'text/javascript', 'application/javascript', 'text/css']:
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+    response.headers["Expires"] = "0"
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
 @core_bp.route('/')
 def index():
-    return send_from_directory(os.path.join(ROOT_DIR, 'web'), 'index.html')
+    web_dir = os.path.join(ROOT_DIR, 'web')
+    return send_from_directory(web_dir, 'index.html')
 
 @core_bp.route('/<path:path>')
 def static_files(path):
-    return send_from_directory(os.path.join(ROOT_DIR, 'web'), path)
+    web_dir = os.path.join(ROOT_DIR, 'web')
+    target_file = os.path.join(web_dir, path)
+    if os.path.exists(target_file) and not os.path.isdir(target_file):
+        return send_from_directory(web_dir, path)
+    if '.' not in os.path.basename(path):
+        return send_from_directory(web_dir, 'index.html')
+    return send_from_directory(web_dir, path)
 
 @core_bp.route('/api/file')
 def serve_file():
-    path = request.args.get('path')
-    if not path or not os.path.exists(path):
+    path = _validated_media_path(request.args.get('path'))
+    if not path:
         return "File not found", 404
     mime_type, _ = mimetypes.guess_type(path)
     if not mime_type:
@@ -43,8 +96,8 @@ def serve_samples(filename):
 
 @core_bp.route('/api/video')
 def stream_video():
-    path = request.args.get('path')
-    if not path or not os.path.exists(path):
+    path = _validated_media_path(request.args.get('path'))
+    if not path:
         return "Video not found", 404
         
     mime_type, _ = mimetypes.guess_type(path)
@@ -59,13 +112,9 @@ def stream_image():
     if not raw_path:
         return "Image not found", 404
         
-    path = os.path.normpath(raw_path.strip('\'"'))
-    if not os.path.exists(path):
-        alt_path = os.path.abspath(path)
-        if os.path.exists(alt_path):
-            path = alt_path
-        else:
-            return "Image not found", 404
+    path = _validated_media_path(raw_path)
+    if not path or os.path.splitext(path)[1].lower() not in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
+        return "Image not found", 404
         
     mime_type, _ = mimetypes.guess_type(path)
     if not mime_type:
@@ -76,25 +125,59 @@ def stream_image():
 @core_bp.route('/api/upload_image', methods=['POST'])
 def upload_image_api():
     try:
+        permission_error = _require_any_media_permission()
+        if permission_error:
+            return permission_error
         if 'image' not in request.files:
             return jsonify({'success': False, 'error': 'Không tìm thấy file ảnh'}), 400
         file = request.files['image']
         if file.filename == '':
             return jsonify({'success': False, 'error': 'Chưa chọn file'}), 400
+        if request.content_length and request.content_length > MAX_IMAGE_UPLOAD_BYTES + 1024 * 1024:
+            return jsonify({'success': False, 'error': 'File ảnh vượt quá 20 MB'}), 413
             
-        uploads_dir = os.path.join(os.getcwd(), 'uploads', 'logos')
+        uploads_dir = os.path.join(USER_DATA_DIR, 'uploads', 'logos')
         os.makedirs(uploads_dir, exist_ok=True)
         
-        safe_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename)
-        filename = f"logo_{int(time.time())}_{safe_name}"
-        save_path = os.path.normpath(os.path.join(uploads_dir, filename))
-        file.save(save_path)
+        safe_name = secure_filename(file.filename)
+        extension = os.path.splitext(safe_name)[1].lower()
+        if extension not in _IMAGE_EXTENSIONS:
+            return jsonify({'success': False, 'error': 'Định dạng ảnh không được hỗ trợ'}), 415
+        filename = f"logo_{uuid.uuid4().hex}{extension}"
+        save_path = safe_join(uploads_dir, filename, extensions=_IMAGE_EXTENSIONS)
+        total = 0
+        with open(save_path, 'xb') as handle:
+            while True:
+                chunk = file.stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_IMAGE_UPLOAD_BYTES:
+                    raise ValueError('File ảnh vượt quá 20 MB')
+                handle.write(chunk)
+        try:
+            from PIL import Image
+            with Image.open(save_path) as image:
+                image.verify()
+        except Exception:
+            try:
+                os.remove(save_path)
+            except OSError:
+                pass
+            return jsonify({'success': False, 'error': 'Nội dung file không phải ảnh hợp lệ'}), 415
         
         return jsonify({
             'success': True,
             'file_path': save_path,
             'url': f"/api/image?path={save_path}"
         })
+    except ValueError as e:
+        if 'save_path' in locals() and os.path.exists(save_path):
+            try:
+                os.remove(save_path)
+            except OSError:
+                pass
+        return jsonify({'success': False, 'error': str(e)}), 413
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -121,7 +204,7 @@ def select_folder_api():
                 ps_cmd = f"""
                 Add-Type -AssemblyName System.Windows.Forms
                 $f = New-Object System.Windows.Forms.FolderBrowserDialog
-                $f.Description = "{title}"
+                $f.Description = {_ps_literal(title)}
                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
                     $f.SelectedPath
                 }}
@@ -133,6 +216,7 @@ def select_folder_api():
                 
         if folder_path and os.path.exists(folder_path):
             folder_path = os.path.normpath(folder_path)
+            register_user_path(folder_path)
             return jsonify({'success': True, 'folder_path': folder_path, 'path': folder_path, 'folder': folder_path})
         elif folder_path == "":
             return jsonify({'success': False, 'cancelled': True, 'message': 'Đã hủy chọn thư mục'})
@@ -165,7 +249,7 @@ def select_file_api():
                 ps_cmd = f"""
                 Add-Type -AssemblyName System.Windows.Forms
                 $f = New-Object System.Windows.Forms.OpenFileDialog
-                $f.Title = "{title}"
+                $f.Title = {_ps_literal(title)}
                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
                     $f.FileName
                 }}
@@ -177,6 +261,7 @@ def select_file_api():
                 
         if file_path and os.path.exists(file_path):
             file_path = os.path.normpath(file_path)
+            register_user_path(file_path)
             return jsonify({'success': True, 'file_path': file_path, 'path': file_path, 'file': file_path})
         elif file_path == "":
             return jsonify({'success': False, 'cancelled': True, 'message': 'Đã hủy chọn file'})
@@ -235,9 +320,9 @@ def save_file_dialog_api():
                 ps_cmd = f"""
                 Add-Type -AssemblyName System.Windows.Forms
                 $f = New-Object System.Windows.Forms.SaveFileDialog
-                $f.Title = "{title}"
-                $f.FileName = "{default_name}"
-                $f.Filter = "{filter_str}"
+                $f.Title = {_ps_literal(title)}
+                $f.FileName = {_ps_literal(default_name)}
+                $f.Filter = {_ps_literal(filter_str)}
                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
                     $f.FileName
                 }}
@@ -249,6 +334,7 @@ def save_file_dialog_api():
                 
         if file_path:
             file_path = os.path.normpath(file_path)
+            register_user_path(file_path)
             if content:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
@@ -260,30 +346,38 @@ def save_file_dialog_api():
 
 @core_bp.route('/api/open_folder', methods=['POST'])
 def api_general_open_folder():
-    import subprocess
-    data = request.json or {}
+    permission_error = _require_any_media_permission()
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
     target_path = data.get('path') or data.get('file_path') or ''
-    if not target_path or not os.path.exists(target_path):
-        folder = os.path.join(ROOT_DIR, 'output')
-        os.makedirs(folder, exist_ok=True)
-        subprocess.Popen(f'explorer "{folder}"')
-        return jsonify({'success': True})
-    
-    if os.path.isdir(target_path):
-        subprocess.Popen(f'explorer "{target_path}"')
+    if not target_path:
+        target_path = os.path.join(ROOT_DIR, 'output')
+        os.makedirs(target_path, exist_ok=True)
+    if not is_path_allowed(target_path, must_exist=True):
+        return jsonify({'success': False, 'error': 'Đường dẫn không hợp lệ hoặc chưa được cho phép'}), 403
+
+    if os.name == 'nt':
+        args = ['explorer', target_path] if os.path.isdir(target_path) else ['explorer', f'/select,{target_path}']
+    elif sys.platform == 'darwin':
+        args = ['open', target_path if os.path.isdir(target_path) else os.path.dirname(target_path)]
     else:
-        subprocess.Popen(f'explorer /select,"{target_path}"')
+        args = ['xdg-open', target_path if os.path.isdir(target_path) else os.path.dirname(target_path)]
+    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return jsonify({'success': True})
 
 @core_bp.route('/api/test-openai', methods=['POST'])
 def test_openai():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     openai_key = data.get('openai_key')
     openai_base_url = data.get('openai_base_url', 'https://api.openai.com/v1')
     if not openai_key:
         return jsonify({'success': False, 'message': 'Thiếu API Key'})
         
-    url = openai_base_url
+    try:
+        url = _validate_external_api_url(openai_base_url)
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
     if not url.endswith('/models'):
         url = f"{url.rstrip('/')}/models"
         
@@ -296,7 +390,7 @@ def test_openai():
         if res.status_code == 200:
             return jsonify({'success': True, 'message': 'Kết nối thành công!'})
         else:
-            return jsonify({'success': False, 'message': f'Lỗi API: {res.text}'})
+            return jsonify({'success': False, 'message': format_api_error_to_vietnamese(res.status_code, res.text[:500])}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': f'Lỗi kết nối: {str(e)}'})
 
@@ -353,7 +447,13 @@ def test_openai_key():
         return jsonify({'success': False, 'error': 'Vui lòng nhập OpenAI API Key trước khi kiểm tra!'}), 400
 
     api_key = str(api_key).strip()
-    base_url = str(base_url).strip().rstrip('/')
+    try:
+        base_url = _validate_external_api_url(base_url)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    model = re.sub(r'[^a-zA-Z0-9_.:/-]', '', str(model))[:200]
+    if not model:
+        return jsonify({'success': False, 'error': 'Tên model không hợp lệ'}), 400
 
     try:
         headers = {
@@ -407,13 +507,16 @@ def get_api_keys():
             for line in f:
                 if '=' in line:
                     k, v = line.strip().split('=', 1)
-                    keys[k] = v
+                    keys[k] = ('•' * 12) if v else ''
     return jsonify(keys)
 
 @core_bp.route('/api/keys', methods=['POST'])
 @core_bp.route('/api/save_api_keys', methods=['POST'])
 def save_api_keys():
     data = request.json or {}
+    allowed_keys = {'openaiKey', 'openaiBaseUrl', 'openaiModel', 'openSpeakerApiKey'}
+    if not isinstance(data, dict) or any(k not in allowed_keys for k in data):
+        return jsonify({'success': False, 'error': 'Trường cấu hình API không hợp lệ'}), 400
     keys = {}
     if os.path.exists(API_KEYS_FILE):
         with open(API_KEYS_FILE, 'r', encoding='utf-8') as f:
@@ -425,18 +528,37 @@ def save_api_keys():
     for k, v in data.items():
         if isinstance(v, str) and v.startswith('•'):
             continue  # Bỏ qua không ghi đè masked asterisks vào file
-        keys[k] = v
+        if not isinstance(v, str) or len(v) > 4096 or '\r' in v or '\n' in v:
+            return jsonify({'success': False, 'error': f'Giá trị {k} không hợp lệ'}), 400
+        value = v.strip()
+        if k == 'openaiBaseUrl' and value:
+            try:
+                value = _validate_external_api_url(value)
+            except ValueError as exc:
+                return jsonify({'success': False, 'error': str(exc)}), 400
+        if k == 'openaiModel':
+            value = re.sub(r'[^a-zA-Z0-9_.:/-]', '', value)[:200]
+            if not value:
+                return jsonify({'success': False, 'error': 'Tên model không hợp lệ'}), 400
+        keys[k] = value
         
-    with open(API_KEYS_FILE, 'w', encoding='utf-8') as f:
-        for k, v in keys.items():
-            f.write(f"{k}={v}\n")
-            
-    # Đẩy 1 chiều (Write-Only) lên Google Sheet trong background thread (không block UI)
+    os.makedirs(os.path.dirname(API_KEYS_FILE), exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='.novacut_keys_', suffix='.tmp', dir=os.path.dirname(API_KEYS_FILE))
     try:
-        import license_manager
-        threading.Thread(target=license_manager.sync_user_keys_to_cloud, args=(keys,), daemon=True).start()
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            for k, v in keys.items():
+                f.write(f"{k}={v}\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, API_KEYS_FILE)
+        if os.name != 'nt':
+            os.chmod(API_KEYS_FILE, 0o600)
     except Exception:
-        pass
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
 
     return jsonify({'success': True})
 

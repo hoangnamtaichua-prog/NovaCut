@@ -110,41 +110,45 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <input type="text" id="editorInputVideoPath" readonly placeholder="Chưa chọn video..." class="text-input" style="flex: 1; background: #1e293b; border: 1px solid #334155; padding: 8px 12px; border-radius: 6px; color: #fff;">
                     <button id="btnSelectEditorInput" class="btn secondary small">Chọn File</button>
                 </div>
-                <div class="video-container" id="videoContainer" style="position: relative; overflow: hidden;">
-                    <!-- Zoom & Pan Wrapper -->
-                    <div id="videoZoomWrapper" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center; transform-origin: center center; transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1);">
-                        <video id="videoPlayer" src=""></video>
-                        <div id="dynamicBlurOverlay" style="position: absolute; z-index: 5; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); background: rgba(0,0,0,0.06); opacity: 0; visibility: hidden; pointer-events: auto; transition: opacity 0.06s ease, width 0.05s ease, left 0.05s ease; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); transform: translateZ(0); will-change: transform, opacity;"></div>
-                        <div id="videoOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; cursor: crosshair; display: none;"></div>
-                        <div id="videoLoadingSpinner" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;">
-                            <div class="loading-spinner"></div>
-                        </div>
-                        <div class="video-placeholder" id="videoPlaceholder">Chưa có video. Hãy chọn video đầu vào.</div>
-                    </div>
-                    <!-- 8-Point Video Zoom & Crop Bounding Box -->
-                    <div id="videoZoomBox" class="video-zoom-box">
-                        <div class="zoom-box-center-cross"></div>
-                        <div class="zoom-resize-handle handle-nw" data-handle="nw"></div>
-                        <div class="zoom-resize-handle handle-ne" data-handle="ne"></div>
-                        <div class="zoom-resize-handle handle-sw" data-handle="sw"></div>
-                        <div class="zoom-resize-handle handle-se" data-handle="se"></div>
-                        <div class="zoom-resize-handle handle-n" data-handle="n"></div>
-                        <div class="zoom-resize-handle handle-s" data-handle="s"></div>
-                        <div class="zoom-resize-handle handle-w" data-handle="w"></div>
-                        <div class="zoom-resize-handle handle-e" data-handle="e"></div>
-                    </div>
+                <div class="video-container" id="videoContainer">
+                    <div class="capcut-canvas-frame" id="videoCanvasFrame">
+                        <div class="capcut-canvas-viewport">
+                            <!-- Zoom & Pan Wrapper -->
+                            <div id="videoZoomWrapper" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center; transform-origin: center center; transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1);">
+                                <video id="videoPlayer" src=""></video>
+                                <div id="dynamicBlurOverlay" style="position: absolute; z-index: 5; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); background: rgba(0,0,0,0.06); opacity: 0; visibility: hidden; pointer-events: auto; transition: opacity 0.06s ease, width 0.05s ease, left 0.05s ease; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); transform: translateZ(0); will-change: transform, opacity;"></div>
+                                <div id="videoOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; cursor: crosshair; display: none;"></div>
+                                <div id="videoLoadingSpinner" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;">
+                                    <div class="loading-spinner"></div>
+                                </div>
+                                <div class="video-placeholder" id="videoPlaceholder">Chưa có video. Hãy chọn video đầu vào.</div>
+                            </div>
+                            <!-- 8-Point Video Zoom & Crop Bounding Box -->
+                            <div id="videoZoomBox" class="video-zoom-box">
+                                <div class="zoom-box-center-cross"></div>
+                                <div class="zoom-resize-handle handle-nw" data-handle="nw"></div>
+                                <div class="zoom-resize-handle handle-ne" data-handle="ne"></div>
+                                <div class="zoom-resize-handle handle-sw" data-handle="sw"></div>
+                                <div class="zoom-resize-handle handle-se" data-handle="se"></div>
+                                <div class="zoom-resize-handle handle-n" data-handle="n"></div>
+                                <div class="zoom-resize-handle handle-s" data-handle="s"></div>
+                                <div class="zoom-resize-handle handle-w" data-handle="w"></div>
+                                <div class="zoom-resize-handle handle-e" data-handle="e"></div>
+                            </div>
 
-                    <!-- 8-Point Interactive Logo / Watermark Overlay -->
-                    <div id="videoLogoOverlay" class="video-logo-overlay" style="display: none;">
-                        <img id="videoLogoImg" src="" alt="Logo" style="width: 100%; height: 100%; object-fit: contain; pointer-events: none; display: block;">
-                        <div class="logo-resize-handle handle-nw" data-handle="nw"></div>
-                        <div class="logo-resize-handle handle-ne" data-handle="ne"></div>
-                        <div class="logo-resize-handle handle-sw" data-handle="sw"></div>
-                        <div class="logo-resize-handle handle-se" data-handle="se"></div>
-                        <div class="logo-resize-handle handle-n" data-handle="n"></div>
-                        <div class="logo-resize-handle handle-s" data-handle="s"></div>
-                        <div class="logo-resize-handle handle-w" data-handle="w"></div>
-                        <div class="logo-resize-handle handle-e" data-handle="e"></div>
+                            <!-- 8-Point Interactive Logo / Watermark Overlay -->
+                            <div id="videoLogoOverlay" class="video-logo-overlay" style="display: none;">
+                                <img id="videoLogoImg" src="" alt="Logo" style="width: 100%; height: 100%; object-fit: contain; pointer-events: none; display: block;">
+                                <div class="logo-resize-handle handle-nw" data-handle="nw"></div>
+                                <div class="logo-resize-handle handle-ne" data-handle="ne"></div>
+                                <div class="logo-resize-handle handle-sw" data-handle="sw"></div>
+                                <div class="logo-resize-handle handle-se" data-handle="se"></div>
+                                <div class="logo-resize-handle handle-n" data-handle="n"></div>
+                                <div class="logo-resize-handle handle-s" data-handle="s"></div>
+                                <div class="logo-resize-handle handle-w" data-handle="w"></div>
+                                <div class="logo-resize-handle handle-e" data-handle="e"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="player-controls">
@@ -297,10 +301,9 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             <div class="form-group flex-1">
                                 <label>Model (ASR)</label>
                                 <select id="asrModelSelect" class="select-input outline-select">
-                                    <option value="whisper" selected>Faster-Whisper (Đa ngôn ngữ) - Khuyên dùng</option>
-                                    <option value="funasr">Paraformer (FunASR) - Tiếng Trung/Anh</option>
-                                    <option value="sensevoice">SenseVoice (SenseTime) - Tiếng Trung</option>
-                                    <option value="paddlespeech">PaddleSpeech (Baidu)</option>
+                                    <option value="whisper" selected>Whisper Native Base (Đa ngôn ngữ) - Khuyên dùng</option>
+                                    <option value="small">Whisper Native Small (Chính xác hơn)</option>
+                                    <option value="medium">Whisper Native Medium (Nặng, chính xác cao)</option>
                                 </select>
                             </div>
                             <div class="form-group flex-1">
@@ -538,24 +541,73 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <span>💥 Giữ lại tiếng động môi trường & hiệu ứng (Keep SFX)</span>
                                     <input type="checkbox" id="editorKeepSfx" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
                                 </label>
-                                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
-                                    <span style="color: #94a3b8; font-size: 11px;">Chế độ tách:</span>
-                                    <select id="editorStemMode" style="background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 2px 8px; font-size: 11px; outline: none;">
-                                        <option value="ai_neural">⚡ AI Neural (Chất lượng cao)</option>
-                                        <option value="dsp_turbo">🚀 DSP Turbo (Siêu tốc 0.2s)</option>
-                                    </select>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
+                                    <div>
+                                        <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Chế độ tách:</div>
+                                        <select id="editorStemMode" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px; outline: none;">
+                                            <option value="mdx_net_hq4" selected>⭐ MDX-NET Inst HQ4 (Khuyên dùng - UVR5)</option>
+                                            <option value="mdx_net_hq5">🛡️ MDX-NET Inst HQ5 (Chống vang Reverb/Echo)</option>
+                                            <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Phần cứng xử lý:</div>
+                                        <select id="editorStemDevice" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px; outline: none;">
+                                            <option value="auto" selected>✨ Tự động (Ưu tiên GPU)</option>
+                                            <option value="cuda">⚡ GPU (NVIDIA CUDA)</option>
+                                            <option value="cpu">💻 CPU (Đa luồng Multithread)</option>
+                                        </select>
+                                    </div>
                                 </div>
-                                <div style="display: flex; gap: 8px; margin-top: 6px;">
+                                <div style="display: flex; gap: 6px; margin-top: 6px;">
                                     <button type="button" id="btnRunStemSeparationEditor" class="btn secondary small" style="flex: 1; padding: 5px 8px; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; background: rgba(56, 189, 248, 0.1);">
                                         <span>⚡</span> Tách & Nghe Thử Âm SFX
                                     </button>
+                                    <button type="button" id="btnCancelStemSeparationEditor" class="btn secondary small" style="display: none; padding: 5px 10px; font-size: 11px; border-color: rgba(239, 68, 68, 0.5); color: #ef4444; background: rgba(239, 68, 68, 0.15); font-weight: 700;" title="Dừng khẩn cấp tiến trình tách âm">
+                                        <span>🛑 Dừng khẩn cấp</span>
+                                    </button>
                                 </div>
-                                <div id="editorStemResultAudio" style="display: none; margin-top: 6px; padding: 6px; background: #0f172a; border-radius: 6px; border: 1px solid #334155;">
-                                    <div style="font-size: 10.5px; color: #34d399; margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                        <span>🎧 Audio SFX đã lọc sạch lời thoại:</span>
-                                        <span id="editorStemResultStatus">Sẵn sàng</span>
+                                
+                                <!-- Live Progress Box (% hoàn thành) -->
+                                <div id="editorStemProgressBox" style="display: none; margin-top: 6px; padding: 8px 10px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
+                                        <span id="editorStemProgressStatus" style="color: #38bdf8; font-weight: 600;">Đang chuẩn bị...</span>
+                                        <span id="editorStemProgressPercent" style="color: #38bdf8; font-family: monospace; font-weight: bold;">0%</span>
                                     </div>
-                                    <audio id="editorStemAudioPlayer" controls style="width: 100%; height: 28px; outline: none;"></audio>
+                                    <div style="width: 100%; height: 6px; background: #0f172a; border-radius: 4px; overflow: hidden; border: 1px solid #1e293b;">
+                                        <div id="editorStemProgressBarFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #0ea5e9, #a855f7); transition: width 0.2s ease; box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);"></div>
+                                    </div>
+                                </div>
+
+                                <!-- System Log Console -->
+                                <div style="margin-top: 4px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <button type="button" id="btnToggleStemLogEditor" style="background: none; border: none; font-size: 10.5px; color: #94a3b8; cursor: pointer; padding: 2px 0; display: inline-flex; align-items: center; gap: 4px;">
+                                            <span>📋 System Log</span> <span id="editorStemLogCount" style="font-size: 9.5px; opacity: 0.7;">(0)</span>
+                                        </button>
+                                        <span id="editorStemHardwareBadge" style="font-size: 10px; color: #64748b; font-family: monospace;">Hardware: Auto</span>
+                                    </div>
+                                    <div id="editorStemLogContainer" style="display: none; margin-top: 4px; padding: 6px 8px; background: #070b14; border: 1px solid #1e293b; border-radius: 6px; font-family: monospace; font-size: 10px; color: #34d399; max-height: 90px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
+[System] Sẵn sàng ghi nhận log tiến trình tách âm...
+                                    </div>
+                                </div>
+
+                                <div id="editorStemResultAudio" style="display: none; margin-top: 6px; padding: 8px 10px; background: rgba(15, 23, 42, 0.95); border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.3); box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                                    <div style="font-size: 11px; color: #34d399; font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="display: inline-flex; align-items: center; gap: 5px;">
+                                            <span>🎧 Audio SFX đã lọc sạch lời thoại:</span>
+                                        </span>
+                                        <span id="editorStemResultStatus" style="font-size: 10px; background: rgba(52, 211, 153, 0.15); color: #34d399; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(52, 211, 153, 0.3);">Sẵn sàng</span>
+                                    </div>
+                                    <audio id="editorStemAudioPlayer" controls style="width: 100%; height: 28px; outline: none; margin-bottom: 6px;"></audio>
+                                    <div style="display: flex; gap: 6px;">
+                                        <button type="button" id="btnApplyStemToEditedPreview" class="btn primary small" style="flex: 1; padding: 6px 10px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #10b981); border: none; border-radius: 5px; color: #ffffff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);">
+                                            <span>✨ Áp dụng vào "Bản sau khi sửa"</span>
+                                        </button>
+                                        <button type="button" id="btnRemoveStemFromEditedPreview" class="btn secondary small" style="display: none; padding: 6px 10px; font-size: 11px; border-color: rgba(239, 68, 68, 0.4); color: #ef4444; background: rgba(239, 68, 68, 0.1);" title="Hủy áp dụng và nghe lại âm thanh gốc của video">
+                                            <span>Khôi phục âm gốc</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -932,26 +984,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <button id="btnResetEditTools" class="btn-preset-text" style="font-size: 11px; color: #94a3b8; background: none; border: none; cursor: pointer;">Mặc định</button>
                 </div>
                 <div class="card-body" style="padding-top: 10px; display: flex; flex-direction: column; gap: 12px;">
-                    <!-- 1. Thu phóng Video (Zoom & Pan) -->
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: #cbd5e1; margin-bottom: 4px;">
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <span>🔍 Thu phóng màn hình (Zoom)</span>
-                                <button id="btnToggleZoomBox" class="btn secondary small btn-toggle-zoom-box" title="Bật/Tắt khung neo 8 điểm trên màn hình video" style="padding: 2px 6px; font-size: 10px; font-weight: 600; border-radius: 4px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer;">
-                                    <span>📐 Khung neo</span>
-                                </button>
-                            </div>
-                            <span id="editToolZoomVal" style="color: #38bdf8; font-weight: 600;">100% (Fit)</span>
-                        </div>
-                        <div style="display: flex; gap: 6px; align-items: center;">
-                            <button id="btnCardZoomOut" class="btn secondary small" style="padding: 4px 8px; font-weight: bold; width: 28px; height: 28px;">-</button>
-                            <input type="range" id="editToolZoomSlider" min="50" max="300" value="100" step="5" class="cyan-slider" style="flex: 1;">
-                            <button id="btnCardZoomIn" class="btn secondary small" style="padding: 4px 8px; font-weight: bold; width: 28px; height: 28px;">+</button>
-                            <button id="btnCardZoomFit" class="btn secondary small" style="padding: 4px 8px; color: #38bdf8; font-weight: 600; font-size: 11px;">Fit</button>
-                        </div>
-                    </div>
-
-                    <!-- 2. Tốc độ Video (Speed) -->
+                    <!-- 1. Tốc độ Video (Speed) -->
                     <div class="form-group" style="margin-bottom: 0;">
                         <div style="display: flex; justify-content: space-between; font-size: 11.5px; color: #cbd5e1; margin-bottom: 4px;">
                             <span>⚡ Tốc độ video (Speed)</span>
@@ -1638,32 +1671,46 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <svg viewBox="0 0 24 24" width="16" height="16" stroke="#38bdf8" stroke-width="2" fill="none"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
                                 <span style="font-weight: 600; font-size: 13.5px; color: #f8fafc;">MÀN HÌNH XEM TRƯỚC PHIM (PREVIEW)</span>
                             </div>
-                            <span id="reviewPlayerStatusBadge" style="font-size: 11px; color: #94a3b8; background: rgba(148, 163, 184, 0.12); padding: 2px 8px; border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.25);">Chưa nạp video</span>
-                        </div>
-                        <div class="video-container" id="reviewVideoContainer" style="position: relative; overflow: hidden; min-height: 280px; background: #020617; border-radius: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: aspect-ratio 0.2s ease, max-height 0.2s ease;">
-                            <div id="reviewVideoZoomWrapper" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center;">
-                                <video id="reviewVideoPlayer" src="" style="width: 100%; height: 100%; object-fit: contain; display: none;"></video>
-                                <div id="reviewDynamicBlurOverlay" style="position: absolute; z-index: 5; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); background: rgba(0,0,0,0.06); opacity: 0; visibility: hidden; pointer-events: auto; transition: opacity 0.06s ease, width 0.05s ease, left 0.05s ease; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); transform: translateZ(0); will-change: transform, opacity;"></div>
-                                <div id="reviewVideoLoadingSpinner" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;">
-                                    <div class="loading-spinner"></div>
-                                </div>
-                                <div class="video-placeholder" id="reviewVideoPlaceholder" style="text-align: center; padding: 25px 20px; color: #64748b; font-size: 13px; user-select: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
-                                    <div style="font-size: 36px; opacity: 0.8;">🎬</div>
-                                    <div style="font-weight: 600; color: #94a3b8;">Chưa nạp video phim</div>
-                                    <div style="font-size: 11.5px; color: #64748b;">Kéo thả file video vào đây hoặc bấm <strong>"Chọn Video"</strong> ở bên dưới</div>
-                                </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <button type="button" id="btnSelectReviewVideoHeader" class="btn secondary small" style="padding: 4px 10px; font-size: 11.5px; font-weight: 600; display: flex; align-items: center; gap: 5px; border-radius: 6px; cursor: pointer;" title="Chọn file video phim nạp vào preview">
+                                    <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                                    <span>Chọn Video</span>
+                                </button>
+                                <span id="reviewPlayerStatusBadge" style="font-size: 11px; color: #94a3b8; background: rgba(148, 163, 184, 0.12); padding: 2px 8px; border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.25);">Chưa nạp video</span>
                             </div>
-                            <!-- 8-Point Interactive Logo / Watermark Overlay for Review Phim -->
-                            <div id="reviewVideoLogoOverlay" class="video-logo-overlay" style="display: none;">
-                                <img id="reviewVideoLogoImg" src="" alt="Logo" style="width: 100%; height: 100%; object-fit: contain; pointer-events: none; display: block;">
-                                <div class="logo-resize-handle handle-nw" data-handle="nw"></div>
-                                <div class="logo-resize-handle handle-ne" data-handle="ne"></div>
-                                <div class="logo-resize-handle handle-sw" data-handle="sw"></div>
-                                <div class="logo-resize-handle handle-se" data-handle="se"></div>
-                                <div class="logo-resize-handle handle-n" data-handle="n"></div>
-                                <div class="logo-resize-handle handle-s" data-handle="s"></div>
-                                <div class="logo-resize-handle handle-w" data-handle="w"></div>
-                                <div class="logo-resize-handle handle-e" data-handle="e"></div>
+                        </div>
+                        <div class="video-container" id="reviewVideoContainer">
+                            <div class="capcut-canvas-frame" id="reviewVideoCanvasFrame">
+                                <div class="capcut-canvas-viewport">
+                                    <div id="reviewVideoZoomWrapper" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center;">
+                                        <video id="reviewVideoPlayer" src="" style="width: 100%; height: 100%; object-fit: contain; display: none;"></video>
+                                        <div id="reviewDynamicBlurOverlay" style="position: absolute; z-index: 5; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); background: rgba(0,0,0,0.06); opacity: 0; visibility: hidden; pointer-events: auto; transition: opacity 0.06s ease, width 0.05s ease, left 0.05s ease; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); transform: translateZ(0); will-change: transform, opacity;"></div>
+                                        <div id="reviewVideoLoadingSpinner" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;">
+                                            <div class="loading-spinner"></div>
+                                        </div>
+                                        <div class="video-placeholder" id="reviewVideoPlaceholder" style="text-align: center; padding: 25px 20px; color: #64748b; font-size: 13px; user-select: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
+                                            <div style="font-size: 36px; opacity: 0.8;">🎬</div>
+                                            <div style="font-weight: 600; color: #94a3b8;">Chưa nạp video phim</div>
+                                            <div style="font-size: 11.5px; color: #64748b;">Kéo thả file video vào đây hoặc bấm nút dưới</div>
+                                            <button type="button" id="btnSelectReviewVideoPlaceholder" class="btn primary-cyan small" style="margin-top: 6px; padding: 6px 14px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; pointer-events: auto;">
+                                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                                                <span>Chọn Video Phim</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <!-- 8-Point Interactive Logo / Watermark Overlay for Review Phim -->
+                                    <div id="reviewVideoLogoOverlay" class="video-logo-overlay" style="display: none;">
+                                        <img id="reviewVideoLogoImg" src="" alt="Logo" style="width: 100%; height: 100%; object-fit: contain; pointer-events: none; display: block;">
+                                        <div class="logo-resize-handle handle-nw" data-handle="nw"></div>
+                                        <div class="logo-resize-handle handle-ne" data-handle="ne"></div>
+                                        <div class="logo-resize-handle handle-sw" data-handle="sw"></div>
+                                        <div class="logo-resize-handle handle-se" data-handle="se"></div>
+                                        <div class="logo-resize-handle handle-n" data-handle="n"></div>
+                                        <div class="logo-resize-handle handle-s" data-handle="s"></div>
+                                        <div class="logo-resize-handle handle-w" data-handle="w"></div>
+                                        <div class="logo-resize-handle handle-e" data-handle="e"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="player-controls">
@@ -1911,12 +1958,23 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                         <span>💥 Giữ lại tiếng động môi trường & hiệu ứng (Keep SFX)</span>
                                         <input type="checkbox" id="reviewKeepSfx" checked style="accent-color: #38bdf8;">
                                     </label>
-                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
-                                        <span style="color: #94a3b8;">Chế độ tách:</span>
-                                        <select id="reviewStemMode" style="background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 2px 6px; font-size: 11px;">
-                                            <option value="ai_neural">⚡ AI Neural (Chất lượng cao)</option>
-                                            <option value="dsp_turbo">🚀 DSP Turbo (Siêu tốc 0.2s)</option>
-                                        </select>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px;">
+                                        <div>
+                                            <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Chế độ tách:</div>
+                                            <select id="reviewStemMode" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px;">
+                                                <option value="mdx_net_hq4" selected>⭐ MDX-NET Inst HQ4 (Khuyên dùng - UVR5)</option>
+                                                <option value="mdx_net_hq5">🛡️ MDX-NET Inst HQ5 (Chống vang Reverb/Echo)</option>
+                                                <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Phần cứng:</div>
+                                            <select id="reviewStemDevice" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px;">
+                                                <option value="auto" selected>✨ Tự động (Ưu tiên GPU)</option>
+                                                <option value="cuda">⚡ GPU (NVIDIA CUDA)</option>
+                                                <option value="cpu">💻 CPU (Đa luồng Multithread)</option>
+                                            </select>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1945,36 +2003,6 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <div class="review-pacing-btn-group" style="display: flex; gap: 8px;">
                                     <button type="button" id="reviewPacingFast" class="btn secondary small toggle-pacing-btn" style="flex: 1; padding: 6px 10px;">⚡ Dồn dập (2-4s/cảnh)</button>
                                     <button type="button" id="reviewPacingNormal" class="btn secondary small toggle-pacing-btn active" style="flex: 1; padding: 6px 10px; border-color: #38bdf8; color: #38bdf8;">🎬 Chuẩn điện ảnh (4-7s)</button>
-                                </div>
-                            </div>
-
-                            <!-- Video Zoom & Crop FX -->
-                            <div class="form-group mb-12" style="background: rgba(15, 23, 42, 0.6); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.25);">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                    <div style="display: flex; align-items: center; gap: 6px;">
-                                        <svg viewBox="0 0 24 24" width="14" height="14" stroke="#38bdf8" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
-                                        <span style="font-size: 12px; font-weight: 600; color: #38bdf8;">🔍 Phóng to Video (Zoom & Crop)</span>
-                                    </div>
-                                    <label class="switch" style="margin-bottom: 0;">
-                                        <input type="checkbox" id="reviewEnableZoom" checked>
-                                        <span class="slider-toggle round"></span>
-                                    </label>
-                                </div>
-                                <div id="reviewZoomConfigPanel" style="display: flex; flex-direction: column; gap: 8px;">
-                                    <div class="form-group" style="margin-bottom: 0;">
-                                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-bottom: 2px;">
-                                            <span>Mức độ phóng to (Zoom Level):</span>
-                                            <span id="reviewVideoZoomVal" style="color: #38bdf8; font-weight: 600;">105% (Khuyên dùng)</span>
-                                        </div>
-                                        <input type="range" id="reviewVideoZoom" min="100" max="150" value="105" step="1" class="cyan-slider">
-                                    </div>
-                                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;">
-                                        <button type="button" class="btn secondary small btn-review-zoom-preset" data-zoom="100" style="padding: 3px 2px; font-size: 10px;">100% (Gốc)</button>
-                                        <button type="button" class="btn secondary small btn-review-zoom-preset active" data-zoom="105" style="padding: 3px 2px; font-size: 10px; border-color: #38bdf8; color: #38bdf8;" title="Zoom nhẹ 5% chống lách bản quyền hiệu quả">105% 🛡️</button>
-                                        <button type="button" class="btn secondary small btn-review-zoom-preset" data-zoom="110" style="padding: 3px 2px; font-size: 10px;">110%</button>
-                                        <button type="button" class="btn secondary small btn-review-zoom-preset" data-zoom="120" style="padding: 3px 2px; font-size: 10px;">120%</button>
-                                        <button type="button" class="btn secondary small btn-review-zoom-preset" data-zoom="130" style="padding: 3px 2px; font-size: 10px;">130%</button>
-                                    </div>
                                 </div>
                             </div>
 
@@ -4254,7 +4282,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
     })();
     </script>
 
-    <script type="module" src="app.js?v=20260825_1350"></script>
+    <script type="module" src="app.js?v=20260827_0120"></script>
 </body>
 </html>
 

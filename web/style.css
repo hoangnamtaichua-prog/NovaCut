@@ -155,8 +155,8 @@ input[type=number] {
 .top-row {
     display: flex;
     gap: 16px;
-    height: 480px;
-    min-height: 400px;
+    height: 720px;
+    min-height: 650px;
     flex-shrink: 0;
 }
 
@@ -234,15 +234,50 @@ input[type=number] {
     min-height: 0; /* Fix flex overflow scrolling */
 }
 
-/* Video Player */
+/* Video Player Card & Subtitle Extraction Card (Top Row 1.5x Height) */
 .video-player-card {
     flex: 1; /* split 50/50 */
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
 }
 
 .subtitle-extraction-card {
     flex: 1; /* split 50/50 */
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.subtitle-extraction-card .card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 14px 16px;
+}
+
+.ext-content.active {
+    display: flex !important;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 12px;
+}
+
+.ocr-region-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.ocr-region-container .region-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 100px;
 }
 
 .video-container {
@@ -3573,3 +3608,682 @@ video {
         box-shadow: 0 0 10px 3px rgba(56, 189, 248, 0.5);
     }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   🎬 UNIVERSAL VIDEO STUDIO SUITE (DOCKED TOOLBAR & VIEWPORT)
+   ═════════════════════════════════════════════════════════════ */
+/* CapCut Stage (Sân khấu xem trước cố định) */
+.video-container {
+    width: 100%;
+    flex: 1;
+    height: 100%;
+    min-height: 560px;
+    background: #070b14;
+    background-image: radial-gradient(circle at center, #0f172a 0%, #070b14 100%);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.6);
+    user-select: none;
+}
+
+/* CapCut Canvas Frame (Khung Project trung tâm) */
+.capcut-canvas-frame {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000000;
+    border-radius: 4px;
+    overflow: visible; /* Cho phép 8 mốc neo mở rộng tràn ra ngoài sân khấu stage */
+    transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1), height 0.28s cubic-bezier(0.4, 0, 0.2, 1), aspect-ratio 0.28s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s ease, box-shadow 0.2s ease;
+    box-sizing: border-box;
+}
+
+/* Video Clip Viewport inside Canvas Frame (Cắt clip video chuẩn xác theo project canvas) */
+.capcut-canvas-viewport {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+}
+
+/* Docked Video Studio Toolbar (Fixed right above timeline) */
+.studio-docked-toolbar {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #0b1120;
+    border-top: 1px solid #1e293b;
+    border-bottom: 1px solid #1e293b;
+    user-select: none;
+    box-sizing: border-box;
+}
+
+.studio-docked-toolbar:hover {
+    background: #0d1527;
+}
+
+.studio-tool-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Aspect Ratio Pill Button */
+.studio-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.studio-btn:hover {
+    background: #283548;
+    color: #38bdf8;
+    border-color: #38bdf8;
+    transform: translateY(-1px);
+}
+
+.studio-btn:active {
+    transform: translateY(0);
+}
+
+.studio-btn.active {
+    background: rgba(56, 189, 248, 0.18);
+    color: #38bdf8;
+    border-color: #38bdf8;
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+}
+
+.studio-btn.icon-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 6px;
+}
+
+/* Fit / Stretch Mode Segmented Buttons */
+.studio-fit-group {
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+}
+
+.studio-fit-btn {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.studio-fit-btn:hover {
+    color: #f1f5f9;
+    background: rgba(51, 65, 85, 0.5);
+}
+
+.studio-fit-btn.active {
+    background: #38bdf8;
+    color: #0f172a;
+    font-weight: 700;
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+
+/* Studio Dropdown Menu (Pops UPWARDS into video stage) */
+.studio-dropdown-wrap {
+    position: relative;
+}
+
+.studio-dropdown-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    top: auto;
+    left: 0;
+    min-width: 175px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.7), 0 0 15px rgba(56, 189, 248, 0.15);
+    padding: 5px;
+    z-index: 100;
+    animation: fadeInScale 0.15s ease;
+}
+
+.studio-dropdown-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.studio-dropdown-item:hover {
+    background: #1e293b;
+    color: #38bdf8;
+}
+
+.studio-dropdown-item.active {
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    border-left: 3px solid #38bdf8;
+}
+
+.studio-dropdown-item .sub-desc {
+    font-size: 10px;
+    font-weight: 400;
+    color: #64748b;
+}
+
+.studio-dropdown-item:hover .sub-desc {
+    color: #94a3b8;
+}
+
+/* Speed Dropdown Menu in Player Bar */
+.speed-menu {
+    min-width: 110px;
+}
+
+.speed-item {
+    padding: 5px 8px;
+    font-size: 11.5px;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   🛡️ SAFE ZONE OVERLAY (TIKTOK / REELS UI GUIDE)
+   ═════════════════════════════════════════════════════════════ */
+.studio-safe-zone-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 25;
+    pointer-events: none;
+    user-select: none;
+}
+
+.safe-zone-box {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.safe-zone-inner-guide {
+    position: absolute;
+    top: 10%;
+    bottom: 16%;
+    left: 6%;
+    right: 18%;
+    border: 1.5px dashed rgba(56, 189, 248, 0.75);
+    border-radius: 6px;
+    background: rgba(56, 189, 248, 0.03);
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 4px;
+    box-sizing: border-box;
+}
+
+.safe-zone-label {
+    font-size: 8.5px;
+    font-weight: 700;
+    color: #38bdf8;
+    background: rgba(15, 23, 42, 0.9);
+    padding: 2px 5px;
+    border-radius: 4px;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    letter-spacing: 0.5px;
+}
+
+/* Right Rail Simulation */
+.safe-zone-rail-right {
+    position: absolute;
+    right: 6px;
+    bottom: 50px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    opacity: 0.75;
+}
+
+.safe-zone-rail-right .rail-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+}
+
+.safe-zone-rail-right .rail-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.safe-zone-rail-right .rail-item span {
+    font-size: 7.5px;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.safe-zone-rail-right .rail-disc {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #0f172a;
+    border: 2px solid #38bdf8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    animation: spinDisc 4s linear infinite;
+}
+
+@keyframes spinDisc {
+    100% { transform: rotate(360deg); }
+}
+
+/* Bottom Bar Simulation */
+.safe-zone-bottom-bar {
+    position: absolute;
+    bottom: 6px;
+    left: 8px;
+    right: 42px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    opacity: 0.75;
+}
+
+.safe-caption-mock {
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #ffffff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.safe-sound-mock {
+    font-size: 8.5px;
+    color: #cbd5e1;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Top Bar Simulation */
+.safe-zone-top-bar {
+    position: absolute;
+    top: 42px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.6);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* ═════════════════════════════════════════════════════════════
+   📐 3x3 RULE OF THIRDS GRID OVERLAY
+   ═════════════════════════════════════════════════════════════ */
+.studio-grid-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 26;
+    pointer-events: none;
+    user-select: none;
+}
+
+.studio-grid-overlay .grid-line {
+    position: absolute;
+    background: rgba(245, 158, 11, 0.4);
+    box-shadow: 0 0 4px rgba(245, 158, 11, 0.3);
+}
+
+.studio-grid-overlay .grid-v1 {
+    top: 0;
+    bottom: 0;
+    left: 33.333%;
+    width: 1px;
+}
+
+.studio-grid-overlay .grid-v2 {
+    top: 0;
+    bottom: 0;
+    left: 66.666%;
+    width: 1px;
+}
+
+.studio-grid-overlay .grid-h1 {
+    left: 0;
+    right: 0;
+    top: 33.333%;
+    height: 1px;
+}
+
+.studio-grid-overlay .grid-h2 {
+    left: 0;
+    right: 0;
+    top: 66.666%;
+    height: 1px;
+}
+
+.studio-grid-overlay .grid-point {
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #f59e0b;
+    box-shadow: 0 0 8px #f59e0b;
+    transform: translate(-50%, -50%);
+}
+
+.studio-grid-overlay .point-tl { top: 33.333%; left: 33.333%; }
+.studio-grid-overlay .point-tr { top: 33.333%; left: 66.666%; }
+.studio-grid-overlay .point-bl { top: 66.666%; left: 33.333%; }
+.studio-grid-overlay .point-br { top: 66.666%; left: 66.666%; }
+
+/* ═════════════════════════════════════════════════════════════
+   🎬 CAPCUT INTERACTIVE TRANSFORM BOUNDING BOX & ANCHORS
+   ═════════════════════════════════════════════════════════════ */
+.capcut-transform-box {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 35;
+    box-sizing: border-box;
+    display: none;
+}
+
+.capcut-transform-box.active {
+    display: block;
+}
+
+/* Transform Outline Frame */
+.capcut-transform-frame {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: 1.5px solid #38bdf8;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.4), inset 0 0 12px rgba(56, 189, 248, 0.15);
+    pointer-events: auto;
+    cursor: move;
+    box-sizing: border-box;
+}
+
+.capcut-transform-frame:hover {
+    border-color: #67e8f9;
+}
+
+/* 4 Corner Anchor Handles (White Circular Dots) */
+.capcut-anchor-corner {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background: #ffffff;
+    border: 2px solid #0f172a;
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.8), 0 0 4px rgba(56, 189, 248, 0.6);
+    pointer-events: auto;
+    z-index: 40;
+    transition: transform 0.1s ease, background-color 0.1s ease;
+    box-sizing: border-box;
+}
+
+.capcut-anchor-corner:hover {
+    transform: scale(1.3);
+    background: #38bdf8;
+    border-color: #ffffff;
+}
+
+.capcut-anchor-corner.handle-tl {
+    top: -7px;
+    left: -7px;
+    cursor: nwse-resize;
+}
+
+.capcut-anchor-corner.handle-tr {
+    top: -7px;
+    right: -7px;
+    cursor: nesw-resize;
+}
+
+.capcut-anchor-corner.handle-bl {
+    bottom: -7px;
+    left: -7px;
+    cursor: nesw-resize;
+}
+
+.capcut-anchor-corner.handle-br {
+    bottom: -7px;
+    right: -7px;
+    cursor: nwse-resize;
+}
+
+/* 4 Edge Midpoint Handles (White Rectangular / Pill Dots) */
+.capcut-anchor-edge {
+    position: absolute;
+    background: #ffffff;
+    border: 2px solid #0f172a;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.8), 0 0 4px rgba(56, 189, 248, 0.6);
+    pointer-events: auto;
+    z-index: 40;
+    transition: transform 0.1s ease, background-color 0.1s ease;
+    box-sizing: border-box;
+}
+
+.capcut-anchor-edge:hover {
+    background: #38bdf8;
+    border-color: #ffffff;
+}
+
+.capcut-anchor-edge.handle-tc {
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 9px;
+    border-radius: 4px;
+    cursor: ns-resize;
+}
+.capcut-anchor-edge.handle-tc:hover {
+    transform: translateX(-50%) scale(1.25);
+}
+
+.capcut-anchor-edge.handle-bc {
+    bottom: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 9px;
+    border-radius: 4px;
+    cursor: ns-resize;
+}
+.capcut-anchor-edge.handle-bc:hover {
+    transform: translateX(-50%) scale(1.25);
+}
+
+.capcut-anchor-edge.handle-lc {
+    top: 50%;
+    left: -5px;
+    transform: translateY(-50%);
+    width: 9px;
+    height: 22px;
+    border-radius: 4px;
+    cursor: ew-resize;
+}
+.capcut-anchor-edge.handle-lc:hover {
+    transform: translateY(-50%) scale(1.25);
+}
+
+.capcut-anchor-edge.handle-rc {
+    top: 50%;
+    right: -5px;
+    transform: translateY(-50%);
+    width: 9px;
+    height: 22px;
+    border-radius: 4px;
+    cursor: ew-resize;
+}
+.capcut-anchor-edge.handle-rc:hover {
+    transform: translateY(-50%) scale(1.25);
+}
+
+/* Bottom Center Rotation Handle */
+.capcut-anchor-rotate-wrap {
+    position: absolute;
+    bottom: -36px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: auto;
+    z-index: 40;
+    cursor: grab;
+}
+
+.capcut-anchor-rotate-wrap:active {
+    cursor: grabbing;
+}
+
+.capcut-rotate-line {
+    width: 1.5px;
+    height: 14px;
+    background: #38bdf8;
+}
+
+.capcut-anchor-rotate {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #0f172a;
+    border: 1.5px solid #ffffff;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.8), 0 0 8px rgba(56, 189, 248, 0.5);
+    transition: transform 0.15s ease, background-color 0.15s ease;
+    user-select: none;
+}
+
+.capcut-anchor-rotate-wrap:hover .capcut-anchor-rotate {
+    transform: scale(1.15) rotate(45deg);
+    background: #38bdf8;
+    color: #0f172a;
+    border-color: #ffffff;
+}
+
+/* Live Transform HUD Badge */
+.capcut-transform-badge {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #38bdf8;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 45;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.capcut-transform-badge.visible {
+    opacity: 1;
+}
+
+/* Snapping Guidelines */
+.capcut-guide-line {
+    position: absolute;
+    background: #ef4444;
+    z-index: 30;
+    pointer-events: none;
+    display: none;
+}
+
+.capcut-guide-v {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    box-shadow: 0 0 6px #ef4444;
+}
+
+.capcut-guide-h {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    box-shadow: 0 0 6px #ef4444;
+}
+
+
+
+

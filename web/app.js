@@ -1,7 +1,8 @@
 import { loadCapCutDrafts } from './js/features/capcut.js';
 import { initCloneVoiceModule, loadClonedVoicesList } from './js/features/clone_voice.js';
 import { initBatchQueueModule } from './js/features/batch_queue.js';
-import { appendLog, showToast, showConfirmModal, showAlertModal, showPromptModal, formatTimeSec, parseTimeToSeconds, formatSrtTimestamp, formatDurationStr } from './js/utils.js';
+import { initVideoStudioSuite, videoStudioInstances } from './js/features/video_studio_suite.js';
+import { appendLog, showToast, showConfirmModal, showAlertModal, showPromptModal, formatTimeSec, parseTimeToSeconds, formatSrtTimestamp, formatDurationStr, escapeHtml, safeHttpUrl } from './js/utils.js';
 
 export let currentLicenseState = {
     is_valid: false,
@@ -269,6 +270,30 @@ if (editorStemSeparationEnabled && editorStemConfig) {
 }
 
 const btnRunStemSeparationEditor = document.getElementById('btnRunStemSeparationEditor');
+const btnCancelStemSeparationEditor = document.getElementById('btnCancelStemSeparationEditor');
+const btnToggleStemLogEditor = document.getElementById('btnToggleStemLogEditor');
+const editorStemLogContainer = document.getElementById('editorStemLogContainer');
+
+if (btnToggleStemLogEditor && editorStemLogContainer) {
+    btnToggleStemLogEditor.addEventListener('click', () => {
+        const isHidden = editorStemLogContainer.style.display === 'none';
+        editorStemLogContainer.style.display = isHidden ? 'block' : 'none';
+    });
+}
+
+if (btnCancelStemSeparationEditor) {
+    btnCancelStemSeparationEditor.addEventListener('click', async () => {
+        btnCancelStemSeparationEditor.disabled = true;
+        btnCancelStemSeparationEditor.innerHTML = '<span>⏳</span> Đang hủy...';
+        try {
+            await fetch('/api/audio/separate/cancel', { method: 'POST' });
+            showToast('🛑 Đã gửi lệnh dừng khẩn cấp tác vụ tách âm thanh!', 'info');
+        } catch (e) {
+            console.error(e);
+        }
+    });
+}
+
 if (btnRunStemSeparationEditor) {
     btnRunStemSeparationEditor.addEventListener('click', async () => {
         const videoInput = document.getElementById('editorInputVideoPath')?.value || '';
@@ -280,44 +305,128 @@ if (btnRunStemSeparationEditor) {
         const hasPerm = await checkFeaturePermission('can_access_editor', 'Tách Âm Thanh AI & Lọc Giọng Thoại');
         if (!hasPerm) return;
 
+        const mode = document.getElementById('editorStemMode')?.value || 'mdx_net_hq4';
+        const device = document.getElementById('editorStemDevice')?.value || 'auto';
+        const removeVocals = document.getElementById('editorRemoveVocals')?.checked !== false;
+        const keepSfx = document.getElementById('editorKeepSfx')?.checked !== false;
+
+        const progressBox = document.getElementById('editorStemProgressBox');
+        const progressBarFill = document.getElementById('editorStemProgressBarFill');
+        const progressStatus = document.getElementById('editorStemProgressStatus');
+        const progressPercent = document.getElementById('editorStemProgressPercent');
+        const logBox = document.getElementById('editorStemLogContainer');
+        const logCount = document.getElementById('editorStemLogCount');
+        const hwBadge = document.getElementById('editorStemHardwareBadge');
+
+        if (progressBox) progressBox.style.display = 'block';
+        if (progressBarFill) progressBarFill.style.width = '5%';
+        if (progressStatus) progressStatus.textContent = 'Đang khởi tạo mô hình...';
+        if (progressPercent) progressPercent.textContent = '5%';
+        if (hwBadge) hwBadge.textContent = `Hardware: ${device.toUpperCase()}`;
+        if (logBox) logBox.textContent = `[System] Bắt đầu tách âm thanh (Model: ${mode}, Hardware: ${device.toUpperCase()})...\n`;
+
         btnRunStemSeparationEditor.disabled = true;
         btnRunStemSeparationEditor.innerHTML = '<span class="loading-spinner-small"></span> Đang tách âm thanh AI...';
+        if (btnCancelStemSeparationEditor) {
+            btnCancelStemSeparationEditor.style.display = 'inline-flex';
+            btnCancelStemSeparationEditor.disabled = false;
+            btnCancelStemSeparationEditor.innerHTML = '<span>🛑 Dừng khẩn cấp</span>';
+        }
+
         showToast('🎛️ Đang chạy tách lời thoại cũ và bảo lưu tiếng động SFX...', 'info');
 
+        let pollTimer = null;
         try {
-            const mode = document.getElementById('editorStemMode')?.value || 'ai_neural';
-            const removeVocals = document.getElementById('editorRemoveVocals')?.checked !== false;
-            const keepSfx = document.getElementById('editorKeepSfx')?.checked !== false;
-
             const res = await fetch('/api/audio/separate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     media_path: videoInput,
                     mode: mode,
+                    device: device,
                     remove_vocals: removeVocals,
                     keep_sfx: keepSfx
                 })
             });
 
             const data = await res.json();
-            if (data.success && data.cleaned_url) {
-                showToast('🎉 Đã tách và lọc âm thanh AI thành công!', 'success');
-                const resultBox = document.getElementById('editorStemResultAudio');
-                const player = document.getElementById('editorStemAudioPlayer');
-                if (resultBox && player) {
-                    resultBox.style.display = 'block';
-                    player.src = data.cleaned_url;
-                    player.play().catch(() => {});
-                }
-            } else {
-                showToast(`❌ Lỗi tách âm thanh: ${data.error || 'Thất bại'}`, 'error');
+            if (!data.success) {
+                showToast(`❌ Lỗi: ${data.error || 'Không thể khởi động'}`, 'error');
+                btnRunStemSeparationEditor.disabled = false;
+                btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm SFX';
+                if (btnCancelStemSeparationEditor) btnCancelStemSeparationEditor.style.display = 'none';
+                return;
             }
+
+            // Vòng lặp lắng nghe tiến trình thời gian thực
+            await new Promise((resolve) => {
+                pollTimer = setInterval(async () => {
+                    try {
+                        const pRes = await fetch('/api/audio/separate/progress');
+                        const pData = await pRes.json();
+                        if (!pData) return;
+
+                        if (progressBarFill && pData.percent !== undefined) progressBarFill.style.width = `${pData.percent}%`;
+                        if (progressPercent && pData.percent !== undefined) progressPercent.textContent = `${pData.percent}%`;
+                        if (progressStatus && pData.message) progressStatus.textContent = pData.message;
+                        if (pData.logs && logBox) {
+                            logBox.textContent = pData.logs.join('\n');
+                            logBox.scrollTop = logBox.scrollHeight;
+                            if (logCount) logCount.textContent = `(${pData.logs.length})`;
+                        }
+
+                        if (pData.status === 'completed') {
+                            clearInterval(pollTimer);
+                            if (progressBarFill) progressBarFill.style.width = '100%';
+                            if (progressPercent) progressPercent.textContent = '100%';
+                            if (progressStatus) progressStatus.textContent = '✅ Đã hoàn tất tách âm thanh!';
+                            showToast('🎉 Đã tách và lọc âm thanh AI thành công!', 'success');
+
+                            const resultBox = document.getElementById('editorStemResultAudio');
+                            const player = document.getElementById('editorStemAudioPlayer');
+                            const btnApplyStem = document.getElementById('btnApplyStemToEditedPreview');
+                            const btnRemoveStem = document.getElementById('btnRemoveStemFromEditedPreview');
+                            if (resultBox && player && pData.result && pData.result.cleaned_url) {
+                                window._appliedStemAudioUrl = pData.result.cleaned_url;
+                                window._appliedStemCleanedPath = pData.result.cleaned_path;
+                                resultBox.style.display = 'block';
+                                player.src = pData.result.cleaned_url;
+                                if (window._syncedStemAudioPlayer) {
+                                    window._syncedStemAudioPlayer.src = pData.result.cleaned_url;
+                                    window._syncedStemAudioPlayer.load();
+                                }
+                                if (btnApplyStem) {
+                                    btnApplyStem.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
+                                    btnApplyStem.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+                                }
+                                if (btnRemoveStem) btnRemoveStem.style.display = 'none';
+                                player.play().catch(() => {});
+                            }
+                            resolve();
+                        } else if (pData.status === 'cancelled') {
+                            clearInterval(pollTimer);
+                            if (progressStatus) progressStatus.textContent = '🛑 Đã dừng khẩn cấp.';
+                            showToast('🛑 Đã dừng tác vụ tách âm thanh khẩn cấp!', 'info');
+                            resolve();
+                        } else if (pData.status === 'error') {
+                            clearInterval(pollTimer);
+                            if (progressStatus) progressStatus.textContent = `❌ Lỗi: ${pData.error || 'Thất bại'}`;
+                            showToast(`❌ Lỗi tách âm: ${pData.error || 'Thất bại'}`, 'error');
+                            resolve();
+                        }
+                    } catch (e) {
+                        console.error("Polling progress error:", e);
+                    }
+                }, 300);
+            });
+
         } catch (err) {
             showToast(`❌ Lỗi kết nối: ${err.message}`, 'error');
         } finally {
+            if (pollTimer) clearInterval(pollTimer);
             btnRunStemSeparationEditor.disabled = false;
             btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm SFX';
+            if (btnCancelStemSeparationEditor) btnCancelStemSeparationEditor.style.display = 'none';
         }
     });
 }
@@ -551,9 +660,11 @@ async function executeExportPipeline() {
         remove_original_vocals: document.getElementById('editorRemoveVocals')?.checked ?? true,
         stem_separation: {
             enabled: document.getElementById('editorStemSeparationEnabled')?.checked ?? true,
-            mode: document.getElementById('editorStemMode')?.value || 'ai_neural',
+            mode: document.getElementById('editorStemMode')?.value || 'mdx_net_hq4',
+            device: document.getElementById('editorStemDevice')?.value || 'auto',
             remove_vocals: document.getElementById('editorRemoveVocals')?.checked ?? true,
-            keep_sfx: document.getElementById('editorKeepSfx')?.checked ?? true
+            keep_sfx: document.getElementById('editorKeepSfx')?.checked ?? true,
+            precomputed_cleaned_path: (window._isStemAudioAppliedToEdited && window._appliedStemCleanedPath) ? window._appliedStemCleanedPath : ''
         },
         manual_audio: document.getElementById('manualAudioPath')?.value || '',
         manual_voice_volume: parseInt(document.getElementById('dubbingManualVol')?.value || 100) / 100,
@@ -1510,10 +1621,131 @@ timeline.addEventListener('change', onSeekEnd);
 timeline.addEventListener('mouseup', onSeekEnd);
 timeline.addEventListener('touchend', onSeekEnd);
 
+// ═════════════════════════════════════════════════════════════
+// SYNCED STEM AUDIO PLAYBACK ENGINE (Bản sau khi sửa)
+// ═════════════════════════════════════════════════════════════
+window._appliedStemAudioUrl = null;
+window._appliedStemCleanedPath = null;
+window._isStemAudioAppliedToEdited = false;
+window._syncedStemAudioPlayer = new Audio();
+window._syncedStemAudioPlayer.preload = 'auto';
+
+const btnApplyStemToEdited = document.getElementById('btnApplyStemToEditedPreview');
+const btnRemoveStemFromEdited = document.getElementById('btnRemoveStemFromEditedPreview');
+
+if (btnApplyStemToEdited) {
+    btnApplyStemToEdited.addEventListener('click', () => {
+        if (!window._appliedStemAudioUrl) {
+            showToast('⚠️ Chưa có audio SFX đã tách để áp dụng!', 'warning');
+            return;
+        }
+        window._isStemAudioAppliedToEdited = true;
+        window._syncedStemAudioPlayer.src = window._appliedStemAudioUrl;
+        window._syncedStemAudioPlayer.load();
+
+        btnApplyStemToEdited.innerHTML = '<span>✓ Đang áp dụng SFX</span>';
+        btnApplyStemToEdited.style.background = '#059669';
+        if (btnRemoveStemFromEdited) btnRemoveStemFromEdited.style.display = 'inline-flex';
+
+        // Tự động chuyển sang xem tab "Bản sau khi sửa"
+        if (btnPreviewEdited) {
+            btnPreviewEdited.click();
+        }
+
+        // Đồng bộ tức thời âm thanh với video
+        if (videoPlayer) {
+            videoPlayer.muted = true;
+            window._syncedStemAudioPlayer.currentTime = videoPlayer.currentTime;
+            window._syncedStemAudioPlayer.volume = videoPlayer.volume;
+            if (!videoPlayer.paused) {
+                window._syncedStemAudioPlayer.play().catch(() => {});
+            }
+        }
+
+        showToast('✨ Đã áp dụng âm thanh SFX sạch vào "Bản sau khi sửa"! Bấm Play trên video để nghe thử cùng hình ảnh.', 'success');
+    });
+}
+
+if (btnRemoveStemFromEdited) {
+    btnRemoveStemFromEdited.addEventListener('click', () => {
+        window._isStemAudioAppliedToEdited = false;
+        if (window._syncedStemAudioPlayer) {
+            window._syncedStemAudioPlayer.pause();
+        }
+        if (videoPlayer) {
+            videoPlayer.muted = false;
+        }
+        if (btnApplyStemToEdited) {
+            btnApplyStemToEdited.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
+            btnApplyStemToEdited.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+        }
+        btnRemoveStemFromEdited.style.display = 'none';
+        showToast('ℹ️ Đã khôi phục âm thanh gốc của video khi xem Bản sau khi sửa.', 'info');
+    });
+}
+
+// Lắng nghe sự kiện đồng bộ videoPlayer <-> syncedStemAudioPlayer
+if (videoPlayer) {
+    videoPlayer.addEventListener('play', () => {
+        if (window._isStemAudioAppliedToEdited && btnPreviewEdited && btnPreviewEdited.classList.contains('active')) {
+            videoPlayer.muted = true;
+            window._syncedStemAudioPlayer.currentTime = videoPlayer.currentTime;
+            window._syncedStemAudioPlayer.volume = videoPlayer.volume;
+            window._syncedStemAudioPlayer.play().catch(() => {});
+        } else {
+            videoPlayer.muted = false;
+            if (window._syncedStemAudioPlayer) window._syncedStemAudioPlayer.pause();
+        }
+    });
+
+    videoPlayer.addEventListener('pause', () => {
+        if (window._syncedStemAudioPlayer) {
+            window._syncedStemAudioPlayer.pause();
+        }
+    });
+
+    videoPlayer.addEventListener('seeking', () => {
+        if (window._isStemAudioAppliedToEdited && btnPreviewEdited && btnPreviewEdited.classList.contains('active')) {
+            window._syncedStemAudioPlayer.currentTime = videoPlayer.currentTime;
+        }
+    });
+
+    videoPlayer.addEventListener('seeked', () => {
+        if (window._isStemAudioAppliedToEdited && btnPreviewEdited && btnPreviewEdited.classList.contains('active')) {
+            window._syncedStemAudioPlayer.currentTime = videoPlayer.currentTime;
+            if (!videoPlayer.paused) {
+                window._syncedStemAudioPlayer.play().catch(() => {});
+            }
+        }
+    });
+
+    videoPlayer.addEventListener('volumechange', () => {
+        if (window._syncedStemAudioPlayer) {
+            window._syncedStemAudioPlayer.volume = videoPlayer.volume;
+        }
+    });
+
+    videoPlayer.addEventListener('timeupdate', () => {
+        if (window._isStemAudioAppliedToEdited && btnPreviewEdited && btnPreviewEdited.classList.contains('active') && !videoPlayer.paused) {
+            if (Math.abs(window._syncedStemAudioPlayer.currentTime - videoPlayer.currentTime) > 0.18) {
+                window._syncedStemAudioPlayer.currentTime = videoPlayer.currentTime;
+            }
+        }
+    });
+}
+
 btnPreviewOriginal.addEventListener('click', () => {
     btnPreviewOriginal.classList.add('active');
     btnPreviewEdited.classList.remove('active');
     
+    // Tạm dừng âm thanh SFX đồng bộ khi xem Bản gốc
+    if (window._syncedStemAudioPlayer) {
+        window._syncedStemAudioPlayer.pause();
+    }
+    if (videoPlayer) {
+        videoPlayer.muted = false;
+    }
+
     // In Original mode: hide subtitle preview overlay
     if (subPreviewBox) {
         subPreviewBox.style.display = 'none';
@@ -1541,6 +1773,22 @@ btnPreviewEdited.addEventListener('click', () => {
         }
     }
     
+    // Kích hoạt âm thanh SFX sạch đã tách nếu đang bật chế độ áp dụng
+    if (window._isStemAudioAppliedToEdited && window._appliedStemAudioUrl) {
+        if (videoPlayer) {
+            videoPlayer.muted = true;
+            window._syncedStemAudioPlayer.currentTime = videoPlayer.currentTime;
+            window._syncedStemAudioPlayer.volume = videoPlayer.volume;
+            if (!videoPlayer.paused) {
+                window._syncedStemAudioPlayer.play().catch(() => {});
+            }
+        }
+    } else {
+        if (videoPlayer) {
+            videoPlayer.muted = false;
+        }
+    }
+
     updateSubPreview();
     if (videoPlayer) {
         videoPlayer.dispatchEvent(new Event('timeupdate'));
@@ -1745,9 +1993,11 @@ const btnToggleZoomBox = document.getElementById('btnToggleZoomBox');
 let isZoomBoxVisible = false;
 
 function syncZoomBoxFromVideoTransform() {
-    if (!videoZoomBox || !videoContainer) return;
-    const cW = videoContainer.clientWidth;
-    const cH = videoContainer.clientHeight;
+    if (!videoZoomBox) return;
+    const parentEl = videoZoomBox.offsetParent || videoContainer;
+    if (!parentEl) return;
+    const cW = parentEl.clientWidth;
+    const cH = parentEl.clientHeight;
     if (cW <= 0 || cH <= 0) return;
 
     if (currentVideoZoom <= 1.0) {
@@ -1801,16 +2051,17 @@ if (btnToggleZoomBox) {
     });
 }
 
+// ─── 8-POINT CROP BOUNDING BOX INTERACTION ───────────────────────────
 function setupInteractiveVideoZoomBox() {
-    if (!videoZoomBox || !videoContainer) return;
+    if (!videoZoomBox) return;
 
-    let isResizing = false;
     let isDraggingBox = false;
+    let isResizing = false;
     let currentHandle = null;
     let startX = 0, startY = 0;
     let startLeft = 0, startTop = 0, startWidth = 0, startHeight = 0;
 
-    // 1. Center drag (Pan / Move viewpoint)
+    // 1. Dragging Entire Box
     videoZoomBox.addEventListener('mousedown', (e) => {
         if (e.target.classList.contains('zoom-resize-handle')) return;
         if (e.button !== 0) return;
@@ -1821,7 +2072,8 @@ function setupInteractiveVideoZoomBox() {
         startX = e.clientX;
         startY = e.clientY;
         const rect = videoZoomBox.getBoundingClientRect();
-        const parentRect = videoContainer.getBoundingClientRect();
+        const parentEl = videoZoomBox.offsetParent || videoContainer;
+        const parentRect = parentEl.getBoundingClientRect();
         startLeft = rect.left - parentRect.left;
         startTop = rect.top - parentRect.top;
         startWidth = rect.width;
@@ -1841,7 +2093,8 @@ function setupInteractiveVideoZoomBox() {
             startX = e.clientX;
             startY = e.clientY;
             const rect = videoZoomBox.getBoundingClientRect();
-            const parentRect = videoContainer.getBoundingClientRect();
+            const parentEl = videoZoomBox.offsetParent || videoContainer;
+            const parentRect = parentEl.getBoundingClientRect();
             startLeft = rect.left - parentRect.left;
             startTop = rect.top - parentRect.top;
             startWidth = rect.width;
@@ -1853,8 +2106,9 @@ function setupInteractiveVideoZoomBox() {
         if (!isResizing && !isDraggingBox) return;
         e.preventDefault();
 
-        const cW = videoContainer.clientWidth;
-        const cH = videoContainer.clientHeight;
+        const parentEl = videoZoomBox.offsetParent || videoContainer;
+        const cW = parentEl.clientWidth;
+        const cH = parentEl.clientHeight;
         if (cW <= 0 || cH <= 0) return;
 
         const dx = e.clientX - startX;
@@ -3069,7 +3323,8 @@ function updateSubPreview() {
                 textSpan.className = 'sub-text-inner';
                 subPreviewBox.appendChild(textSpan);
             }
-            textSpan.innerHTML = displayText.replace(/\n/g, '<br>');
+            textSpan.textContent = displayText;
+            textSpan.style.whiteSpace = 'pre-line';
             
             // Đảm bảo các điểm neo luôn có mặt
             if (!subPreviewBox.querySelector('.box-resize-handle')) {
@@ -5662,22 +5917,22 @@ function createVoiceCard(v) {
     card.innerHTML = `
         <div style="display: flex; align-items: center; gap: 12px;">
             <div style="width: 44px; height: 44px; border-radius: 10px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
-                ${v.avatar || '🎙️'}
+                ${escapeHtml(v.avatar || '🎙️')}
             </div>
             <div style="flex: 1; min-width: 0;">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
-                    <span style="font-size: 14px; font-weight: 700; color: #f8fafc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${v.name}">${v.name}</span>
-                    <span style="font-size: 10px; padding: 2px 7px; border-radius: 4px; background: ${providerBadgeColor}18; color: ${providerBadgeColor}; border: 1px solid ${providerBadgeColor}40; text-transform: uppercase; font-weight: 700; white-space: nowrap;">${v.provider_name || v.provider}</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #f8fafc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(v.name)}">${escapeHtml(v.name)}</span>
+                    <span style="font-size: 10px; padding: 2px 7px; border-radius: 4px; background: ${providerBadgeColor}18; color: ${providerBadgeColor}; border: 1px solid ${providerBadgeColor}40; text-transform: uppercase; font-weight: 700; white-space: nowrap;">${escapeHtml(v.provider_name || v.provider)}</span>
                 </div>
                 <div style="font-size: 11.5px; color: #94a3b8; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${v.tag || `${v.region || ''} • ${v.lang}`}
+                    ${escapeHtml(v.tag || `${v.region || ''} • ${v.lang}`)}
                 </div>
             </div>
         </div>
         
         <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px; margin-top: 2px;">
             <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="font-size: 11px; color: #64748b;">${v.gender === 'Female' ? 'Nữ' : 'Nam'} • ${v.region || v.lang}</span>
+                <span style="font-size: 11px; color: #64748b;">${v.gender === 'Female' ? 'Nữ' : 'Nam'} • ${escapeHtml(v.region || v.lang)}</span>
                 ${styleBadge ? `<span style="font-size: 10px; background: #1e293b; color: #94a3b8; padding: 1px 5px; border-radius: 4px; border: 1px solid #334155;">${styleBadge}</span>` : ''}
             </div>
             
@@ -6192,45 +6447,41 @@ if (reviewStyleSelect) {
 
 // Aspect Ratio Toggles & Preview Frame Transformation
 function updateReviewPlayerAspectRatio(ratio) {
-    const rContainer = document.getElementById('reviewVideoContainer');
-    const rPlayer = document.getElementById('reviewVideoPlayer');
-    const rBadge = document.getElementById('reviewPlayerStatusBadge');
+    reviewAspectRatio = ratio;
+    window.reviewAspectRatio = ratio;
 
-    if (!rContainer) return;
+    const rVert = document.getElementById('reviewRatioVertical');
+    const rHoriz = document.getElementById('reviewRatioHorizontal');
+    if (rVert && rHoriz) {
+        if (ratio === '9:16') {
+            rVert.classList.add('active');
+            rVert.style.borderColor = '#38bdf8';
+            rVert.style.color = '#38bdf8';
+            rHoriz.classList.remove('active');
+            rHoriz.style.borderColor = '';
+            rHoriz.style.color = '';
+        } else if (ratio === '16:9') {
+            rHoriz.classList.add('active');
+            rHoriz.style.borderColor = '#38bdf8';
+            rHoriz.style.color = '#38bdf8';
+            rVert.classList.remove('active');
+            rVert.style.borderColor = '';
+            rVert.style.color = '';
+        } else {
+            rVert.classList.remove('active');
+            rVert.style.borderColor = '';
+            rVert.style.color = '';
+            rHoriz.classList.remove('active');
+            rHoriz.style.borderColor = '';
+            rHoriz.style.color = '';
+        }
+    }
 
-    if (ratio === '9:16') {
-        rContainer.style.aspectRatio = '9 / 16';
-        rContainer.style.maxWidth = '280px';
-        rContainer.style.maxHeight = '500px';
-        rContainer.style.margin = '10px auto';
-        rContainer.style.borderRadius = '12px';
-        rContainer.style.border = '2px solid rgba(56, 189, 248, 0.4)';
-        rContainer.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.6), 0 0 15px rgba(56, 189, 248, 0.15)';
-        if (rPlayer) {
-            rPlayer.style.objectFit = 'cover';
-        }
-        if (rBadge && rPlayer && rPlayer.videoWidth) {
-            rBadge.textContent = `Dọc 9:16 (${rPlayer.videoWidth}x${rPlayer.videoHeight})`;
-            rBadge.style.color = '#38bdf8';
-            rBadge.style.borderColor = 'rgba(56, 189, 248, 0.4)';
-            rBadge.style.background = 'rgba(56, 189, 248, 0.12)';
-        }
-    } else {
-        rContainer.style.aspectRatio = '16 / 9';
-        rContainer.style.maxWidth = '100%';
-        rContainer.style.maxHeight = '380px';
-        rContainer.style.margin = '0';
-        rContainer.style.borderRadius = '0';
-        rContainer.style.border = 'none';
-        rContainer.style.boxShadow = 'none';
-        if (rPlayer) {
-            rPlayer.style.objectFit = 'contain';
-        }
-        if (rBadge && rPlayer && rPlayer.videoWidth) {
-            rBadge.textContent = `Ngang 16:9 (${rPlayer.videoWidth}x${rPlayer.videoHeight})`;
-            rBadge.style.color = '#94a3b8';
-            rBadge.style.borderColor = 'rgba(148, 163, 184, 0.25)';
-            rBadge.style.background = 'rgba(148, 163, 184, 0.12)';
+    if (videoStudioInstances && videoStudioInstances.review) {
+        if (videoStudioInstances.review.state.aspectRatio !== ratio) {
+            videoStudioInstances.review.setAspectRatio(ratio, false);
+        } else {
+            videoStudioInstances.review.applyAspectRatio();
         }
     }
 }
@@ -6239,23 +6490,9 @@ const reviewRatioVertical = document.getElementById('reviewRatioVertical');
 const reviewRatioHorizontal = document.getElementById('reviewRatioHorizontal');
 if (reviewRatioVertical && reviewRatioHorizontal) {
     reviewRatioVertical.addEventListener('click', () => {
-        reviewRatioVertical.classList.add('active');
-        reviewRatioVertical.style.borderColor = '#38bdf8';
-        reviewRatioVertical.style.color = '#38bdf8';
-        reviewRatioHorizontal.classList.remove('active');
-        reviewRatioHorizontal.style.borderColor = '';
-        reviewRatioHorizontal.style.color = '';
-        reviewAspectRatio = '9:16';
         updateReviewPlayerAspectRatio('9:16');
     });
     reviewRatioHorizontal.addEventListener('click', () => {
-        reviewRatioHorizontal.classList.add('active');
-        reviewRatioHorizontal.style.borderColor = '#38bdf8';
-        reviewRatioHorizontal.style.color = '#38bdf8';
-        reviewRatioVertical.classList.remove('active');
-        reviewRatioVertical.style.borderColor = '';
-        reviewRatioVertical.style.color = '';
-        reviewAspectRatio = '16:9';
         updateReviewPlayerAspectRatio('16:9');
     });
 }
@@ -6376,19 +6613,31 @@ const btnSelectReviewInput = document.getElementById('btnSelectReviewInput');
 const reviewVideoInsightBox = document.getElementById('reviewVideoInsightBox');
 const reviewInsightDuration = document.getElementById('reviewInsightDuration');
 
-if (btnSelectReviewInput) {
-    btnSelectReviewInput.addEventListener('click', async () => {
-        const path = await selectFile('video');
-        if (path) {
-            reviewInputVideoPath.value = path;
-            loadReviewVideoPlayer(path);
-            if (reviewVideoInsightBox) {
-                reviewVideoInsightBox.style.display = 'flex';
-                const filename = path.split('\\').pop().split('/').pop();
-                if (reviewInsightDuration) reviewInsightDuration.textContent = `🎬 ${filename}`;
-            }
+const handleSelectReviewVideo = async () => {
+    const path = await selectFile('video');
+    if (path) {
+        if (reviewInputVideoPath) reviewInputVideoPath.value = path;
+        loadReviewVideoPlayer(path);
+        if (reviewVideoInsightBox) {
+            reviewVideoInsightBox.style.display = 'flex';
+            const filename = path.split('\\').pop().split('/').pop();
+            if (reviewInsightDuration) reviewInsightDuration.textContent = `🎬 ${filename}`;
         }
-    });
+    }
+};
+
+if (btnSelectReviewInput) {
+    btnSelectReviewInput.addEventListener('click', handleSelectReviewVideo);
+}
+
+const btnSelectReviewVideoHeader = document.getElementById('btnSelectReviewVideoHeader');
+if (btnSelectReviewVideoHeader) {
+    btnSelectReviewVideoHeader.addEventListener('click', handleSelectReviewVideo);
+}
+
+const btnSelectReviewVideoPlaceholder = document.getElementById('btnSelectReviewVideoPlaceholder');
+if (btnSelectReviewVideoPlaceholder) {
+    btnSelectReviewVideoPlaceholder.addEventListener('click', handleSelectReviewVideo);
 }
 
 // reviewInputSrtPath declaration
@@ -6491,8 +6740,8 @@ if (btnStartReview) {
             custom_style_prompt: document.getElementById('reviewCustomStylePrompt')?.value || '',
             aspect_ratio: reviewAspectRatio,
             pacing: reviewPacing,
-            enable_zoom: document.getElementById('reviewEnableZoom')?.checked ?? true,
-            video_zoom: parseFloat(document.getElementById('reviewVideoZoom')?.value || 105),
+            enable_zoom: (window.videoStudioInstances?.review?.state?.zoom > 1.0) || (document.getElementById('reviewEnableZoom')?.checked ?? true),
+            video_zoom: window.videoStudioInstances?.review ? Math.round((window.videoStudioInstances.review.state.zoom || 1.05) * 100) : (parseFloat(document.getElementById('reviewVideoZoom')?.value) || 105),
             blur_original_subtitles: document.getElementById('reviewTabBlurOriginalSubtitles') ? document.getElementById('reviewTabBlurOriginalSubtitles').checked : true,
             blur_intensity: parseInt(document.getElementById('reviewTabDynBlurIntensity')?.value) || 15,
             blur_lead_offset: parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value) || -180,
@@ -6525,7 +6774,8 @@ if (btnStartReview) {
                 enabled: document.getElementById('reviewStemSeparationEnabled')?.checked !== false,
                 remove_vocals: document.getElementById('reviewRemoveVocals')?.checked !== false,
                 keep_sfx: document.getElementById('reviewKeepSfx')?.checked !== false,
-                mode: document.getElementById('reviewStemMode')?.value || 'ai_neural'
+                mode: document.getElementById('reviewStemMode')?.value || 'mdx_net_hq4',
+                device: document.getElementById('reviewStemDevice')?.value || 'auto'
             },
             output_dir: document.getElementById('reviewOutputFolder').value.trim() || window.currentTtsOutputDir || 'output',
             output_name: document.getElementById('reviewOutputFileName').value.trim() || 'video_review.mp4'
@@ -7220,7 +7470,12 @@ if (globalVideoPlayer) {
         
         if (activeSub) {
             const displayText = activeSub.translation || activeSub.text;
-            subPreviewBox.innerHTML = '<span class="sub-text-inner">' + displayText.replace(/\n/g, '<br>') + '</span>';
+            subPreviewBox.replaceChildren();
+            const previewText = document.createElement('span');
+            previewText.className = 'sub-text-inner';
+            previewText.textContent = displayText;
+            previewText.style.whiteSpace = 'pre-line';
+            subPreviewBox.appendChild(previewText);
             subPreviewBox.style.display = 'flex';
             applySubStylesToElement(subPreviewBox);
         } else {
@@ -7502,9 +7757,11 @@ if (btnAnalyzeUrl && downloadInputUrl) {
                             flex-direction: column;
                             gap: 6px;
                         `;
+                        const thumbnailUrl = safeHttpUrl(v.thumbnail);
+                        const videoTitle = v.title || `Video ${idx + 1}`;
                         card.innerHTML = `
                             <div style="position: relative; width: 100%; height: 75px; border-radius: 6px; overflow: hidden; background: #020617;">
-                                <img src="${v.thumbnail || ''}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
+                                ${thumbnailUrl ? `<img src="${escapeHtml(thumbnailUrl)}" alt="" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">` : ''}
                                 <span style="position: absolute; bottom: 3px; right: 3px; background: rgba(0,0,0,0.85); color: #fff; font-size: 9.5px; font-weight: 600; padding: 1px 4px; border-radius: 3px;">
                                     ${formatDurationStr(v.duration)}
                                 </span>
@@ -7512,8 +7769,8 @@ if (btnAnalyzeUrl && downloadInputUrl) {
                                     #${idx + 1}
                                 </span>
                             </div>
-                            <div style="font-size: 11.5px; font-weight: 600; color: #f8fafc; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" title="${v.title || ''}">
-                                ${v.title || `Video ${idx + 1}`}
+                            <div style="font-size: 11.5px; font-weight: 600; color: #f8fafc; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" title="${escapeHtml(videoTitle)}">
+                                ${escapeHtml(videoTitle)}
                             </div>
                         `;
 
@@ -7792,19 +8049,19 @@ function renderDownloadHistory() {
         const row = document.createElement('div');
         row.className = 'download-history-item';
 
-        const thumbSrc = item.thumbnail || '';
+        const thumbSrc = safeHttpUrl(item.thumbnail);
         const thumbHtml = thumbSrc 
-            ? `<img src="${thumbSrc}" class="download-history-thumb" alt="thumb">`
+            ? `<img src="${escapeHtml(thumbSrc)}" class="download-history-thumb" alt="thumb">`
             : `<div class="download-history-thumb" style="display:flex;align-items:center;justify-content:center;color:#64748b;"><svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div>`;
 
         row.innerHTML = `
             ${thumbHtml}
             <div class="download-history-info">
-                <div class="download-history-title" title="${item.title}">${item.title}</div>
+                <div class="download-history-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
                 <div class="download-history-meta">
-                    <span class="platform-pill" style="font-size: 10px; padding: 1px 6px; border-radius: 4px; background: #1e293b; color: #38bdf8; border: 1px solid #334155;">${item.platform || 'Video'}</span>
-                    <span>📦 ${item.file_size || '--'}</span>
-                    <span>🕒 ${item.timestamp || ''}</span>
+                    <span class="platform-pill" style="font-size: 10px; padding: 1px 6px; border-radius: 4px; background: #1e293b; color: #38bdf8; border: 1px solid #334155;">${escapeHtml(item.platform || 'Video')}</span>
+                    <span>📦 ${escapeHtml(item.file_size || '--')}</span>
+                    <span>🕒 ${escapeHtml(item.timestamp || '')}</span>
                 </div>
             </div>
             <div class="download-history-actions">
@@ -8218,23 +8475,28 @@ function initDouyinChannelDownloader() {
             const card = document.createElement('div');
             card.className = `douyin-reel-card ${isSelected ? 'selected' : ''}`;
 
-            const thumb = video.cover_url || '';
-            const isViral = (video.digg_count || 0) >= 100000;
+            const thumb = safeHttpUrl(video.cover_url);
+            const videoId = escapeHtml(video.aweme_id);
+            const videoTitle = video.title || 'Video Douyin';
+            const sourceUrl = safeHttpUrl(video.url);
+            const diggCount = Number.isFinite(Number(video.digg_count)) ? Number(video.digg_count) : 0;
+            const commentCount = Number.isFinite(Number(video.comment_count)) ? Number(video.comment_count) : 0;
+            const isViral = diggCount >= 100000;
             const viralBadge = isViral 
                 ? `<span style="background: linear-gradient(135deg, #ef4444, #f59e0b); color: #fff; font-size: 9.5px; font-weight: 800; padding: 2px 6px; border-radius: 4px; box-shadow: 0 2px 6px rgba(239, 68, 68, 0.4); display: flex; align-items: center; gap: 2px;">🔥 Viral</span>`
                 : '';
 
             const typeBadge = video.is_images 
                 ? `<span style="background: linear-gradient(135deg, #a855f7, #ec4899); color: #fff; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(168,85,247,0.4);">🖼️ ${(video.image_urls || []).length} Ảnh</span>`
-                : `<span style="background: rgba(15, 23, 42, 0.85); color: #38bdf8; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.35); backdrop-filter: blur(4px);">⏱️ ${video.duration_formatted || '00:00'}</span>`;
+                : `<span style="background: rgba(15, 23, 42, 0.85); color: #38bdf8; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.35); backdrop-filter: blur(4px);">⏱️ ${escapeHtml(video.duration_formatted || '00:00')}</span>`;
 
             card.innerHTML = `
                 <div class="douyin-reel-thumb-box">
-                    <img src="${thumb}" alt="thumb" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'140\\' fill=\\'%231e293b\\'><rect width=\\'100%\\' height=\\'100%\\'/></svg>';">
+                    ${thumb ? `<img src="${escapeHtml(thumb)}" alt="thumb" loading="lazy" onerror="this.style.display='none'">` : ''}
                     <div class="douyin-reel-overlay">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 6px;">
                             <label style="background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); padding: 3px 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid rgba(51, 65, 85, 0.8);" onclick="event.stopPropagation();">
-                                <input type="checkbox" class="douyin-item-checkbox" data-id="${video.aweme_id}" ${isSelected ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: #38bdf8; cursor: pointer;">
+                                <input type="checkbox" class="douyin-item-checkbox" data-id="${videoId}" ${isSelected ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: #38bdf8; cursor: pointer;">
                                 <span style="font-size: 11px; font-weight: 800; color: #38bdf8;">#${idx + 1}</span>
                             </label>
                             ${viralBadge}
@@ -8245,19 +8507,19 @@ function initDouyinChannelDownloader() {
                     </div>
                 </div>
                 <div class="douyin-reel-info">
-                    <div class="douyin-reel-title" title="${video.title || 'Video Douyin'}">
-                        ${video.title || 'Video Douyin'}
+                    <div class="douyin-reel-title" title="${escapeHtml(videoTitle)}">
+                        ${escapeHtml(videoTitle)}
                     </div>
                     <div class="douyin-reel-meta">
                         <span style="display: flex; align-items: center; gap: 4px; color: #f43f5e; font-weight: 600;">
-                            ❤️ ${(video.digg_count || 0).toLocaleString()}
+                            ❤️ ${diggCount.toLocaleString()}
                         </span>
                         <span style="display: flex; align-items: center; gap: 4px;">
-                            💬 ${(video.comment_count || 0).toLocaleString()}
+                            💬 ${commentCount.toLocaleString()}
                         </span>
-                        <a href="${video.url}" target="_blank" style="color: #38bdf8; text-decoration: none; font-weight: 700; font-size: 11px; display: inline-flex; align-items: center; gap: 2px;" onclick="event.stopPropagation();">
+                        ${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" style="color: #38bdf8; text-decoration: none; font-weight: 700; font-size: 11px; display: inline-flex; align-items: center; gap: 2px;" onclick="event.stopPropagation();">
                             Xem ↗
-                        </a>
+                        </a>` : ''}
                     </div>
                 </div>
             `;
@@ -8814,8 +9076,9 @@ function setupInteractiveVideoLogo() {
             return;
         }
 
-        const cW = container.clientWidth || 640;
-        const cH = container.clientHeight || 360;
+        const parentEl = logoOverlay.offsetParent || container;
+        const cW = parentEl.clientWidth || 640;
+        const cH = parentEl.clientHeight || 360;
 
         const leftPx = (currentLogoState.x_pct / 100) * cW;
         const topPx = (currentLogoState.y_pct / 100) * cH;
@@ -9010,7 +9273,8 @@ function setupInteractiveVideoLogo() {
         e.preventDefault();
 
         const handle = e.target.closest('.logo-resize-handle');
-        const cRect = container.getBoundingClientRect();
+        const parentEl = logoOverlay.offsetParent || container;
+        const cRect = parentEl.getBoundingClientRect();
         const lRect = logoOverlay.getBoundingClientRect();
 
         startX = e.clientX;
@@ -9034,8 +9298,9 @@ function setupInteractiveVideoLogo() {
         if (!isDragging && !isResizing) return;
         e.preventDefault();
 
-        const cW = container.clientWidth || 640;
-        const cH = container.clientHeight || 360;
+        const parentEl = logoOverlay.offsetParent || container;
+        const cW = parentEl.clientWidth || 640;
+        const cH = parentEl.clientHeight || 360;
         if (cW <= 0 || cH <= 0) return;
 
         const dx = e.clientX - startX;
@@ -11780,7 +12045,7 @@ const appUpdater = {
                 if (btnHeaderCheck) {
                     btnHeaderCheck.style.borderColor = '#38bdf8';
                     btnHeaderCheck.style.boxShadow = '0 0 12px rgba(56, 189, 248, 0.6)';
-                    btnHeaderCheck.innerHTML = `<span style="font-size: 13px;">🚀</span><span style="font-weight: 700; color: #38bdf8;">Cập nhật (v${data.latest_version})</span>`;
+                    btnHeaderCheck.innerHTML = `<span style="font-size: 13px;">🚀</span><span style="font-weight: 700; color: #38bdf8;">Cập nhật (v${escapeHtml(data.latest_version)})</span>`;
                 }
                 this.showUpdateModal(data);
             } else {
@@ -11830,7 +12095,7 @@ const appUpdater = {
             if (btnStart) {
                 btnStart.style.display = 'inline-flex';
                 btnStart.disabled = false;
-                btnStart.innerHTML = `<span>🚀</span><span>Cập Nhật Ngay (v${latestVer})</span>`;
+                btnStart.innerHTML = `<span>🚀</span><span>Cập Nhật Ngay (v${escapeHtml(latestVer)})</span>`;
             }
             if (btnSkip) {
                 btnSkip.textContent = "Để sau";
@@ -11975,6 +12240,13 @@ try {
     initBatchQueueModule();
 } catch (e) {
     console.warn('Error initializing Batch Queue Module:', e);
+}
+
+// Initialize Universal Video Studio Suite (Toolbar, Aspect Ratio, Stretch & Overlays)
+try {
+    initVideoStudioSuite();
+} catch (e) {
+    console.warn('Error initializing Video Studio Suite:', e);
 }
 
 

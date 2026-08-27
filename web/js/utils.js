@@ -8,6 +8,24 @@ export function appendLog(msg, type = 'info') {
     terminal.scrollTop = terminal.scrollHeight;
 }
 
+export function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+export function safeHttpUrl(value) {
+    try {
+        const parsed = new URL(String(value || ''), window.location.origin);
+        return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch (_) {
+        return '';
+    }
+}
+
 export function showToast(message, type = 'warning') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
@@ -23,7 +41,10 @@ export function showToast(message, type = 'warning') {
         icon = `<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
     }
     
-    toast.innerHTML = `${icon} <span>${message}</span>`;
+    if (icon) toast.insertAdjacentHTML('beforeend', icon);
+    const messageEl = document.createElement('span');
+    messageEl.textContent = String(message ?? '');
+    toast.appendChild(messageEl);
     container.appendChild(toast);
     
     setTimeout(() => {
@@ -136,24 +157,24 @@ export function showConfirmModal(opts = {}) {
             <div style="background: #0f172a; border: 1px solid ${theme.border}; border-radius: 14px; width: 440px; max-width: 92vw; padding: 22px 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 25px ${theme.glow}; animation: popInCelebration 0.2s cubic-bezier(0.16, 1, 0.3, 1); display: flex; flex-direction: column; gap: 16px;">
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <div style="width: 44px; height: 44px; border-radius: 10px; background: ${theme.iconBg}; border: 1px solid ${theme.border}; display: flex; align-items: center; justify-content: center; font-size: 22px; color: ${theme.iconColor}; flex-shrink: 0;">
-                        ${icon}
+                        ${escapeHtml(icon)}
                     </div>
                     <div>
-                        <h3 style="font-size: 16px; font-weight: 700; color: #f8fafc; margin: 0; letter-spacing: 0.3px;">${title}</h3>
+                        <h3 style="font-size: 16px; font-weight: 700; color: #f8fafc; margin: 0; letter-spacing: 0.3px;">${escapeHtml(title)}</h3>
                         <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">Xác nhận hành động từ ứng dụng</div>
                     </div>
                 </div>
 
                 <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid #334155; border-radius: 10px; padding: 14px 16px; font-size: 13.5px; line-height: 1.6; color: #e2e8f0;">
-                    ${message}
+                    ${escapeHtml(message)}
                 </div>
 
                 <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;">
                     <button type="button" id="btnUniversalCancel" class="btn secondary" style="padding: 9px 18px; font-size: 13px; font-weight: 600; background: #1e293b; border: 1px solid #475569; color: #cbd5e1; border-radius: 8px; cursor: pointer; transition: all 0.15s;">
-                        ${cancelText}
+                        ${escapeHtml(cancelText)}
                     </button>
                     <button type="button" id="btnUniversalConfirm" class="btn" style="padding: 9px 22px; font-size: 13px; font-weight: 700; background: ${theme.btnBg}; color: #fff; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 14px ${theme.glow}; transition: all 0.15s;">
-                        ${confirmText}
+                        ${escapeHtml(confirmText)}
                     </button>
                 </div>
             </div>
@@ -231,8 +252,8 @@ export function showAlertModal(opts = {}) {
                 const btnColor = btn.primary || btn.danger ? '#fff' : '#cbd5e1';
                 const btnBorder = btn.primary || btn.danger ? 'none' : '1px solid #475569';
                 buttonsHtml += `
-                    <button type="button" class="btn custom-alert-btn" data-btn-idx="${idx}" style="padding: 9px 18px; font-size: 13px; font-weight: 600; background: ${btnBg}; color: ${btnColor}; border: ${btnBorder}; border-radius: 8px; cursor: pointer; transition: all 0.15s; ${btn.style || ''}">
-                        ${btn.text}
+                    <button type="button" class="btn custom-alert-btn" data-btn-idx="${idx}" style="padding: 9px 18px; font-size: 13px; font-weight: 600; background: ${btnBg}; color: ${btnColor}; border: ${btnBorder}; border-radius: 8px; cursor: pointer; transition: all 0.15s;">
+                        ${escapeHtml(btn.text)}
                     </button>
                 `;
             });
@@ -241,7 +262,7 @@ export function showAlertModal(opts = {}) {
             buttonsHtml = `
                 <div style="display: flex; justify-content: flex-end; margin-top: 4px;">
                     <button type="button" id="btnUniversalAlertOk" class="btn" style="padding: 9px 26px; font-size: 13px; font-weight: 700; background: ${theme.btnBg}; color: #fff; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 14px ${theme.glow}; transition: all 0.15s;">
-                        ${buttonText}
+                        ${escapeHtml(buttonText)}
                     </button>
                 </div>
             `;
@@ -251,16 +272,16 @@ export function showAlertModal(opts = {}) {
             <div style="background: #0f172a; border: 1px solid ${theme.border}; border-radius: 14px; width: 460px; max-width: 92vw; padding: 22px 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 25px ${theme.glow}; animation: popInCelebration 0.2s cubic-bezier(0.16, 1, 0.3, 1); display: flex; flex-direction: column; gap: 16px;">
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <div style="width: 44px; height: 44px; border-radius: 10px; background: ${theme.iconBg}; border: 1px solid ${theme.border}; display: flex; align-items: center; justify-content: center; font-size: 22px; color: ${theme.iconColor}; flex-shrink: 0;">
-                        ${icon}
+                        ${escapeHtml(icon)}
                     </div>
                     <div>
-                        <h3 style="font-size: 16px; font-weight: 700; color: #f8fafc; margin: 0; letter-spacing: 0.3px;">${title}</h3>
+                        <h3 style="font-size: 16px; font-weight: 700; color: #f8fafc; margin: 0; letter-spacing: 0.3px;">${escapeHtml(title)}</h3>
                         <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">Thông báo từ hệ thống</div>
                     </div>
                 </div>
 
                 <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid #334155; border-radius: 10px; padding: 14px 16px; font-size: 13.5px; line-height: 1.6; color: #e2e8f0;">
-                    ${message}
+                    ${escapeHtml(message)}
                 </div>
 
                 ${buttonsHtml}
@@ -347,26 +368,26 @@ export function showPromptModal(opts = {}) {
             <div style="background: #0f172a; border: 1px solid #38bdf8; border-radius: 14px; width: 440px; max-width: 92vw; padding: 22px 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 25px rgba(56, 189, 248, 0.25); animation: popInCelebration 0.2s cubic-bezier(0.16, 1, 0.3, 1); display: flex; flex-direction: column; gap: 16px;">
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <div style="width: 44px; height: 44px; border-radius: 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #38bdf8; flex-shrink: 0;">
-                        ${icon}
+                        ${escapeHtml(icon)}
                     </div>
                     <div>
-                        <h3 style="font-size: 16px; font-weight: 700; color: #f8fafc; margin: 0; letter-spacing: 0.3px;">${title}</h3>
+                        <h3 style="font-size: 16px; font-weight: 700; color: #f8fafc; margin: 0; letter-spacing: 0.3px;">${escapeHtml(title)}</h3>
                         <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">Vui lòng điền thông tin bên dưới</div>
                     </div>
                 </div>
 
-                ${message ? `<div style="font-size: 13px; color: #cbd5e1;">${message}</div>` : ''}
+                ${message ? `<div style="font-size: 13px; color: #cbd5e1;">${escapeHtml(message)}</div>` : ''}
 
                 <div>
-                    <input type="text" id="inputUniversalPromptVal" class="text-input" placeholder="${placeholder}" value="${defaultValue}" style="width: 100%; padding: 10px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 13.5px;">
+                    <input type="text" id="inputUniversalPromptVal" class="text-input" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(defaultValue)}" style="width: 100%; padding: 10px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 13.5px;">
                 </div>
 
                 <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;">
                     <button type="button" id="btnUniversalPromptCancel" class="btn secondary" style="padding: 9px 18px; font-size: 13px; font-weight: 600; background: #1e293b; border: 1px solid #475569; color: #cbd5e1; border-radius: 8px; cursor: pointer;">
-                        ${cancelText}
+                        ${escapeHtml(cancelText)}
                     </button>
                     <button type="button" id="btnUniversalPromptConfirm" class="btn primary-cyan" style="padding: 9px 22px; font-size: 13px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #6366f1); color: #fff; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 14px rgba(56, 189, 248, 0.35);">
-                        ${confirmText}
+                        ${escapeHtml(confirmText)}
                     </button>
                 </div>
             </div>

@@ -3,6 +3,8 @@
  * NovaCut - AI Video & Review Editor
  */
 
+import { escapeHtml, safeHttpUrl } from '../utils.js';
+
 let batchEventSource = null;
 let currentBatchState = {
     is_running: false,
@@ -234,7 +236,7 @@ function setupControlsUI() {
             try {
                 const res = await fetch('/api/batch/start', { method: 'POST' });
                 const data = await res.json();
-                if (!res.ok) {
+                if (!res.ok || !data.success) {
                     if (res.status === 403) {
                         window.showAlertModal?.({
                             title: '🔒 Giới Hạn Bản Quyền',
@@ -254,15 +256,23 @@ function setupControlsUI() {
 
     if (btnPause) {
         btnPause.addEventListener('click', async () => {
-            await fetch('/api/batch/pause', { method: 'POST' });
-            window.showToast?.('⏸️ Đã tạm dừng hàng đợi.', 'info');
+            try {
+                const res = await fetch('/api/batch/pause', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Không thể tạm dừng');
+                window.showToast?.('⏸️ Đã tạm dừng hàng đợi.', 'info');
+            } catch (err) { window.showToast?.(`🛑 ${err.message}`, 'error'); }
         });
     }
 
     if (btnStop) {
         btnStop.addEventListener('click', async () => {
-            await fetch('/api/batch/stop', { method: 'POST' });
-            window.showToast?.('⏹️ Đã dừng hoàn toàn hàng đợi.', 'warning');
+            try {
+                const res = await fetch('/api/batch/stop', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Không thể dừng');
+                window.showToast?.('⏹️ Đã dừng hoàn toàn hàng đợi.', 'warning');
+            } catch (err) { window.showToast?.(`🛑 ${err.message}`, 'error'); }
         });
     }
 
@@ -283,9 +293,19 @@ function setupControlsUI() {
 
     if (btnClearAll) {
         btnClearAll.addEventListener('click', async () => {
-            if (confirm('Bạn có chắc chắn muốn xóa toàn bộ hàng đợi?')) {
-                await fetch('/api/batch/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed_only: false }) });
-                window.showToast?.('🗑️ Đã xóa toàn bộ hàng đợi.', 'info');
+            const confirmed = await window.showConfirmModal?.({
+                title: 'Xóa toàn bộ hàng đợi?',
+                message: 'Thao tác này sẽ xóa toàn bộ tác vụ đang chờ.',
+                confirmText: 'Xóa toàn bộ',
+                confirmType: 'danger'
+            });
+            if (confirmed) {
+                try {
+                    const res = await fetch('/api/batch/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed_only: false }) });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) throw new Error(data.error || 'Không thể xóa hàng đợi');
+                    window.showToast?.('🗑️ Đã xóa toàn bộ hàng đợi.', 'info');
+                } catch (err) { window.showToast?.(`🛑 ${err.message}`, 'error'); }
             }
         });
     }
@@ -389,10 +409,24 @@ function connectBatchEventStream() {
                 } else if (payload.event === 'task_started' || payload.event === 'task_finished' || payload.event === 'task_status_changed') {
                     fetchCurrentBatchState();
                 } else if (payload.event === 'shutdown_countdown') {
-                    window.showAlertModal?.({
-                        title: '🌙 Thông Báo Tắt Máy Tính Tự Động',
-                        message: 'NovaCut đã hoàn thành toàn bộ hàng đợi xử lý video qua đêm. Máy tính sẽ tự động tắt trong 60 giây. Bấm HỦY nếu bạn muốn tiếp tục làm việc!',
-                        theme: 'warning'
+                    window.showConfirmModal?.({
+                        title: '🌙 Máy tính sẽ tắt sau 60 giây',
+                        message: 'Chọn “Tiếp tục làm việc” để hủy lịch tắt máy.',
+                        confirmText: 'Tiếp tục làm việc',
+                        cancelText: 'Cho phép tắt máy',
+                        confirmType: 'warning'
+                    }).then(async (keepWorking) => {
+                        if (!keepWorking) return;
+                        try {
+                            const res = await fetch('/api/batch/cancel_shutdown', { method: 'POST' });
+                            const data = await res.json();
+                            window.showToast?.(
+                                data.success ? '☀️ Đã hủy lịch tắt máy.' : 'Không thể hủy lịch tắt máy.',
+                                data.success ? 'success' : 'error'
+                            );
+                        } catch (err) {
+                            window.showToast?.('Không thể kết nối máy chủ để hủy tắt máy.', 'error');
+                        }
                     });
                 }
             } catch (err) {
@@ -520,9 +554,14 @@ function renderQueueTable(tasks) {
         else if (task.preset === 'anti_copyright') presetLabel = '🛡️ Clean 9:16';
 
         const titleText = task.title || task.source_url || task.file_path || 'Video # ' + (idx + 1);
+        const taskId = escapeHtml(task.id);
+        const sourceText = task.source_type === 'url' ? task.source_url : (task.file_path || '');
+        const stepText = task.current_step_text || 'Chờ lượt xử lý...';
+        const progress = Math.max(0, Math.min(100, Number(task.progress) || 0));
+        const thumbnailUrl = safeHttpUrl(task.thumbnail);
 
         html += `
-            <div id="task_row_${task.id}" class="batch-task-row" style="display: grid; grid-template-columns: 40px 1fr 140px 220px 110px; gap: 12px; padding: 12px 18px; border-bottom: 1px solid rgba(51, 65, 85, 0.5); align-items: center; background: ${isRunning ? 'rgba(14, 165, 233, 0.04)' : 'transparent'}; transition: background 0.2s;">
+            <div id="task_row_${taskId}" class="batch-task-row" style="display: grid; grid-template-columns: 40px 1fr 140px 220px 110px; gap: 12px; padding: 12px 18px; border-bottom: 1px solid rgba(51, 65, 85, 0.5); align-items: center; background: ${isRunning ? 'rgba(14, 165, 233, 0.04)' : 'transparent'}; transition: background 0.2s;">
                 <!-- # Index -->
                 <div style="text-align: center; font-family: monospace; font-size: 12px; color: ${isRunning ? '#38bdf8' : '#64748b'}; font-weight: 700;">
                     ${idx + 1}
@@ -531,14 +570,14 @@ function renderQueueTable(tasks) {
                 <!-- Video Title / Info -->
                 <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
                     <div style="width: 44px; height: 32px; border-radius: 6px; background: #0f172a; border: 1px solid #334155; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; overflow: hidden;">
-                        ${task.thumbnail ? `<img src="${task.thumbnail}" style="width: 100%; height: 100%; object-fit: cover;">` : '🎬'}
+                        ${thumbnailUrl ? `<img src="${escapeHtml(thumbnailUrl)}" alt="" style="width: 100%; height: 100%; object-fit: cover;">` : '🎬'}
                     </div>
                     <div style="min-width: 0; flex: 1;">
-                        <div style="font-size: 13px; font-weight: 600; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${titleText}">
-                            ${titleText}
+                        <div style="font-size: 13px; font-weight: 600; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(titleText)}">
+                            ${escapeHtml(titleText)}
                         </div>
                         <div style="font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                            ${task.source_type === 'url' ? task.source_url : (task.file_path || '')}
+                            ${escapeHtml(sourceText)}
                         </div>
                     </div>
                 </div>
@@ -557,29 +596,29 @@ function renderQueueTable(tasks) {
                             ${isRunning ? '<span class="status-pulse-dot"></span>' : ''}
                             <span>${badgeText}</span>
                         </span>
-                        <span id="task_pct_${task.id}" style="font-weight: 800; font-family: monospace; color: ${badgeColor};">${task.progress || 0}%</span>
+                        <span id="task_pct_${taskId}" style="font-weight: 800; font-family: monospace; color: ${badgeColor};">${progress}%</span>
                     </div>
                     <div style="width: 100%; height: 6px; background: #0f172a; border-radius: 4px; overflow: hidden;">
-                        <div id="task_bar_${task.id}" style="width: ${task.progress || 0}%; height: 100%; background: ${isFailed ? '#ef4444' : isCompleted ? '#10b981' : 'linear-gradient(90deg, #0ea5e9, #38bdf8)'}; transition: width 0.3s ease;"></div>
+                        <div id="task_bar_${taskId}" style="width: ${progress}%; height: 100%; background: ${isFailed ? '#ef4444' : isCompleted ? '#10b981' : 'linear-gradient(90deg, #0ea5e9, #38bdf8)'}; transition: width 0.3s ease;"></div>
                     </div>
-                    <div id="task_step_${task.id}" style="font-size: 10.5px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${task.current_step_text || ''}">
-                        ${task.current_step_text || 'Chờ lượt xử lý...'}
+                    <div id="task_step_${taskId}" style="font-size: 10.5px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(stepText)}">
+                        ${escapeHtml(stepText)}
                     </div>
                 </div>
 
                 <!-- Actions -->
                 <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
                     ${isCompleted && task.output_path ? `
-                        <button class="btn secondary small" onclick="window.openBatchOutputVideo('${task.output_path.replace(/\\/g, '/')}')" title="Mở file video thành phẩm" style="padding: 4px 8px; font-size: 11px; color: #10b981; border-color: rgba(16, 185, 129, 0.4);">
+                        <button class="btn secondary small batch-open-output" data-path="${escapeHtml(task.output_path)}" title="Mở file video thành phẩm" style="padding: 4px 8px; font-size: 11px; color: #10b981; border-color: rgba(16, 185, 129, 0.4);">
                             ▶️ Mở
                         </button>
                     ` : ''}
                     ${(isFailed || isCancelled) ? `
-                        <button class="btn secondary small" onclick="window.retryBatchTask('${task.id}')" title="Thử lại tác vụ này" style="padding: 4px 8px; font-size: 11px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
+                        <button class="btn secondary small batch-retry-task" data-task-id="${taskId}" title="Thử lại tác vụ này" style="padding: 4px 8px; font-size: 11px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
                             🔄
                         </button>
                     ` : ''}
-                    <button class="btn secondary small" onclick="window.removeBatchTask('${task.id}')" title="Xóa khỏi hàng đợi" style="padding: 4px 8px; font-size: 11px; color: #f87171; border-color: rgba(239, 68, 68, 0.3);">
+                    <button class="btn secondary small batch-remove-task" data-task-id="${taskId}" title="Xóa khỏi hàng đợi" style="padding: 4px 8px; font-size: 11px; color: #f87171; border-color: rgba(239, 68, 68, 0.3);">
                         ✕
                     </button>
                 </div>
@@ -588,6 +627,15 @@ function renderQueueTable(tasks) {
     });
 
     tbody.innerHTML = html;
+    tbody.querySelectorAll('.batch-open-output').forEach((button) => {
+        button.addEventListener('click', () => window.openBatchOutputVideo(button.dataset.path));
+    });
+    tbody.querySelectorAll('.batch-retry-task').forEach((button) => {
+        button.addEventListener('click', () => window.retryBatchTask(button.dataset.taskId));
+    });
+    tbody.querySelectorAll('.batch-remove-task').forEach((button) => {
+        button.addEventListener('click', () => window.removeBatchTask(button.dataset.taskId));
+    });
 }
 
 function updateTaskProgressRow(data) {
@@ -607,27 +655,45 @@ function updateTaskProgressRow(data) {
 // Global actions exposed for inline onclicks
 if (typeof window !== 'undefined') {
     window.retryBatchTask = async (taskId) => {
-        await fetch('/api/batch/retry', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: taskId })
-        });
-        window.showToast?.('🔄 Đã đưa video trở lại hàng đợi!', 'info');
+        try {
+            const res = await fetch('/api/batch/retry', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_id: taskId })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Không thể thử lại tác vụ');
+            window.showToast?.('🔄 Đã đưa video trở lại hàng đợi!', 'info');
+        } catch (err) {
+            window.showToast?.(`🛑 ${err.message}`, 'error');
+        }
     };
 
     window.removeBatchTask = async (taskId) => {
-        await fetch('/api/batch/remove', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: taskId })
-        });
+        try {
+            const res = await fetch('/api/batch/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_id: taskId })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Không thể xóa tác vụ');
+        } catch (err) {
+            window.showToast?.(`🛑 ${err.message}`, 'error');
+        }
     };
 
     window.openBatchOutputVideo = async (filePath) => {
-        await fetch('/api/batch/open_output', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath })
-        });
+        try {
+            const res = await fetch('/api/batch/open_output', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: filePath })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Không thể mở video');
+        } catch (err) {
+            window.showToast?.(`🛑 ${err.message}`, 'error');
+        }
     };
 }

@@ -30,8 +30,24 @@ RELEASE_DIR = os.path.join(ROOT_DIR, "release")
 PATCH_ZIP = os.path.join(RELEASE_DIR, "patch.zip")
 
 GITHUB_REPO = "hoangnamtaichua-prog/NovaCut"
-GITHUB_TOKEN = "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"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
+
+def get_github_token(cli_token=None):
+    """Lấy token GitHub từ CLI, biến môi trường hoặc file .github_token."""
+    token = (cli_token or "").strip()
+    if not token:
+        token = os.environ.get("NOVACUT_GITHUB_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        token_file = os.path.join(ROOT_DIR, ".github_token")
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, "r", encoding="utf-8") as f:
+                    token = f.read().strip()
+            except Exception:
+                pass
+    return token
+
+GITHUB_TOKEN = get_github_token()
 
 PATCH_INCLUDE_DIRS = [
     "web",
@@ -64,6 +80,7 @@ PATCH_INCLUDE_FILES = [
     "local_voice_engine.py",
     "rvc_bridge.py",
     "audio_separator.py",
+    "mdx_separator.py",
     "requirements.txt",
     "version.json"
 ]
@@ -89,6 +106,8 @@ PATCH_EXCLUDES = [
     "voices",
     "build",
     "dist",
+    "patches",
+    "release",
     ".system_generated",
     "tts_cache",
     "temp_uploads",
@@ -164,12 +183,25 @@ def build_patch_zip(target_version):
     return PATCH_ZIP
 
 
-def update_version_manifest(version, changelog):
-    download_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/assets/latest"
+import hashlib
+
+
+def compute_file_sha256(filepath):
+    """Tính toán mã băm SHA-256 chuẩn của tệp nhị phân."""
+    hasher = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest().lower()
+
+
+def update_version_manifest(version, changelog, sha256_hash=""):
+    download_url = f"https://github.com/{GITHUB_REPO}/releases/download/v{version}/patch.zip"
 
     manifest = {
         "version": version,
         "download_url": download_url,
+        "sha256": sha256_hash,
         "changelog": changelog,
         "is_mandatory": False,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
@@ -178,16 +210,24 @@ def update_version_manifest(version, changelog):
     with open(VERSION_FILE, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    log(f"✅ Đã cập nhật version.json lên phiên bản v{version}!")
+    log(f"✅ Đã cập nhật version.json lên phiên bản v{version} (SHA256: {sha256_hash[:12]}...)!")
     return manifest
 
 
-def upload_github_release(version, changelog, patch_path):
+def upload_github_release(version, changelog, patch_path, sha256_hash="", token=""):
     """
-    Tự động tạo Release và Upload patch.zip lên GitHub Private Repository qua API.
+    Tự động tạo Release và Upload patch.zip lên GitHub Repository qua API.
     """
+    auth_token = (token or GITHUB_TOKEN).strip()
+    if not auth_token:
+        log("⚠️ LƯU Ý: Chưa có GitHub Personal Access Token để tạo Release tự động!")
+        log("   👉 Cách 1: Truyền token khi chạy: python scripts/publish_patch.py --version " + version + " --token <TOKEN_CỦA_BẠN>")
+        log("   👉 Cách 2: Lưu token vào file .github_token tại thư mục dự án.")
+        log("   👉 Hoặc tạo Release thủ công trên GitHub: https://github.com/" + GITHUB_REPO + "/releases/new (đính kèm release/patch.zip)")
+        return False
+
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
+        "Authorization": f"token {auth_token}",
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "NovaCut-Publisher/1.0"
     }
@@ -195,7 +235,11 @@ def upload_github_release(version, changelog, patch_path):
     tag_name = f"v{version}" if not version.startswith("v") else version
     release_name = f"NovaCut Patch {tag_name}"
 
-    log(f"Đang kết nối GitHub API để tạo Release {tag_name} trên kho Private...")
+    body_text = changelog
+    if sha256_hash and "SHA-256:" not in body_text:
+        body_text = f"{changelog}\n\n**Checksum:**\n`SHA-256: {sha256_hash}`"
+
+    log(f"Đang kết nối GitHub API để tạo Release {tag_name} trên kho...")
 
     # 1. Kiểm tra xem release này đã tồn tại chưa
     rel_id = None
@@ -207,13 +251,14 @@ def upload_github_release(version, changelog, patch_path):
         rel_id = rel_data.get("id")
         upload_url_template = rel_data.get("upload_url")
         log(f" -> Release {tag_name} đã tồn tại (ID: {rel_id}), tiến hành cập nhật...")
+        requests.patch(f"{GITHUB_API_BASE}/releases/{rel_id}", headers=headers, json={"body": body_text, "name": release_name})
     else:
         # Tạo release mới
         payload = {
             "tag_name": tag_name,
             "target_commitish": "main",
             "name": release_name,
-            "body": changelog,
+            "body": body_text,
             "draft": False,
             "prerelease": False
         }
@@ -224,7 +269,7 @@ def upload_github_release(version, changelog, patch_path):
         rel_data = r_create.json()
         rel_id = rel_data.get("id")
         upload_url_template = rel_data.get("upload_url")
-        log(f"✅ Đã tạo Release {tag_name} thành công trên kho Private (ID: {rel_id})!")
+        log(f"✅ Đã tạo Release {tag_name} thành công (ID: {rel_id})!")
 
     # 2. Xóa các asset cũ nếu đã có
     r_assets = requests.get(f"{GITHUB_API_BASE}/releases/{rel_id}/assets", headers=headers)
@@ -252,11 +297,11 @@ def upload_github_release(version, changelog, patch_path):
 
         upload_url = f"https://uploads.github.com/repos/{GITHUB_REPO}/releases/{rel_id}/assets?name={asset_name}"
         upload_headers = {
-            "Authorization": f"token {GITHUB_TOKEN}",
+            "Authorization": f"token {auth_token}",
             "Content-Type": content_type,
             "User-Agent": "NovaCut-Publisher/1.0"
         }
-        log(f"Đang tải {asset_name} lên GitHub Private Release ({os.path.getsize(asset_file)/(1024*1024):.2f} MB)...")
+        log(f"Đang tải {asset_name} lên GitHub Release ({os.path.getsize(asset_file)/(1024*1024):.2f} MB)...")
         with open(asset_file, "rb") as f:
             r_up = requests.post(upload_url, headers=upload_headers, data=f)
         if r_up.status_code in (200, 201):
@@ -270,57 +315,69 @@ def upload_github_release(version, changelog, patch_path):
 def git_push_changes(version):
     """Tự động commit và push thay đổi lên GitHub qua git."""
     try:
-        log("Đang đồng bộ mã nguồn và version.json lên GitHub Private repo...")
+        log("Đang đồng bộ mã nguồn và version.json lên GitHub repo...")
         subprocess.run(["git", "add", "."], cwd=ROOT_DIR, check=True)
         subprocess.run(["git", "commit", "-m", f"Release patch v{version}"], cwd=ROOT_DIR, check=False)
         res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, capture_output=True, text=True)
         if res.returncode == 0:
             log("✅ Đã push thành công lên GitHub origin main!")
         else:
-            log(f"⚠️ Git push output: {res.stderr or res.stdout}")
+            log(f"⚠️ Git push notice: {res.stderr or res.stdout}")
     except Exception as e:
         log(f"⚠️ Lỗi git push: {e}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NovaCut Private Auto-Update Patch Publisher")
-    parser.add_argument("--version", type=str, help="Số phiên bản mới (vd: 1.0.1 hoặc 1.0.2)")
+    parser = argparse.ArgumentParser(description="NovaCut Auto-Update Patch Publisher")
+    parser.add_argument("--version", type=str, help="Số phiên bản mới (vd: 1.0.1 hoặc 1.2.2)")
     parser.add_argument("--changelog", type=str, help="Nội dung thay đổi / tính năng mới")
+    parser.add_argument("--token", type=str, help="GitHub Personal Access Token (PAT)")
     args = parser.parse_args()
 
+    token = get_github_token(args.token)
     cur_ver = get_current_version()
     print("=" * 65)
-    print("🚀 NOVACUT 1-CLICK PRIVATE AUTO-UPDATE PUBLISHER")
+    print("🚀 NOVACUT 1-CLICK AUTO-UPDATE PUBLISHER")
     print("=" * 65)
-    print(f"🔒 Kho GitHub Private: {GITHUB_REPO}")
-    print(f"📌 Phiên bản hiện tại : v{cur_ver}")
+    print(f"🔒 Kho GitHub        : {GITHUB_REPO}")
+    print(f"📌 Phiên bản hiện tại: v{cur_ver}")
 
-    new_ver = args.version or increment_version(cur_ver)
-    changelog = args.changelog or f"✨ Bản cập nhật v{new_ver}:\n- Tối ưu hóa hiệu năng và cải tiến giao diện.\n- Tích hợp Offline Clone Voice và Live Dubbing."
+    new_ver = args.version or cur_ver
+    existing_changelog = ""
+    if os.path.exists(VERSION_FILE):
+        try:
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                existing_changelog = json.load(f).get("changelog", "")
+        except Exception:
+            pass
+
+    changelog = args.changelog or existing_changelog or f"✨ Bản cập nhật v{new_ver}:\n- Tối ưu hóa hiệu năng và cải tiến giao diện.\n- Tích hợp Offline Clone Voice và Live Dubbing."
 
     print(f"🎯 Phiên bản phát hành : v{new_ver}")
     print(f"📝 Nội dung Changelog  :\n{changelog}")
     print("-" * 65)
 
-    # 1. Cập nhật version.json
-    update_version_manifest(new_ver, changelog)
-
-    # 2. Đóng gói patch.zip
+    # 1. Đóng gói patch.zip
     patch_path = build_patch_zip(new_ver)
+    patch_sha256 = compute_file_sha256(patch_path)
+    log(f"🔑 SHA-256 Checksum: {patch_sha256}")
 
-    # 3. Đẩy code lên GitHub Private
+    # 2. Cập nhật version.json với SHA-256 và download_url
+    update_version_manifest(new_ver, changelog, patch_sha256)
+
+    # 3. Đẩy code lên GitHub
     git_push_changes(new_ver)
 
-    # 4. Tự động tạo Release và Upload patch.zip lên GitHub Private
-    upload_github_release(new_ver, changelog, patch_path)
+    # 4. Tự động tạo Release và Upload patch.zip lên GitHub
+    upload_github_release(new_ver, changelog, patch_path, patch_sha256, token=token)
 
     print("=" * 65)
-    print(f"🎉 ĐÃ PHÁT HÀNH BẢN CẬP NHẬT v{new_ver} LÊN KHO PRIVATE THÀNH CÔNG!")
+    print(f"🎉 ĐÃ PHÁT HÀNH BẢN CẬP NHẬT v{new_ver} LÊN GITHUB THÀNH CÔNG!")
     print("=" * 65)
     print("👉 Bây giờ, bất kỳ người dùng nào mở app NovaCut lên:")
     print(f"   1. App sẽ tự động phát hiện phiên bản mới: v{new_ver}")
     print("   2. Khách bấm [🚀 Cập Nhật Ngay] -> Tự động tải patch.zip và nâng cấp trong 2 giây!")
-    print("   3. Kho GitHub của bạn vẫn là PRIVATE 100%, không ai nhìn thấy mã nguồn.")
+    print(f"   3. Mã SHA-256 đối soát: {patch_sha256[:16]}...")
 
 
 if __name__ == "__main__":

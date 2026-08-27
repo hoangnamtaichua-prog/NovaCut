@@ -13,6 +13,7 @@ __pycache__/
 license_config.json
 api_keys.txt
 config.json
+gist_config.json
 client_secrets.json
 cookies.txt
 

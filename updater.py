@@ -16,13 +16,26 @@ import shutil
 import subprocess
 import threading
 import re
+import hmac
+import hashlib
 import requests
+from urllib.parse import urlparse
 import license_manager
 
-if getattr(sys, 'frozen', False):
-    ROOT_DIR = os.path.dirname(sys.executable)
-else:
-    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_app_root_dir():
+    """Xác định chính xác tuyệt đối thư mục gốc của ứng dụng NovaCut."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    curr = os.path.dirname(os.path.abspath(__file__))
+    while curr and os.path.dirname(curr) != curr:
+        if os.path.exists(os.path.join(curr, 'web', 'index.html')):
+            norm_curr = os.path.normpath(curr).lower()
+            if not norm_curr.endswith(os.path.normpath('patches/active').lower()) and not norm_curr.endswith(os.path.normpath('release/novacut').lower()):
+                return os.path.abspath(curr)
+        curr = os.path.dirname(curr)
+    return os.path.dirname(os.path.abspath(__file__))
+
+ROOT_DIR = get_app_root_dir()
 
 VERSION_FILE = os.path.join(ROOT_DIR, 'version.json')
 DEFAULT_VERSION = "1.0.0"
@@ -62,12 +75,27 @@ PROTECTED_PATTERNS = {
 
 def _get_auth_headers(accept_type="application/vnd.github.v3+json"):
     """Tạo Header xác thực an toàn truy cập kho GitHub Private."""
-    _t = "".join(['ghp_', 'zp21z8thG2R8IxKT', '5KWZxvpl9g0HBc1Y7tRJ'])
-    return {
-        "Authorization": f"token {_t}",
+    token = os.environ.get('NOVACUT_GITHUB_TOKEN', '').strip()
+    headers = {
         "Accept": accept_type,
         "User-Agent": "NovaCut-App-Updater/1.0"
     }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+_ALLOWED_UPDATE_HOSTS = {
+    'api.github.com', 'github.com', 'objects.githubusercontent.com',
+    'release-assets.githubusercontent.com', 'raw.githubusercontent.com', 'drive.google.com'
+}
+
+
+def _validate_update_url(url):
+    parsed = urlparse(str(url or '').strip())
+    if parsed.scheme != 'https' or parsed.hostname not in _ALLOWED_UPDATE_HOSTS:
+        raise ValueError('Nguồn cập nhật không nằm trong danh sách tin cậy.')
+    return parsed.geturl()
 
 
 def get_current_app_version():
@@ -142,11 +170,11 @@ def get_update_progress():
 
 def check_for_updates():
     """
-    Kiểm tra phiên bản mới từ GitHub Private Repository.
+    Kiểm tra phiên bản mới từ GitHub Repository (Hỗ trợ cả Public & Private).
     """
     current_ver = get_current_app_version()
 
-    # 1. Thử kiểm tra qua GitHub Releases API của kho Private
+    # 1. Thử kiểm tra qua GitHub Releases API
     try:
         res = requests.get(f"{GITHUB_API_BASE}/releases/latest", headers=_get_auth_headers(), timeout=6)
         if res.status_code == 200:
@@ -155,51 +183,75 @@ def check_for_updates():
             latest_ver = tag_name.lstrip('v') if tag_name else current_ver
             changelog = str(data.get('body') or data.get('name') or '✨ Bản cập nhật tối ưu hóa hiệu năng & sửa lỗi.').strip()
             
-            # Tìm asset patch.zip trong release
             download_url = ""
+            expected_sha256 = ""
             assets = data.get('assets', [])
             for a in assets:
-                if a.get('name') == 'patch.zip' or a.get('name', '').endswith('.zip'):
-                    download_url = a.get('url', '') # GitHub Asset API URL
+                name = a.get('name', '')
+                if name == 'patch.zip' or name.endswith('.zip'):
+                    # Ưu tiên browser_download_url cho kho Public
+                    download_url = a.get('browser_download_url') or a.get('url', '')
+                    digest = str(a.get('digest') or '')
+                    if digest.lower().startswith('sha256:'):
+                        expected_sha256 = digest.split(':', 1)[1].strip().lower()
                     break
-            
+             
+            # Nếu chưa có sha256 từ digest, tìm trong release body
+            if not expected_sha256 and changelog:
+                m = re.search(r'sha-?256[:\s=]+([0-9a-fA-F]{64})', changelog, re.IGNORECASE)
+                if m:
+                    expected_sha256 = m.group(1).lower()
+
             has_update = is_version_newer(latest_ver, current_ver) and bool(download_url)
 
-            return {
-                "has_update": has_update,
-                "current_version": current_ver,
-                "latest_version": latest_ver,
-                "download_url": download_url,
-                "changelog": changelog,
-                "is_mandatory": False,
-                "source": "github_private_release"
-            }
-    except Exception:
-        pass
+            if has_update:
+                return {
+                    "has_update": True,
+                    "current_version": current_ver,
+                    "latest_version": latest_ver,
+                    "download_url": download_url,
+                    "sha256": expected_sha256,
+                    "changelog": changelog,
+                    "is_mandatory": False,
+                    "source": "github_release"
+                }
+    except Exception as e:
+        print(f"[Updater] GitHub Release check error: {e}")
 
-    # 2. Thử kiểm tra trực tiếp qua file version.json trong kho Private
+    # 2. Thử kiểm tra trực tiếp qua file version.json (Raw GitHub)
     try:
-        res = requests.get(f"{GITHUB_API_BASE}/contents/version.json", headers=_get_auth_headers("application/vnd.github.v3.raw"), timeout=6)
-        if res.status_code == 200:
-            data = res.json()
-            latest_ver = str(data.get('version') or current_ver).strip()
-            download_url = str(data.get('download_url') or '').strip()
-            changelog = str(data.get('changelog') or '✨ Bản cập nhật tối ưu hiệu năng và sửa lỗi.').strip()
-            is_mandatory = bool(data.get('is_mandatory') is True)
+        raw_urls = [
+            f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.json",
+            f"{GITHUB_API_BASE}/contents/version.json"
+        ]
+        for u in raw_urls:
+            try:
+                headers = _get_auth_headers("application/json" if "raw" in u else "application/vnd.github.v3.raw")
+                res = requests.get(u, headers=headers, timeout=6)
+                if res.status_code == 200:
+                    data = res.json()
+                    latest_ver = str(data.get('version') or current_ver).strip()
+                    download_url = str(data.get('download_url') or f"https://github.com/{GITHUB_REPO}/releases/download/v{latest_ver}/patch.zip").strip()
+                    expected_sha256 = str(data.get('sha256') or '').strip().lower()
+                    changelog = str(data.get('changelog') or '✨ Bản cập nhật tối ưu hiệu năng và sửa lỗi.').strip()
+                    is_mandatory = bool(data.get('is_mandatory') is True)
 
-            has_update = is_version_newer(latest_ver, current_ver)
-
-            return {
-                "has_update": has_update,
-                "current_version": current_ver,
-                "latest_version": latest_ver,
-                "download_url": download_url,
-                "changelog": changelog,
-                "is_mandatory": is_mandatory,
-                "source": "github_private_manifest"
-            }
-    except Exception:
-        pass
+                    has_update = is_version_newer(latest_ver, current_ver) and bool(download_url)
+                    if has_update:
+                        return {
+                            "has_update": True,
+                            "current_version": current_ver,
+                            "latest_version": latest_ver,
+                            "download_url": download_url,
+                            "sha256": expected_sha256,
+                            "changelog": changelog,
+                            "is_mandatory": is_mandatory,
+                            "source": "github_manifest"
+                        }
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[Updater] Manifest check error: {e}")
 
     # 3. Fallback: Google Apps Script (nếu có cấu hình)
     cfg = license_manager.load_app_config()
@@ -220,18 +272,21 @@ def check_for_updates():
                 drive_file_id = str(data.get('google_drive_file_id') or '').strip()
                 changelog = str(data.get('changelog') or 'Bản cập nhật tối ưu hóa hiệu năng và sửa lỗi.').strip()
                 is_mandatory = bool(data.get('is_mandatory') is True or str(data.get('is_mandatory')).upper() == 'TRUE')
+                expected_sha256 = str(data.get('sha256') or '').strip().lower()
                 has_update = is_version_newer(latest_ver, current_ver) and bool(drive_file_id)
 
-                return {
-                    "has_update": has_update,
-                    "current_version": current_ver,
-                    "latest_version": latest_ver,
-                    "google_drive_file_id": drive_file_id,
-                    "download_url": f"https://drive.google.com/uc?export=download&id={drive_file_id}" if drive_file_id else "",
-                    "changelog": changelog,
-                    "is_mandatory": is_mandatory,
-                    "source": "google_sheet"
-                }
+                if has_update:
+                    return {
+                        "has_update": True,
+                        "current_version": current_ver,
+                        "latest_version": latest_ver,
+                        "google_drive_file_id": drive_file_id,
+                        "download_url": f"https://drive.google.com/uc?export=download&id={drive_file_id}" if drive_file_id else "",
+                        "sha256": expected_sha256,
+                        "changelog": changelog,
+                        "is_mandatory": is_mandatory,
+                        "source": "google_sheet"
+                    }
         except Exception:
             pass
 
@@ -245,17 +300,22 @@ def check_for_updates():
 
 def download_file_direct(url, destination_path, progress_callback=None):
     """
-    Tải file patch.zip trực tiếp từ GitHub Private Repository với chunked stream và báo % thời gian thực.
-    Xử lý chuẩn 2 pha chuyển hướng (302 Redirect) và tự động thử lại/tiếp tục tải (Resume/Retry) nếu đứt kết nối mạng.
+    Tải file patch.zip trực tiếp từ GitHub Repository với chunked stream và báo % thời gian thực.
+    Xử lý chuẩn chuyển hướng (Redirect) và tự động thử lại/tiếp tục tải (Resume/Retry) nếu đứt kết nối mạng.
     """
-    headers = _get_auth_headers("application/octet-stream")
+    url = _validate_update_url(url)
+    token = os.environ.get('NOVACUT_GITHUB_TOKEN', '').strip()
+    headers = {"User-Agent": "NovaCut-App-Updater/1.0"}
+    if token and 'api.github.com' in url:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/octet-stream"
     
-    # Pha 1: Bóc tách URL Storage đích (nếu là GitHub Release Asset)
+    # Pha 1: Bóc tách URL Storage đích (nếu là GitHub Release Asset API)
     stream_url = url
     try:
         res_init = requests.get(url, stream=True, headers=headers, timeout=(10, 30), allow_redirects=False)
         if res_init.status_code in (301, 302, 307, 308) and 'Location' in res_init.headers:
-            stream_url = res_init.headers['Location']
+            stream_url = _validate_update_url(res_init.headers['Location'])
     except Exception as e:
         print(f"[Updater] Initial redirect probe notice: {e}")
 
@@ -268,7 +328,8 @@ def download_file_direct(url, destination_path, progress_callback=None):
 
     # Lấy tổng kích thước tệp trước
     try:
-        head_res = requests.head(stream_url, timeout=(10, 30))
+        head_headers = {"User-Agent": "NovaCut-App-Updater/1.0"}
+        head_res = requests.head(stream_url, headers=head_headers, timeout=(10, 30), allow_redirects=True)
         if head_res.status_code == 200 and 'content-length' in head_res.headers:
             total_size = int(head_res.headers['content-length'])
     except Exception:
@@ -277,8 +338,9 @@ def download_file_direct(url, destination_path, progress_callback=None):
     for attempt in range(1, max_retries + 1):
         try:
             req_headers = {"User-Agent": "NovaCut-App-Updater/1.0"}
-            if stream_url == url:
-                req_headers.update(headers)
+            if stream_url == url and token and 'api.github.com' in url:
+                req_headers["Authorization"] = f"Bearer {token}"
+                req_headers["Accept"] = "application/octet-stream"
             
             # Hỗ trợ tải tiếp (Resume) nếu đã tải được một phần
             if os.path.exists(destination_path):
@@ -300,7 +362,7 @@ def download_file_direct(url, destination_path, progress_callback=None):
                 if response.status_code == 416 or (downloaded > 0 and response.status_code == 200):
                     downloaded = 0
                     mode = "wb"
-                    response = requests.get(stream_url, stream=True, timeout=(10, 60))
+                    response = requests.get(stream_url, stream=True, headers={"User-Agent": "NovaCut-App-Updater/1.0"}, timeout=(10, 60))
 
             if response.status_code not in (200, 206):
                 raise Exception(f"Máy chủ trả về mã HTTP {response.status_code}")
@@ -340,10 +402,18 @@ def apply_patch_zip(zip_path, target_version=""):
         raise Exception("File tải về bị lỗi hoặc không phải định dạng .zip hợp lệ!")
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        root_real = os.path.realpath(ROOT_DIR)
+        total_uncompressed = sum(info.file_size for info in zip_ref.infolist())
+        if total_uncompressed > 2 * 1024 * 1024 * 1024:
+            raise Exception("Bản cập nhật vượt quá giới hạn dung lượng giải nén.")
         for file_info in zip_ref.infolist():
             filename = file_info.filename.replace('\\', '/')
             if not filename or filename.endswith('/'):
                 continue
+
+            dest_path = os.path.realpath(os.path.join(root_real, filename))
+            if os.path.commonpath([root_real, dest_path]) != root_real:
+                raise Exception(f"Bản cập nhật chứa đường dẫn không an toàn: {filename}")
 
             # Kiểm tra tệp có thuộc danh sách bảo vệ không
             is_protected = False
@@ -358,14 +428,16 @@ def apply_patch_zip(zip_path, target_version=""):
                 continue
 
             # 1. Giải nén vào thư mục ứng dụng gốc
-            dest_path = os.path.join(ROOT_DIR, filename)
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             with zip_ref.open(file_info) as source, open(dest_path, 'wb') as target:
                 shutil.copyfileobj(source, target)
 
             # 2. Cơ chế OTA Patch Overlay: Giải nén bổ sung các file .py và package vào patches/active/ để nạp đè 100% C-binary (.pyd)
             if filename.endswith('.py') or filename.startswith('routes/'):
-                overlay_path = os.path.join(ROOT_DIR, 'patches', 'active', filename)
+                overlay_root = os.path.realpath(os.path.join(ROOT_DIR, 'patches', 'active'))
+                overlay_path = os.path.realpath(os.path.join(overlay_root, filename))
+                if os.path.commonpath([overlay_root, overlay_path]) != overlay_root:
+                    raise Exception(f"Overlay chứa đường dẫn không an toàn: {filename}")
                 os.makedirs(os.path.dirname(overlay_path), exist_ok=True)
                 with zip_ref.open(file_info) as source, open(overlay_path, 'wb') as target:
                     shutil.copyfileobj(source, target)
@@ -418,7 +490,7 @@ def restart_application():
 
 _UPDATE_THREAD_LOCK = threading.Lock()
 
-def perform_auto_update_async(download_url_or_file_id, target_version):
+def perform_auto_update_async(download_url_or_file_id, target_version, expected_sha256):
     """Thực hiện toàn bộ quá trình cập nhật trong background thread (Chống xung đột đa luồng)."""
     global _update_progress_state
 
@@ -440,7 +512,8 @@ def perform_auto_update_async(download_url_or_file_id, target_version):
 
     def _worker():
         global _update_progress_state
-        temp_zip = os.path.join(ROOT_DIR, 'temp', f'patch_v{target_version}_{int(time.time())}.zip')
+        safe_version = re.sub(r'[^0-9A-Za-z._-]', '_', str(target_version))[:64] or 'unknown'
+        temp_zip = os.path.join(ROOT_DIR, 'temp', f'patch_v{safe_version}_{int(time.time())}.zip')
 
         def _on_progress(pct, down, total):
             _update_progress_state["percent"] = pct
@@ -461,6 +534,15 @@ def perform_auto_update_async(download_url_or_file_id, target_version):
 
             # 1. Tải bản vá trực tiếp từ GitHub Private Repo
             download_file_direct(target_url, temp_zip, progress_callback=_on_progress)
+
+            expected = str(expected_sha256 or '').strip().lower()
+            if expected and re.fullmatch(r'[0-9a-f]{64}', expected):
+                hasher = hashlib.sha256()
+                with open(temp_zip, 'rb') as patch_file:
+                    for block in iter(lambda: patch_file.read(1024 * 1024), b''):
+                        hasher.update(block)
+                if not hmac.compare_digest(hasher.hexdigest(), expected):
+                    raise Exception('SHA-256 của bản cập nhật không khớp manifest.')
 
             # 2. Giải nén và áp dụng bản vá
             _update_progress_state["status"] = "extracting"

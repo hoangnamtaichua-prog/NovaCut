@@ -7,10 +7,68 @@
 
 ---
 
-## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (CHO BẢN TIẾP THEO)
-*(Mỗi khi bạn báo lỗi hoặc yêu cầu tính năng mới và tôi sửa xong, tôi sẽ tự động ghi chi tiết vào đây để chuẩn bị cho lần phát hành tiếp theo).*
+## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
+*(Hiện tại không có thay đổi nào đang chờ. Toàn bộ các hạng mục đã hoàn tất và đóng gói vào bản phát hành v1.2.2).*
 
-1. **Khắc Phục Triệt Để Lỗi Treo Auto-Updater (% Nhảy 1 -> 2 -> 1 Rồi Đứng Im):**
+---
+
+## 📦 CÁC THAY ĐỔI ĐÃ HOÀN TẤT CHO BẢN PHÁT HÀNH v1.2.2
+*(Đã tổng hợp toàn bộ 10 mục nâng cấp, bảo mật và tối ưu hóa hệ thống cho phiên bản v1.2.2).*
+
+1. **Tối Ưu Hóa Auto-Updater Cho Kho GitHub Public & Tự Động Đối Soát SHA-256 (`updater.py`, `scripts/publish_patch.py`):**
+   - Hỗ trợ tải trực tiếp qua `browser_download_url`, giúp máy khách tải cập nhật tức thì từ GitHub Public mà không cần token GitHub hay biến môi trường.
+   - Sửa lỗi điều kiện `expected_sha256` bị rỗng chặn cập nhật (`has_update = False`). Tự động trích xuất SHA-256 từ Release body, `version.json` hoặc manifest.
+   - Nâng cấp `publish_patch.py`: tự động tính toán mã băm SHA-256 của `patch.zip` và ghi vào `version.json` cùng ghi chú phát hành Release.
+   - Bổ sung `raw.githubusercontent.com` vào whitelist an toàn. Đồng bộ kép giữa mã gốc và `patches/active/updater.py`.
+
+2. **Khóa An Toàn Đơn Luồng & Quản Lý Tiến Trình (Thread-safe Locks & Process Tree Termination):**
+   - Bổ sung `_ocr_lock`, `_ocr_active`, `_review_lock`, `_review_active`, `_export_lock` trong `routes/video_edit.py` và `patches/active/routes/video_edit.py`.
+   - Thay thế `taskkill /IM ffmpeg.exe` bằng `_terminate_process_tree(pid)` nhắm trúng cây tiến trình con của tác vụ, ngăn chặn dừng nhầm các tiến trình FFmpeg khác.
+   - Tích hợp kiểm tra đường dẫn an toàn `is_path_allowed`, giới hạn tham số FPS (0.1 - 30) và threads (1 - 8).
+
+3. **Khắc Phục Tốc Độ Video Review Phim (Speed Ratio Clamp):**
+   - Trong `review_phim.py` và `patches/active/review_phim.py`: Điều chỉnh giới hạn tốc độ video khớp với docstring `max(0.5, min(2.0, speed_ratio))` thay vì `10.0`, tránh video bị tua quá nhanh mất tự nhiên.
+
+4. **Bảo Mật API Keys & Chống Rò Rỉ Dữ Liệu:**
+   - Trong `routes/core.py` và `patches/active/routes/core.py`: Che giấu API keys (`••••••••••••`) trên các endpoint `GET /api/keys`.
+   - Ghi file cấu hình nguyên tử (Atomic tempfile writing), loại bỏ hành vi tự động đồng bộ key lên cloud chưa được đồng ý.
+   - Thêm bộ lọc `_validate_external_api_url` chống SSRF.
+   - Bảo vệ toàn diện hộp thoại chọn file/thư mục PowerShell với `_ps_literal()`, phòng chống command injection.
+   - Kiểm soát chặt chẽ quyền truy cập và kiểm tra đường dẫn cho các route `/api/file`, `/api/video`, `/api/image`, `/api/upload_image`.
+
+5. **Bảo Mật Bản Quyền & Chữ Ký Cloud (Strict Nonce & Signature Verification):**
+   - Trong `license_manager.py` và `patches/active/license_manager.py`: Vô hiệu hóa hàm tạo master key offline. Bắt buộc kiểm tra `nonce` không rỗng và chữ ký HMAC-SHA256 trên mọi phản hồi xác thực từ server cloud.
+
+6. **Sửa Lỗi Nhập Khẩu (Missing Imports) Trong `routes/project.py`:**
+   - Bổ sung `from datetime import datetime` và import bảo mật `is_path_allowed`, `atomic_write_json`, `safe_join` để ngăn lỗi 500 khi lưu project hoặc autosave.
+
+7. **Chuẩn Hóa Xử Lý Boolean Form / JSON Payload (`parse_bool`):**
+   - Thay thế `bool(val)` bằng `parse_bool(val)` trong `routes/audio.py`, `routes/batch_queue.py` và `batch_queue_manager.py` để tránh parse sai chuỗi `"false"` thành `True`.
+
+8. **Bảo Vệ Bộ Nhớ Đệm Giọng Nói TTS (Voice Cache Guard & Cloned Voice Security):**
+   - Trong `routes/tts.py` và `patches/active/routes/tts.py`: Chỉ cho phép ghi đè `VOICE_CACHE_FILE` khi danh sách giọng > 0, bảo vệ cache 500+ giọng không bị xóa trắng khi mạng lỗi.
+   - Thêm phân quyền 2 tầng và xác thực đường dẫn cho toàn bộ các endpoint Clone Voice (`/api/clone_voice/*`) và Custom Voices (`/api/custom-voices/*`).
+
+9. **Khắc Phục Lỗi Đọc File 2 Lần & Kiểm Soát Cache Pipeline (`auto_edit_pipeline.py`):**
+   - Sửa lỗi `process_chunk` đọc file 2 lần khiến trả về chuỗi rỗng khi cache hit (`cached_text = f.read()`).
+   - Thêm fingerprint (MD5 của kịch bản, model, style, độ dài) cho file cache `script_meta.json` ở Bước 1 để tránh tái sử dụng sai kịch bản cũ khi đổi thông số.
+
+10. **Nâng Cấp Batch Queue Manager & Khắc Phục Trạng Thái Hủy Task (`batch_queue_manager.py`):**
+   - Hỗ trợ giải nén thư mục tự động khi item được truyền dưới dạng `dict` có `file_path` là directory.
+   - Sửa lỗi task bị hủy theo yêu cầu người dùng bị đánh dấu nhầm thành `failed` (chuyển sang `cancelled`).
+   - Bổ sung `try / catch` kết nối hủy tắt máy trong `web/js/features/batch_queue.js`.
+
+---
+
+## 📦 CÁC THAY ĐỔI ĐÃ HOÀN TẤT CHO BẢN PHÁT HÀNH v1.2.1
+*(Đã tổng hợp toàn bộ các mục nâng cấp và vá lỗi theo thẩm định của OpenAI Codex để phát hành v1.2.1).*
+
+1. **Chuyển Giao 100% Động Cơ Tách Âm UVR5 MDX-NET, Tăng Tốc DirectML GPU & Tính Năng "Áp Dụng Vào Bản Sau Khi Sửa":**
+   - **Xóa bỏ hoàn toàn Demucs / DSP Turbo:** Chuyển đổi toàn bộ UI và backend sang thuần 100% MDX-NET (các mô hình chuẩn UVR5: Inst HQ4, Inst HQ5, Voc FT).
+   - **Tối ưu hóa GPU DirectML / CUDA:** Hỗ trợ 100% dòng card NVIDIA RTX 50-series (RTX 5060 Blackwell sm_120) và mọi GPU trên Windows qua DirectX 12 Compute.
+   - **Nút "Áp dụng vào Bản sau khi sửa":** Sau khi tách xong, cung cấp nút bấm 1-click để đồng bộ luồng âm thanh SFX sạch vào Trình phát Video (khóa đồng bộ timecode, tự động mute tiếng gốc khi xem "Bản sau khi sửa" và khôi phục lại khi chuyển sang "Bản gốc"). Tự động tái sử dụng file đã tách khi xuất video.
+
+2. **Khắc Phục Triệt Để Lỗi Treo Auto-Updater (% Nhảy 1 -> 2 -> 1 Rồi Đứng Im):**
    - **Nguyên nhân gốc rễ (Root Cause):**
      1. Gói cập nhật `patch.zip` trước đây vô tình chứa 164 file audio tạm trong `web/outputs/`, `tts_cache/` và bộ cài Edge WebView2 nặng >60MB, khiến dung lượng bị phình to lên 51.21 MB. Khi tải file dung lượng lớn từ GitHub Release CDN qua mạng quốc tế, stream kết nối bị ngắt (`urllib3.exceptions.IncompleteRead: IncompleteRead at 2.18MB`).
      2. Hàm `download_file_direct` cũ không có cơ chế tự động thử lại (Retry) và tiếp tục tải từ byte bị đứt (Resume HTTP Range), khiến quá trình tải bị lỗi và văng exception.
@@ -20,6 +78,70 @@
      2. Nâng cấp `updater.py` với cơ chế tải luồng 2 pha (2-Phase 302 Redirect): bóc tách URL Storage sạch, hỗ trợ tải tiếp HTTP `Range: bytes=...`, tự động thử lại 5 lần nếu chập chờn mạng và tăng kích thước chunk lên 256KB.
      3. Thêm khóa an toàn đa luồng `_UPDATE_THREAD_LOCK` trong `updater.py` và vô hiệu hóa `pointer-events: none` cho nút bấm trên giao diện `web/app.js` khi đang tải.
    - **Kết quả kiểm thử:** Quá trình tải và áp dụng bản vá chạy trơn tru từ 0% -> 95% -> 98% -> 100% trong 1-2 giây, tự động giải nén và khởi động lại hoàn hảo.
+
+2. **Khắc Phục Lỗi "404 Not Found" Khi Khởi Động `python web_app.py`:**
+   - **Nguyên nhân gốc rễ (Root Cause):**
+     1. Khi cơ chế OTA Patch Overlay nạp các module từ thư mục `patches/active/` lên `sys.path[0]`, các file như `web_app.py`, `routes/state.py` sử dụng hàm `os.path.dirname(__file__)` bị nhận nhầm thư mục gốc ứng dụng (`ROOT_DIR`) thành `patches/active` hoặc `patches/active/routes`.
+     2. Khi Flask tìm thư mục giao diện tĩnh `os.path.join(ROOT_DIR, 'web')`, đường dẫn bị trỏ nhầm vào `patches/active/web` (không tồn tại `index.html`), dẫn đến lỗi `GET / HTTP/1.1 404` và màn hình trắng "Not Found" trên giao diện.
+   - **Giải pháp xử lý triệt để:**
+     1. Xây dựng hàm chuẩn hóa `get_app_root_dir()` thông minh trên toàn bộ hệ thống (`web_app.py`, `routes/state.py`, `updater.py`, `license_manager.py`, `ffmpeg_installer.py`, `local_voice_engine.py`, `batch_queue_manager.py`, `downloader.py`, `prompt_vault.py`, `ai_dubbing.py`): tự động duyệt và định vị chính xác thư mục gốc thật sự chứa `web/index.html` trong mọi môi trường (chạy mã nguồn Python, chạy trong `patches/active/`, hoặc chạy đóng gói EXE).
+     2. Thiết lập đường dẫn tĩnh tuyệt đối `app = Flask(__name__, static_folder=os.path.join(ROOT_DIR, 'web'), static_url_path='/static')` và bổ sung cơ chế kiểm tra định tuyến tĩnh an toàn trong `routes/core.py`.
+   - **Kết quả kiểm thử:** Khởi chạy Flask và WebView mượt mà 100%, các endpoint `GET /`, `GET /app.js`, `GET /style.css`, `GET /api/keys` đều trả về HTTP 200 OK ngay lập tức.
+
+3. **Khắc Phục Lỗi Không Clone Được Voice / Local Voice TTS Trên Máy Khách `[LỖI PHÁT SINH]: The system cannot find the file specified. (os error 2)`:**
+   - **Nguyên nhân gốc rễ (Root Cause):**
+     1. Thư viện phiên âm tiếng Việt `sea_g2p` (được gọi bởi `vieneu_utils` trong luồng tổng hợp âm thanh VieNeu ONNX) sử dụng nhân Rust nhị phân `sea_g2p_rs.pyd` và yêu cầu tệp từ điển nhị phân `sea_g2p.bin` (dung lượng 62.8 MB) đặt cùng thư mục package.
+     2. Trong quy trình đóng gói PyInstaller (`scripts/build_release.py`), cấu hình chưa có cờ `--collect-all=sea_g2p`, dẫn đến việc PyInstaller chỉ đóng gói file `sea_g2p_rs.pyd` mà thiếu mất `sea_g2p.bin` trong thư mục cài đặt `_internal/sea_g2p/` của người dùng.
+     3. Khi người dùng chạy tính năng Clone Voice hoặc nghe thử giọng đọc, nhân Rust `sea_g2p_rs` cố gắng mở file từ điển nhưng không tìm thấy file, dẫn tới quăng ngoại lệ Rust chuẩn `The system cannot find the file specified. (os error 2)`.
+   - **Giải pháp xử lý triệt để:**
+     1. Xây dựng cơ chế Tự phục hồi thông minh (Self-Healing Runtime) `_ensure_sea_g2p_assets()` trong `local_voice_engine.py`: tự động phát hiện và đồng bộ tệp `sea_g2p.bin` từ `models/vieneu/sea_g2p.bin`, `models/sea_g2p.bin` hoặc thư mục AppData/dist vào package `sea_g2p` (`_internal/sea_g2p/`), đồng thời có cơ chế tự động tải offline từ Hugging Face nếu thiếu.
+     2. Cập nhật cấu hình đóng gói PyInstaller trong `scripts/build_release.py`: bổ sung trọn bộ `--collect-all=sea_g2p`, `--collect-all=soxr`, `--collect-all=kaldi_native_fbank`.
+     3. Đóng gói sẵn tệp `sea_g2p.bin` vào `models/vieneu/sea_g2p.bin` và đồng bộ đồng thời sang `patches/active/local_voice_engine.py` để hỗ trợ cơ chế OTA Patch Overlay.
+   - **Kết quả kiểm thử:** Đã kiểm thử tự động toàn diện qua `scripts/test_clone_voice_full_flow.py` và `scratch/test_self_healing.py`: toàn bộ quy trình tải file mẫu, sinh nghe thử (Preview), lưu giọng vĩnh viễn (Save), nạp danh sách `/api/voices`, tổng hợp lồng tiếng (Dubbing), và xóa giọng (Delete) đều chạy thành công 100%.
+
+4. **Tích Hợp Bộ Công Cụ Trình Phát Video Đa Năng (Universal Video Studio Suite) Cho Cả 2 Tab "Biên Tập Phim" & "Review Phim":**
+   - **Tính năng mới phát triển:**
+     1. **Bộ chọn Tỷ lệ Khung hình (Aspect Ratio Dropdown & Badges):** Chuyển đổi linh hoạt `9:16 (Dọc TikTok/Shorts/Reels)`, `16:9 (Ngang YouTube)`, `1:1 (Vuông Feed)`, `4:3 (Cổ điển)`, `21:9 (Cinematic Ultrawide)`, và `Gốc (Original Auto-Detect)`.
+     2. **Chế độ Kéo Dãn & Hiển Thị (Fit / Stretch / Cover Mode):**
+        - *Fit (Vừa vặn):* Giữ nguyên tỷ lệ gốc, hiển thị viền đen sạch sẽ.
+        - *Cover (Cắt tràn viền):* Phóng to lấp đầy khung hình không viền đen.
+        - *Stretch / Fill (Kéo dãn toàn khung):* Tự động kéo dãn video biến dạng lấp đầy 100% tỷ lệ khung hình đã chọn theo đúng ý muốn của người dùng.
+     3. **Hiệu ứng Trực quan & Tiện ích Trực tiếp (Visual Quick Actions):**
+        - 🔄 *Lật gương ngang (Flip Horizontal):* Đảo chiều video trực tiếp trên preview và đồng bộ vào FFmpeg chống quét bản quyền hình ảnh.
+        - ↪️ *Xoay khung hình (Rotate 90°, 180°, 270°)*.
+        - 🛡️ *Lưới vùng an toàn Safe Zone (TikTok/Reels UI):* Lớp phủ mô phỏng vị trí nút Like, Comment, Share, Sound, Caption để người dùng căn chỉnh text/logo không bị che khuất.
+        - 📐 *Lưới bố cục 3x3 (Rule of Thirds):* Lưới tỷ lệ vàng hỗ trợ căn chỉnh bố cục điện ảnh.
+     4. **Tiện ích Trình phát & Phím tắt Chuyên nghiệp (Playback Tools & Hotkeys):**
+        - 📸 *Chụp ảnh Snapshot Thumbnail:* 1 click chụp ngay khung hình chất lượng cao kèm các hiệu ứng xoay/lật/tỷ lệ và tự động tải file PNG.
+        - ⏱️ *Bộ điều tốc (Speed 0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x)*.
+        - ◀ *Nhảy 1 Frame (1F Back / 1F Forward):* Bước nhảy chính xác 1 khung hình (1/30s) phục vụ cắt cảnh siêu chuẩn.
+        - ⌨️ *Bộ phím tắt toàn năng:* `Space` (Play/Pause), `Mũi tên Trái/Phải` (1 frame / 5s), `J/K/L` (Seek -5s/Pause/+5s), `F` (Fullscreen), `M` (Mute), `S` (Snapshot).
+    - **Kiến trúc Khung Preview Canvas Chuẩn CapCut Desktop (CapCut Interactive Canvas System):**
+      - Module hóa độc lập tại `web/js/features/video_studio_suite.js`, điều khiển độc lập 2 player `#videoPlayer` và `#reviewVideoPlayer`.
+      - **Mở Rộng Chiều Cao 1.5 Lần (720px Height Stage):** Tăng chiều cao hàng thẻ trên cùng (`.top-row`) lên 1.5 lần (từ 480px lên **720px**), giúp cả 2 khu vực Màn hình Video Preview bên trái và Khung Trích xuất Phụ đề OCR bên phải hiển thị rộng rãi, cao ráo và trực quan tối đa.
+      - **Sân Khấu Stage Cố Định (Fixed Preview Stage):** Sân khấu `.video-container` giữ kích thước cố định ổn định (chiều cao 560px - 660px, nền rạp phim tối `#070b14`), không làm co giật hay vỡ layout các thẻ xung quanh.
+      - **Khung Neo Biến Đổi Tương Tác Chuẩn CapCut Desktop (CapCut Interactive Transform Engine):**
+        - *Bộ 8 Mốc Neo Tương Tác (8 Anchor Handles):* Gồm 4 góc neo tròn trắng `⚪` (Proportional Zoom) và 4 mốc cạnh trung tâm `◽` (Edge Zoom / Stretch) luôn hiển thị tràn ra ngoài sân khấu stage (`overflow: visible`), không bao giờ bị cắt mất dù phóng to đến 500%.
+        - *Kéo Thân Dời Vị Trí Tràn Viền (Free Pan Overflow):* Cho phép click kéo trực tiếp thân video di chuyển tự do khắp mặt phẳng X, Y mà không bị chặn lại ở mép canvas, hỗ trợ dời video tràn ra ngoài màn hình đúng chuẩn CapCut.
+        - *Cuộn Chuột Phóng To / Thu Nhỏ (Mouse Wheel Zoom):* Lăn con lăn chuột trực tiếp trên màn hình preview để phóng to / thu nhỏ video mượt mà, nhanh chóng từ 0.15x đến 5.0x.
+        - *Nút Neo Xoay Đáy (`[🔄]` Rotation Handle):* Đặt chính giữa mép dưới video, hỗ trợ xoay 360° tự do kèm nam châm thông minh tự động hút (snapping) chuẩn xác tại các góc `0°`, `90°`, `180°`, `270°`.
+        - *Nút Bấm & Phím Tắt Khôi Phục:* Nút `🎯 100%` trên Toolbar, nhấp đúp chuột (Double click) hoặc phím `R` để lập tức khôi phục video về vị trí chuẩn tâm (Fit 100%).
+        - *Live HUD Badge & Đường Gióng Tâm:* Hiển thị thông số tỷ lệ thời gian thực (`🔍 125% • (X: 10px, Y: -20px) • 🔄 0°`) và vạch đỏ gióng tâm khi căn chỉnh.
+        - *Nút "Chọn Video" Tiện Lợi:* Bổ sung nút bấm `Chọn Video` trực tiếp trên thanh Header thẻ Xem trước phim Review Phim và nút nổi bật bên trong màn hình chờ Placeholder giúp thao tác chọn file tức thì.
+        - *Lược Bỏ Thanh Trượt Zoom Cũ:* Loại bỏ hoàn toàn khối thanh trượt "Thu phóng màn hình (Zoom)" rườm rà ở cả thẻ Biên Tập Phim và Review Phim, tập trung trải nghiệm thu phóng trực tiếp trên màn hình preview chuẩn CapCut (Khung 8 mốc neo, Cuộn chuột và nút 🎯 100% Fit).
+        - *Áp dụng thống nhất:* Hoạt động đồng bộ 100% trên cả 2 trình phát **Biên Tập Phim** và **Review Phim**.
+   5. **Động Cơ AI Tách Âm Thanh Chuẩn Ultimate Vocal Remover UVR5 (MDX-NET Inst HQ 4 / HQ 5 / Voc FT):**
+      - Tối giản hóa và chuyển đổi 100% sang hệ sinh thái MDX-NET (loại bỏ hoàn toàn các mô hình cũ như Demucs / DSP):
+        - `UVR-MDX-NET-Inst_HQ_4.onnx`: Lọc sạch 99.5% giọng nói/lời thoại cũ, bảo toàn 100% âm sắc nhạc nền BGM và tiếng động hiện trường SFX (cháy nổ, bước chân, tiếng mưa...).
+        - `UVR-MDX-NET-Inst_HQ_5.onnx`: Tối ưu hóa triệt tiêu tiếng vang (Reverb & Echo).
+        - `UVR-MDX-NET-Voc_FT.onnx`: Trích xuất giọng thoại Vocal trong trẻo.
+      - **Bộ 4 Tính Năng Điều Khiển Tách Âm Chuyên Nghiệp:**
+        - 🛑 *Dừng khẩn cấp (Emergency Stop):* Chuyển tác vụ sang luồng chạy ngầm (`threading.Thread` phi đồng bộ), giúp Flask luôn sẵn sàng nhận lệnh hủy tức thì (<1ms), ngắt vòng lặp tính toán sau từng chunk và giải phóng RAM/VRAM ngay lập tức.
+        - 🚀 *Tự động kích hoạt GPU NVIDIA:* Tự động phát hiện và nạp `CUDAExecutionProvider` / `DmlExecutionProvider` (DirectML GPU) khi máy có card đồ họa NVIDIA.
+        - 📊 *Hiển thị % hoàn thành thời gian thực:* Thanh Progress Bar phát sáng với % số thực, hiển thị số đoạn `x/y chunks` và thời gian đếm ngược còn lại.
+        - 📋 *System Log Console:* Hộp console thời gian thực chuẩn Dark Mode ghi nhận chi tiết từng bước xử lý (mô hình, độ dài audio, tốc độ `chunk/s`, đường dẫn output...).
+      - Thuật toán Chunking & Overlap-Add Crossfade với cửa sổ Hanning mượt mà, không giật cục.
+      - Đồng bộ hoàn toàn giữa thư mục gốc và thư mục bản vá `patches/active/`.
 
 ---
 

@@ -1,0 +1,53 @@
+[
+  {
+    "id": "rvc_ngochuyen_reviewphim",
+    "name": "Ngọc Huyền Review Phim (RVC)",
+    "provider": "rvc",
+    "provider_name": "RVC Clone",
+    "lang": "Vietnamese",
+    "region": "Hà Nội / Toàn quốc",
+    "gender": "Female",
+    "age": "young",
+    "style": "review",
+    "tag": "RVC Model • RTX 5060 GPU • Chuẩn giọng review",
+    "avatar": "🎙️",
+    "base_voice": "edge_vi-VN-HoaiMyNeural",
+    "model_path": "D:\\Tool\\RVC\\RVC20260718Nvidia50x0\\assets\\weights\\ngochuyen_reviewphim.pth",
+    "index_path": "D:\\Tool\\RVC\\RVC20260718Nvidia50x0\\logs\\ngochuyen_reviewphim\\added_IVF525_Flat_nprobe_1_ngochuyen_reviewphim_v2.index",
+    "pitch": 0,
+    "f0_method": "rmvpe",
+    "index_rate": 0.75
+  },
+  {
+    "id": "local_clone_1787674354722",
+    "name": "Cô gái hoạt ngôn (Local Voice)",
+    "provider": "local_voice",
+    "provider_name": "Local Voice",
+    "lang": "Vietnamese",
+    "region": "Hà Nội",
+    "gender": "Female",
+    "age": "young",
+    "style": "story",
+    "tag": "Local Voice • Hà Nội • Female",
+    "avatar": "👩",
+    "reference_audio": "voices/local_clones/local_clone_1787674354722.wav",
+    "preview_url": "/samples/local_clone_1787674354722.wav",
+    "created_at": "2026-08-25 23:12:39"
+  },
+  {
+    "id": "local_clone_1787716316019",
+    "name": "Giọng Test Tự Động Clone (Local Voice)",
+    "provider": "local_voice",
+    "provider_name": "Local Voice",
+    "lang": "Vietnamese",
+    "region": "Miền Bắc",
+    "gender": "Female",
+    "age": "young",
+    "style": "review",
+    "tag": "Local Voice • Miền Bắc • Female",
+    "avatar": "👩",
+    "reference_audio": "voices/local_clones/local_clone_1787716316019.wav",
+    "preview_url": "/samples/local_clone_1787716316019.wav",
+    "created_at": "2026-08-26 10:52:05"
+  }
+]

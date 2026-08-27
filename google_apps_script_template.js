@@ -30,8 +30,13 @@
  * ==============================================================================
  */
 
-// 🔑 Khóa bí mật đồng bộ (Phải khớp với api_secret_token trong license_config.json)
-const API_SECRET_TOKEN = "AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY";
+// Secret phải được cấu hình trong Apps Script > Project Settings > Script Properties.
+// Không đặt credential trong source hoặc file phát hành.
+function getRequiredSecret(name) {
+  const value = PropertiesService.getScriptProperties().getProperty(name);
+  if (!value) throw new Error(`Missing required Script Property: ${name}`);
+  return value;
+}
 
 // Bảng giá gói cước tương ứng số ngày cộng thêm
 const PACKAGE_PRICES = {
@@ -142,7 +147,8 @@ function getUpdateInfo(currentVer = '1.0.0') {
     const driveFileId = String(bestRow[1] || '').trim();
     const changelog = String(bestRow[2] || '').trim();
     const isMandatory = Boolean(bestRow[4] === true || String(bestRow[4]).toUpperCase() === 'TRUE' || bestRow[3] === true || String(bestRow[3]).toUpperCase() === 'TRUE');
-    const hasUpdate = isVersionNewer(latestVer, currentVer) && Boolean(driveFileId);
+    const sha256 = String(bestRow[5] || '').trim().toLowerCase();
+    const hasUpdate = isVersionNewer(latestVer, currentVer) && Boolean(driveFileId) && /^[0-9a-f]{64}$/.test(sha256);
 
     return {
       has_update: hasUpdate,
@@ -150,6 +156,7 @@ function getUpdateInfo(currentVer = '1.0.0') {
       latest_version: latestVer,
       google_drive_file_id: driveFileId,
       download_url: driveFileId ? `https://drive.google.com/uc?export=download&id=${driveFileId}` : '',
+      sha256: sha256,
       changelog: changelog,
       is_mandatory: isMandatory
     };
@@ -168,6 +175,7 @@ function doGet(e) {
     const hwid = (params.hwid || '').trim().toUpperCase();
     const token = params.token || '';
 
+    const API_SECRET_TOKEN = getRequiredSecret('API_SECRET_TOKEN');
     // Xác thực token bí mật
     if (token !== API_SECRET_TOKEN) {
       return jsonResponse({ valid: false, error: 'Unauthorized: Invalid Security Token' });
@@ -219,53 +227,6 @@ function doGet(e) {
           const rawSignStr = `${hwid}|${tier}|${status}|${expireStr}|${expireEpoch}|${nonce}|${serverTime}`;
           const sig = computeHmacSha256(rawSignStr, API_SECRET_TOKEN);
 
-          // ⭐ CẤP API KEYS TỰ ĐỘNG CHO NGƯỜI DÙNG
-          let vipApiKeys = {};
-          if (isValid) {
-            // 1. Đọc keys riêng cấu hình theo dòng HWID ở Cột G (Cột 7) hoặc Cột J (Cột 10)
-            const colGVal = String(data[i][6] || '').trim();
-            const colJVal = String(data[i][9] || '').trim();
-            const customKeyVal = colGVal || colJVal;
-
-            if (customKeyVal) {
-              if (customKeyVal.startsWith('{') && customKeyVal.endsWith('}')) {
-                try { vipApiKeys = JSON.parse(customKeyVal); } catch (e) {}
-              } else if (customKeyVal.startsWith('sk-') || customKeyVal.length > 15) {
-                vipApiKeys.openaiKey = customKeyVal;
-              }
-            }
-
-            // Đọc thêm Cột OpenSpeaker (Cột M / Cột 13) nếu có
-            const colMVal = String(data[i][12] || '').trim();
-            if (colMVal && !vipApiKeys.openSpeakerApiKey) {
-              vipApiKeys.openSpeakerApiKey = colMVal;
-            }
-
-            // 2. Đọc cấu hình mặc định trong sheet 'Config' (hoặc 'Cấu hình') nếu còn thiếu
-            try {
-              const cfgSheet = ss.getSheetByName('Config') || ss.getSheetByName('Cấu hình') || ss.getSheetByName('config');
-              if (cfgSheet) {
-                const cfgRows = cfgSheet.getDataRange().getValues();
-                for (let r = 0; r < cfgRows.length; r++) {
-                  const k = String(cfgRows[r][0] || '').trim().toUpperCase();
-                  const v = String(cfgRows[r][1] || '').trim();
-                  if (!v) continue;
-                  if (k === 'VIP_OPENAI_KEY' || k === 'OPENAI_KEY' || k === 'OPENAI_API_KEY') {
-                    if (!vipApiKeys.openaiKey && !vipApiKeys.openai_key) vipApiKeys.openaiKey = v;
-                  } else if (k === 'VIP_GEMINI_KEY' || k === 'GEMINI_KEY' || k === 'GEMINI_API_KEY') {
-                    if (!vipApiKeys.geminiKey && !vipApiKeys.gemini_key) vipApiKeys.geminiKey = v;
-                  } else if (k === 'VIP_OPENSPEAKER_KEY' || k === 'OPENSPEAKER_KEY' || k === 'OPENSPEAKER_API_KEY') {
-                    if (!vipApiKeys.openSpeakerApiKey && !vipApiKeys.api_key) vipApiKeys.openSpeakerApiKey = v;
-                  } else if (k === 'VIP_DEEPSEEK_KEY' || k === 'DEEPSEEK_KEY') {
-                    if (!vipApiKeys.deepseekKey) vipApiKeys.deepseekKey = v;
-                  }
-                }
-              }
-            } catch (cfgErr) {}
-          }
-
-          const hasKeys = Object.keys(vipApiKeys).length > 0;
-
           return jsonResponse({
             valid: isValid,
             hwid: hwid,
@@ -278,7 +239,6 @@ function doGet(e) {
             nonce: nonce,
             server_time: serverTime,
             sig: sig,
-            api_keys: (isValid && hasKeys) ? vipApiKeys : null,
             update: updateInfo
           });
         }
@@ -324,8 +284,14 @@ function doPost(e) {
     const sheet = getLicenseSheet();
     const action = body.action;
 
+    const API_SECRET_TOKEN = getRequiredSecret('API_SECRET_TOKEN');
+
     // A. Xử lý Webhook tự động từ SePay khi có chuyển khoản
     if (body.gateway || body.transferAmount || body.content) {
+      const webhookSecret = String((e.parameter || {}).webhook_secret || body.webhook_secret || '');
+      if (webhookSecret !== getRequiredSecret('SEPAY_WEBHOOK_SECRET')) {
+        return jsonResponse({ success: false, error: 'Unauthorized webhook' });
+      }
       return handleSePayWebhook(body, sheet);
     }
 
@@ -429,6 +395,11 @@ function doPost(e) {
 
       // 2. Tạo file zip trên Google Drive từ base64
       const decodedBytes = Utilities.base64Decode(fileBase64);
+      const sha256 = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, decodedBytes)
+        .map(function(byte) {
+          const hex = (byte < 0 ? byte + 256 : byte).toString(16);
+          return hex.length === 1 ? '0' + hex : hex;
+        }).join('');
       const blob = Utilities.newBlob(decodedBytes, 'application/zip', fileName);
       const driveFile = folder.createFile(blob);
       
@@ -441,7 +412,7 @@ function doPost(e) {
       if (verSheet) {
         // Đảm bảo có dòng header
         if (verSheet.getLastRow() === 0) {
-          verSheet.appendRow(['Latest_Version', 'Google_Drive_File_ID', 'Changelog', 'Is_Mandatory', 'Updated_At']);
+          verSheet.appendRow(['Latest_Version', 'Google_Drive_File_ID', 'Changelog', 'Is_Mandatory', 'Updated_At', 'SHA256']);
         }
         // Cập nhật dòng 2 (dòng phiên bản phát hành mới nhất)
         verSheet.getRange(2, 1).setValue(version);
@@ -449,6 +420,7 @@ function doPost(e) {
         verSheet.getRange(2, 3).setValue(changelog);
         verSheet.getRange(2, 4).setValue(isMandatory ? 'TRUE' : 'FALSE');
         verSheet.getRange(2, 5).setValue(Utilities.formatDate(new Date(), "GMT+7", "dd/MM/yyyy HH:mm:ss"));
+        verSheet.getRange(2, 6).setValue(sha256);
       }
 
       return jsonResponse({
@@ -456,6 +428,7 @@ function doPost(e) {
         message: `Đã tự động đẩy bản vá v${version} lên Google Drive & cập nhật Sheet thành công 100%!`,
         version: version,
         google_drive_file_id: fileId,
+        sha256: sha256,
         download_url: `https://drive.google.com/uc?export=download&id=${fileId}`
       });
     }
@@ -481,25 +454,30 @@ function handleSePayWebhook(payload, sheet) {
   }
 
   const shortHwid = match[1].trim().toUpperCase();
-  let requestedTier = match[2] ? match[2].trim().toLowerCase() : 'vip';
-  if (!requestedTier) requestedTier = 'vip';
-
-  // Xác định gói và số ngày theo số tiền
-  let daysToAdd = 30;
-  let finalTier = requestedTier;
-
-  if (transferAmount >= 3990000) {
-    finalTier = 'yearly';
-    daysToAdd = 365;
-  } else if (transferAmount >= 500000) {
-    finalTier = 'vip';
-    daysToAdd = 30;
-  } else if (transferAmount >= 300000) {
-    finalTier = 'pro';
-    daysToAdd = 30;
+  const requestedTier = match[2] ? match[2].trim().toLowerCase() : '';
+  if (!['pro', 'vip', 'yearly'].includes(requestedTier)) {
+    return jsonResponse({ success: false, message: 'Mã gói thanh toán không hợp lệ' });
   }
 
+  // Xác định gói và số ngày theo số tiền
+  const tierRules = {
+    pro: { amount: 300000, days: 30 },
+    vip: { amount: 500000, days: 30 },
+    yearly: { amount: 3990000, days: 365 }
+  };
+  const rule = tierRules[requestedTier];
+  if (transferAmount < rule.amount) {
+    return jsonResponse({ success: false, message: 'Số tiền không đủ cho gói đã chọn' });
+  }
+  const finalTier = requestedTier;
+  const daysToAdd = rule.days;
+
   const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][7] || '') === transactionId) {
+      return jsonResponse({ success: false, message: 'Giao dịch đã được xử lý trước đó' });
+    }
+  }
   let rowIndex = -1;
 
   for (let i = 1; i < data.length; i++) {

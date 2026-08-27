@@ -1,9 +1,69 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
-import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, urllib.parse
+import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, urllib.parse, uuid
 from routes.state import *
+from routes.security import atomic_write_json, is_path_allowed, safe_join
+from werkzeug.utils import secure_filename
 import asr_manager
 
 tts_bp = Blueprint('tts', __name__)
+
+VOICE_CACHE_FILE = os.path.join(USER_DATA_DIR, 'openspeaker_voices.json')
+TTS_SAMPLE_DIR = os.path.join(USER_DATA_DIR, 'samples')
+_AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.webm', '.ogg', '.flac'}
+MAX_VOICE_UPLOAD_BYTES = 50 * 1024 * 1024
+
+
+def _require_media_access(feature=None):
+    import license_manager
+    if feature:
+        allowed, message, _ = license_manager.check_permission(feature)
+    else:
+        status = license_manager.get_current_license_status()
+        features = status.get('features', {})
+        allowed = bool(status.get('is_valid') and (
+            features.get('can_access_editor') or features.get('can_access_review')
+        ))
+        message = 'Gói bản quyền hiện tại không cho phép sử dụng tính năng xử lý giọng nói.'
+    if not allowed:
+        return jsonify({'success': False, 'error': message}), 403
+    return None
+
+
+def _safe_speed(value):
+    speed = float(value)
+    if not 0.5 <= speed <= 2.0:
+        raise ValueError('Tốc độ giọng đọc phải nằm trong khoảng 0.5 đến 2.0.')
+    return speed
+
+
+def _safe_output_dir(value):
+    output_dir = str(value or os.path.join(ROOT_DIR, 'output')).strip()
+    if not os.path.isabs(output_dir):
+        output_dir = os.path.abspath(os.path.join(ROOT_DIR, output_dir))
+    if not is_path_allowed(output_dir):
+        raise ValueError('Thư mục đầu ra chưa được người dùng cho phép.')
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
+
+
+def _save_limited_upload(file_storage, destination, limit=MAX_VOICE_UPLOAD_BYTES):
+    total = 0
+    try:
+        with open(destination, 'xb') as handle:
+            while True:
+                chunk = file_storage.stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError(f'Tệp tải lên vượt quá {limit // (1024 * 1024)} MB.')
+                handle.write(chunk)
+    except Exception:
+        try:
+            os.remove(destination)
+        except OSError:
+            pass
+        raise
 
 @tts_bp.route('/api/voices', methods=['GET'])
 @tts_bp.route('/api/get_voices', methods=['GET'])
@@ -46,7 +106,9 @@ def get_voices():
             seen_ids.add(v['id'])
     
     # 3. Load cached OpenSpeaker voices (500+ voices)
-    openspeaker_path = os.path.join(ROOT_DIR, 'web', 'openspeaker_voices.json')
+    openspeaker_path = VOICE_CACHE_FILE
+    if not os.path.exists(openspeaker_path):
+        openspeaker_path = os.path.join(ROOT_DIR, 'web', 'openspeaker_voices.json')
     if os.path.exists(openspeaker_path):
         try:
             with open(openspeaker_path, 'r', encoding='utf-8') as f:
@@ -77,6 +139,9 @@ def get_open_speaker_key():
 
 @tts_bp.route('/api/voices/refresh', methods=['POST'])
 def refresh_voices():
+    permission_error = _require_media_access('online_voices_enabled')
+    if permission_error:
+        return permission_error
     import requests
     api_key = get_open_speaker_key()
     if not api_key:
@@ -110,6 +175,7 @@ def refresh_voices():
                     elif str(gender).lower() in ['male', 'nam', 'm']: gender = 'Male'
                     else: gender = 'Female'
                     
+                    lang = item.get('language') or item.get('lang') or item.get('locale') or item.get('labels', {}).get('language', '')
                     lang_lower = str(lang).lower()
                     if 'vi' in lang_lower or 'viet' in lang_lower:
                         lang = 'Vietnamese'
@@ -163,12 +229,10 @@ def refresh_voices():
                 print(f"Error fetching {p} voices page {page}: {e}")
                 break
 
-    openspeaker_path = os.path.join(ROOT_DIR, 'web', 'openspeaker_voices.json')
-    os.makedirs(os.path.dirname(openspeaker_path), exist_ok=True)
-    with open(openspeaker_path, 'w', encoding='utf-8') as out:
-        json.dump(all_voices_list, out, indent=2, ensure_ascii=False)
-        
-    return jsonify({"success": True, "count": len(all_voices_list)})
+    if all_voices_list:
+        atomic_write_json(VOICE_CACHE_FILE, all_voices_list)
+        return jsonify({"success": True, "count": len(all_voices_list)})
+    return jsonify({"success": False, "error": "Không thể tải danh sách giọng từ máy chủ (danh sách rỗng)."}), 502
 
 @tts_bp.route('/api/custom-voices', methods=['GET'])
 def api_get_custom_voices():
@@ -178,6 +242,9 @@ def api_get_custom_voices():
 
 @tts_bp.route('/api/custom-voices', methods=['POST'])
 def api_add_custom_voice():
+    permission_error = _require_media_access('can_clone_voice')
+    if permission_error:
+        return permission_error
     import custom_voices
     data = request.json or {}
     name = data.get('name', '').strip()
@@ -186,8 +253,12 @@ def api_add_custom_voice():
     if not name or not model_path:
         return jsonify({"success": False, "error": "Vui lòng nhập tên giọng và chọn file Model .pth"}), 400
         
-    if not os.path.exists(model_path):
+    if not is_path_allowed(model_path, must_exist=True, extensions={'.pth'}):
         return jsonify({"success": False, "error": f"Không tìm thấy file model: {model_path}"}), 400
+
+    index_path = data.get("index_path", "").strip()
+    if index_path and not is_path_allowed(index_path, must_exist=True, extensions={'.index'}):
+        return jsonify({"success": False, "error": "File index không hợp lệ hoặc chưa được cho phép"}), 400
 
     new_voice = {
         "id": data.get("id") or f"rvc_{int(time.time())}",
@@ -203,7 +274,7 @@ def api_add_custom_voice():
         "avatar": data.get("avatar") or ("👩" if data.get("gender") == "Female" else "👨"),
         "base_voice": data.get("base_voice") or ("edge_vi-VN-HoaiMyNeural" if data.get("gender") == "Female" else "edge_vi-VN-NamMinhNeural"),
         "model_path": model_path,
-        "index_path": data.get("index_path", "").strip() or None,
+        "index_path": index_path or None,
         "pitch": int(data.get("pitch", 0)),
         "f0_method": data.get("f0_method", "rmvpe"),
         "index_rate": float(data.get("index_rate", 0.45)),
@@ -215,6 +286,9 @@ def api_add_custom_voice():
 
 @tts_bp.route('/api/custom-voices/<voice_id>', methods=['DELETE'])
 def api_delete_custom_voice(voice_id):
+    permission_error = _require_media_access('can_clone_voice')
+    if permission_error:
+        return permission_error
     import custom_voices
     custom_voices.delete_voice(voice_id)
     return jsonify({"success": True})
@@ -230,6 +304,9 @@ def get_pronunciations():
 
 @tts_bp.route('/api/pronunciations', methods=['POST'])
 def add_pronunciation():
+    permission_error = _require_media_access()
+    if permission_error:
+        return permission_error
     import vietnamese_text_normalizer
     data = request.json or {}
     word = data.get('word', '').strip()
@@ -244,6 +321,9 @@ def add_pronunciation():
 
 @tts_bp.route('/api/pronunciations/<word>', methods=['DELETE'])
 def delete_pronunciation(word):
+    permission_error = _require_media_access()
+    if permission_error:
+        return permission_error
     import vietnamese_text_normalizer
     d = vietnamese_text_normalizer.load_custom_pronunciations()
     if word in d:
@@ -254,11 +334,14 @@ def delete_pronunciation(word):
 @tts_bp.route('/api/tts/preview', methods=['POST'])
 def generate_tts_preview():
     try:
+        permission_error = _require_media_access()
+        if permission_error:
+            return permission_error
         data = request.json or {}
-        voice_id = data.get('voice') or data.get('voice_id') or 'ngoc_huyen'
-        text = data.get('text', 'Xin chào! Đây là bản nghe thử giọng đọc AI thuyết minh chuẩn phòng thu.').strip()
+        voice_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice') or data.get('voice_id') or 'ngoc_huyen'))[:100]
+        text = str(data.get('text', 'Xin chào! Đây là bản nghe thử giọng đọc AI thuyết minh chuẩn phòng thu.')).strip()[:1000]
         
-        samples_dir = os.path.join(ROOT_DIR, 'web', 'samples')
+        samples_dir = TTS_SAMPLE_DIR
         os.makedirs(samples_dir, exist_ok=True)
         
         sample_filename = f"{voice_id}.wav"
@@ -268,7 +351,7 @@ def generate_tts_preview():
         if os.path.exists(sample_path) and os.path.getsize(sample_path) > 1000:
             return jsonify({
                 'success': True,
-                'audio_url': f'/samples/{sample_filename}',
+                'audio_url': f'/api/file?path={urllib.parse.quote(sample_path)}',
                 'cached': True
             })
             
@@ -276,12 +359,12 @@ def generate_tts_preview():
         if voice_id == 'diem_trinh' and os.path.exists(os.path.join(ROOT_DIR, 'sample_hoatngon_diem_trinh.wav')):
             import shutil
             shutil.copy(os.path.join(ROOT_DIR, 'sample_hoatngon_diem_trinh.wav'), sample_path)
-            return jsonify({'success': True, 'audio_url': f'/samples/{sample_filename}', 'cached': True})
+            return jsonify({'success': True, 'audio_url': f'/api/file?path={urllib.parse.quote(sample_path)}', 'cached': True})
             
         if voice_id == 'mai_linh' and os.path.exists(os.path.join(ROOT_DIR, 'sample_hoatngon_mai_linh.wav')):
             import shutil
             shutil.copy(os.path.join(ROOT_DIR, 'sample_hoatngon_mai_linh.wav'), sample_path)
-            return jsonify({'success': True, 'audio_url': f'/samples/{sample_filename}', 'cached': True})
+            return jsonify({'success': True, 'audio_url': f'/api/file?path={urllib.parse.quote(sample_path)}', 'cached': True})
             
         # 3. Generate once and cache
         import ai_dubbing
@@ -289,7 +372,7 @@ def generate_tts_preview():
         
         return jsonify({
             'success': True,
-            'audio_url': f'/samples/{sample_filename}',
+            'audio_url': f'/api/file?path={urllib.parse.quote(sample_path)}',
             'cached': False
         })
     except Exception as e:
@@ -300,16 +383,21 @@ def generate_tts_preview():
 @tts_bp.route('/api/tts/sentence_preview', methods=['POST'])
 def generate_sentence_preview():
     try:
+        permission_error = _require_media_access()
+        if permission_error:
+            return permission_error
         data = request.json or {}
-        text = data.get('text', '').strip()
-        voice_id = data.get('voice_id') or data.get('voice') or 'local_ngoc_huyen'
-        speed = float(data.get('speed', 1.0))
+        text = str(data.get('text', '')).strip()
+        voice_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice_id') or data.get('voice') or 'local_ngoc_huyen'))[:100]
+        speed = _safe_speed(data.get('speed', 1.0))
         
         if not text:
             return jsonify({'success': False, 'error': 'Văn bản rỗng'}), 400
+        if len(text) > 5000:
+            return jsonify({'success': False, 'error': 'Văn bản nghe thử vượt quá 5.000 ký tự'}), 413
             
         import hashlib
-        cache_dir = os.path.join(ROOT_DIR, 'web', 'samples', 'tts_cache')
+        cache_dir = os.path.join(TTS_SAMPLE_DIR, 'tts_cache')
         os.makedirs(cache_dir, exist_ok=True)
         
         # MD5 hash of voice, speed, text
@@ -320,7 +408,7 @@ def generate_sentence_preview():
         if os.path.exists(cache_path) and os.path.getsize(cache_path) > 500:
             return jsonify({
                 'success': True,
-                'audio_url': f'/samples/tts_cache/{cache_filename}',
+                'audio_url': f'/api/file?path={urllib.parse.quote(cache_path)}',
                 'cached': True
             })
             
@@ -329,7 +417,7 @@ def generate_sentence_preview():
         
         return jsonify({
             'success': True,
-            'audio_url': f'/samples/tts_cache/{cache_filename}',
+            'audio_url': f'/api/file?path={urllib.parse.quote(cache_path)}',
             'cached': False
         })
     except Exception as e:
@@ -388,22 +476,24 @@ def generate_tts_kokoro():
         data = request.json or {}
         text = data.get('text', '').strip()
         voice_id = data.get('voice') or data.get('voice_id') or 'local_ngoc_huyen'
-        speed = float(data.get('speed', 1.0))
-        output_dir = data.get('output_dir') or 'output'
+        speed = _safe_speed(data.get('speed', 1.0))
+        output_dir = _safe_output_dir(data.get('output_dir'))
         filename = data.get('filename')
         
         if not text:
             return jsonify({'success': False, 'error': 'Văn bản kịch bản trống'}), 400
-            
-        os.makedirs(output_dir, exist_ok=True)
+        if len(text) > 250000:
+            return jsonify({'success': False, 'error': 'Kịch bản vượt quá 250.000 ký tự'}), 413
+
         timestamp = int(time.time()*1000)
         if not filename:
             clean_vid = re.sub(r'[^a-zA-Z0-9_]', '_', voice_id)
             filename = f"tts_{clean_vid}_{timestamp}.wav"
+        filename = secure_filename(str(filename))
         if not filename.endswith('.wav'):
             filename += '.wav'
             
-        audio_path = os.path.join(output_dir, filename)
+        audio_path = safe_join(output_dir, filename, extensions={'.wav'})
         srt_filename = filename.rsplit('.', 1)[0] + '.srt'
         srt_path = os.path.join(output_dir, srt_filename)
         
@@ -487,15 +577,11 @@ def generate_tts_kokoro():
 
 @tts_bp.route('/api/tts/openspeaker/voices', methods=['GET'])
 def get_openspeaker_voices():
+    permission_error = _require_media_access('online_voices_enabled')
+    if permission_error:
+        return permission_error
     import requests
-    api_key = request.args.get('api_key')
-    if not api_key:
-        api_keys_file = os.path.join(ROOT_DIR, 'api_keys.txt')
-        if os.path.exists(api_keys_file):
-            with open(api_keys_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.startswith('openSpeakerApiKey='):
-                        api_key = line.split('=', 1)[1].strip()
+    api_key = get_open_speaker_key()
     if not api_key:
         return jsonify({'error': 'Missing API Key'}), 400
     
@@ -505,7 +591,8 @@ def get_openspeaker_voices():
         url += f"&provider={provider}"
         
     try:
-        res = requests.get(url, headers={"xi-api-key": api_key})
+        res = requests.get(url, headers={"xi-api-key": api_key}, timeout=20)
+        res.raise_for_status()
         return jsonify(res.json())
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -521,16 +608,18 @@ def generate_tts_openspeaker():
         data = request.json or {}
         text = data.get('text', '').strip()
         voice_id = data.get('voice') or data.get('voice_id') or 'ngoc_huyen'
-        speed = float(data.get('speed', 1.0))
-        output_dir = data.get('output_dir') or 'output'
+        speed = _safe_speed(data.get('speed', 1.0))
+        output_dir = _safe_output_dir(data.get('output_dir'))
         filename = data.get('filename')
         api_key = data.get('api_key')
         
         if not text:
             return jsonify({'success': False, 'error': 'Văn bản kịch bản trống'}), 400
+        if len(text) > 250000:
+            return jsonify({'success': False, 'error': 'Kịch bản vượt quá 250.000 ký tự'}), 413
             
         if not api_key:
-            api_keys_file = os.path.join(ROOT_DIR, 'api_keys.txt')
+            api_keys_file = API_KEYS_FILE
             if os.path.exists(api_keys_file):
                 with open(api_keys_file, 'r', encoding='utf-8') as f:
                     for line in f:
@@ -540,14 +629,14 @@ def generate_tts_openspeaker():
         if not api_key:
             return jsonify({'success': False, 'error': 'Vui lòng cung cấp OpenSpeaker API Key'}), 400
             
-        os.makedirs(output_dir, exist_ok=True)
         timestamp = int(time.time())
         if not filename:
             filename = f"tts_open_{voice_id}_{timestamp}.mp3"
+        filename = secure_filename(str(filename))
         if not (filename.endswith('.mp3') or filename.endswith('.wav')):
             filename += '.mp3'
             
-        audio_path = os.path.join(output_dir, filename)
+        audio_path = safe_join(output_dir, filename, extensions={'.mp3', '.wav'})
         srt_filename = filename.rsplit('.', 1)[0] + '.srt'
         srt_path = os.path.join(output_dir, srt_filename)
         
@@ -612,13 +701,24 @@ def api_clone_voice_upload():
     if not file or not file.filename:
         return jsonify({'success': False, 'error': 'Không tìm thấy tệp âm thanh trong yêu cầu'}), 400
 
+    original_name = secure_filename(file.filename)
+    extension = os.path.splitext(original_name)[1].lower()
+    if extension not in _AUDIO_EXTENSIONS:
+        return jsonify({'success': False, 'error': 'Định dạng âm thanh không được hỗ trợ'}), 415
+    if request.content_length and request.content_length > MAX_VOICE_UPLOAD_BYTES + 1024 * 1024:
+        return jsonify({'success': False, 'error': 'Tệp âm thanh vượt quá 50 MB'}), 413
+
     temp_dir = os.path.join(ROOT_DIR, "output", "temp_uploads")
     os.makedirs(temp_dir, exist_ok=True)
-    raw_path = os.path.join(temp_dir, f"raw_{int(time.time()*1000)}_{file.filename}")
-    file.save(raw_path)
+    upload_id = uuid.uuid4().hex
+    raw_path = safe_join(temp_dir, f"raw_{upload_id}{extension}", extensions=_AUDIO_EXTENSIONS)
+    try:
+        _save_limited_upload(file, raw_path)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 413
 
     import local_voice_engine
-    clean_sample_path = os.path.join(temp_dir, f"clean_{int(time.time()*1000)}.wav")
+    clean_sample_path = safe_join(temp_dir, f"clean_{upload_id}.wav", extensions={'.wav'})
     ok, res = local_voice_engine.validate_and_convert_audio_sample(raw_path, clean_sample_path)
     
     # Dọn dẹp file raw nếu khác file clean
@@ -638,7 +738,7 @@ def api_clone_voice_upload():
 
     return jsonify({
         'success': True,
-        'filename': file.filename,
+        'filename': original_name,
         'audio_path': clean_sample_path,
         'relative_path': os.path.relpath(clean_sample_path, ROOT_DIR).replace("\\", "/"),
         'duration': round(duration, 2),
@@ -661,7 +761,7 @@ def api_clone_voice_preview():
     text = data.get('text', '').strip() or 'Xin chào! Đây là bản nghe thử chất lượng nhân bản giọng nói Local Voice.'
     audio_path = data.get('audio_path', '').strip()
     voice_id = data.get('voice_id', '').strip()
-    speed = float(data.get('speed', 1.0))
+    speed = _safe_speed(data.get('speed', 1.0))
 
     if not audio_path and not voice_id:
         return jsonify({'success': False, 'error': 'Vui lòng cung cấp file âm thanh mẫu hoặc chọn giọng'}), 400
@@ -669,10 +769,10 @@ def api_clone_voice_preview():
     if audio_path:
         if not os.path.isabs(audio_path):
             audio_path = os.path.join(ROOT_DIR, audio_path)
-        if not os.path.exists(audio_path):
+        if not is_path_allowed(audio_path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
             return jsonify({'success': False, 'error': f'Không tìm thấy file âm thanh mẫu: {audio_path}'}), 400
 
-    temp_out = os.path.join(ROOT_DIR, "output", f"preview_{int(time.time()*1000)}.wav")
+    temp_out = safe_join(os.path.join(ROOT_DIR, "output"), f"preview_{uuid.uuid4().hex}.wav", extensions={'.wav'})
     try:
         import local_voice_engine
         local_voice_engine.synthesize(
@@ -721,7 +821,7 @@ def api_clone_voice_save():
     if not os.path.isabs(audio_path):
         audio_path = os.path.join(ROOT_DIR, audio_path)
 
-    if not os.path.exists(audio_path):
+    if not is_path_allowed(audio_path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
         return jsonify({'success': False, 'error': 'File âm thanh mẫu không tồn tại hoặc đã bị xóa'}), 400
 
     try:
@@ -752,6 +852,9 @@ def api_clone_voice_update():
     """
     Chỉnh sửa thông tin định danh của giọng clone trong thư viện.
     """
+    permission_error = _require_media_access('allow_save_cloned_voice')
+    if permission_error:
+        return permission_error
     data = request.json or {}
     voice_id = data.get('voice_id', '').strip()
     if not voice_id:
@@ -797,6 +900,9 @@ def api_clone_voice_delete():
     """
     Xóa một giọng clone khỏi thư viện.
     """
+    permission_error = _require_media_access('allow_save_cloned_voice')
+    if permission_error:
+        return permission_error
     data = request.json or {}
     voice_id = data.get('voice_id', '').strip()
     if not voice_id:

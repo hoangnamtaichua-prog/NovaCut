@@ -13,12 +13,28 @@ import threading
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1"
 
-# Khởi tạo cơ chế OTA Patch Overlay (ưu tiên tuyệt đối nạp file .py mới từ patches/active/ trước .pyd / frozen)
-if getattr(sys, 'frozen', False):
-    ROOT_DIR = os.path.dirname(sys.executable)
-else:
-    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_app_root_dir():
+    """Xác định chính xác tuyệt đối thư mục gốc của ứng dụng NovaCut."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    candidates = [
+        __file__ if '__file__' in globals() else None,
+        sys.argv[0] if sys.argv and sys.argv[0] else None,
+        os.getcwd()
+    ]
+    for c in candidates:
+        if not c:
+            continue
+        p = os.path.abspath(c) if os.path.isdir(c) else os.path.dirname(os.path.abspath(c))
+        while p and os.path.dirname(p) != p:
+            if os.path.exists(os.path.join(p, 'web', 'index.html')):
+                norm_p = os.path.normpath(p).lower()
+                if not norm_p.endswith(os.path.normpath('patches/active').lower()) and not norm_p.endswith(os.path.normpath('release/novacut').lower()):
+                    return os.path.abspath(p)
+            p = os.path.dirname(p)
+    return os.path.abspath(os.getcwd())
 
+ROOT_DIR = get_app_root_dir()
 os.chdir(ROOT_DIR)
 
 PATCH_DIR = os.path.join(ROOT_DIR, 'patches', 'active')
@@ -63,7 +79,8 @@ if sys.stderr is not None:
 import asr_manager
 from flask import Flask, send_from_directory, Response, jsonify, request, send_file
 
-app = Flask(__name__, static_folder='web')
+web_static_dir = os.path.join(ROOT_DIR, 'web')
+app = Flask(__name__, static_folder=web_static_dir, static_url_path='/static')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 @app.after_request
@@ -72,10 +89,6 @@ def add_no_cache_headers(response):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
-
-# Ensure we're running from the root directory so resources are found
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(ROOT_DIR)
 
 # Tự động nạp thư mục bin/ (chứa ffmpeg.exe, ffprobe.exe) vào PATH hệ thống
 bin_dir = os.path.join(ROOT_DIR, 'bin')
@@ -167,18 +180,25 @@ def main():
 
     window_ref = None
 
+    def register_dialog_result(result):
+        path = result[0] if result else None
+        if path:
+            from routes.security import register_user_path
+            register_user_path(path)
+        return path
+
     class Api:
         def select_input_video(self):
             if window_ref:
                 file_types = ('Video files (*.mp4;*.mkv;*.avi)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_output_directory(self):
             if window_ref:
                 result = window_ref.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         
@@ -186,33 +206,33 @@ def main():
             import webview
             file_types = ('Image Files (*.png;*.jpg;*.jpeg)', 'All files (*.*)')
             result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-            return result[0] if result else None
+            return register_dialog_result(result)
 
         def select_audio_file(self):
             if window_ref:
                 file_types = ('Audio files (*.mp3;*.wav;*.m4a)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_model_file(self):
             if window_ref:
                 file_types = ('Model files (*.pth)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_rvc_index_file(self):
             if window_ref:
                 file_types = ('Index files (*.index)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_srt_file(self):
             file_types = ('SRT files (*.srt)', 'All files (*.*)')
             result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-            return result[0] if result else None
+            return register_dialog_result(result)
 
         def open_in_explorer(self, path):
             import subprocess

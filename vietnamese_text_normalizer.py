@@ -1,9 +1,14 @@
 import re
 import os
 import json
+import tempfile
+import threading
+from platformdirs import user_data_dir
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-CUSTOM_DICT_FILE = os.path.join(ROOT_DIR, "custom_pronunciations.json")
+USER_DATA_DIR = user_data_dir('NovaCut', 'NovaCut', roaming=True)
+CUSTOM_DICT_FILE = os.path.join(USER_DATA_DIR, "custom_pronunciations.json")
+_dictionary_lock = threading.RLock()
 
 # Common Vietnamese abbreviations & units only (NO English word transliteration)
 VIETNAMESE_ABBREVIATIONS = {
@@ -64,11 +69,18 @@ VIETNAMESE_ABBREVIATIONS = {
 def load_custom_pronunciations():
     if not os.path.exists(CUSTOM_DICT_FILE):
         try:
-            with open(CUSTOM_DICT_FILE, "w", encoding="utf-8") as f:
-                json.dump({}, f, ensure_ascii=False, indent=2)
+            legacy_file = os.path.join(ROOT_DIR, 'custom_pronunciations.json')
+            legacy_data = {}
+            if os.path.exists(legacy_file):
+                with open(legacy_file, 'r', encoding='utf-8') as handle:
+                    loaded = json.load(handle)
+                    if isinstance(loaded, dict):
+                        legacy_data = loaded
+            save_custom_pronunciations(legacy_data)
         except:
             pass
-        return {}
+        if not os.path.exists(CUSTOM_DICT_FILE):
+            return {}
     try:
         with open(CUSTOM_DICT_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -76,8 +88,21 @@ def load_custom_pronunciations():
         return {}
 
 def save_custom_pronunciations(custom_dict):
-    with open(CUSTOM_DICT_FILE, "w", encoding="utf-8") as f:
-        json.dump(custom_dict, f, ensure_ascii=False, indent=2)
+    os.makedirs(os.path.dirname(CUSTOM_DICT_FILE), exist_ok=True)
+    with _dictionary_lock:
+        fd, temporary = tempfile.mkstemp(prefix='.novacut_', suffix='.tmp', dir=os.path.dirname(CUSTOM_DICT_FILE))
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                json.dump(custom_dict, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, CUSTOM_DICT_FILE)
+        except Exception:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            raise
 
 def normalize_text_for_tts(text):
     """

@@ -9,12 +9,24 @@ import json
 import time
 import glob
 import re
+import shutil
 from datetime import datetime
 from flask import Blueprint, jsonify, request, send_file, Response
-
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECTS_DIR = os.path.join(ROOT_DIR, 'projects')
+from routes.state import ROOT_DIR, USER_DATA_DIR
+from routes.security import atomic_write_json, is_path_allowed, safe_join
+PROJECTS_DIR = os.path.join(USER_DATA_DIR, 'projects')
 os.makedirs(PROJECTS_DIR, exist_ok=True)
+
+# Di chuyển mềm dữ liệu từ các bản cũ: chỉ copy file chưa tồn tại, không xóa nguồn.
+_legacy_projects_dir = os.path.join(ROOT_DIR, 'projects')
+if os.path.isdir(_legacy_projects_dir) and os.path.realpath(_legacy_projects_dir) != os.path.realpath(PROJECTS_DIR):
+    for _legacy_file in glob.glob(os.path.join(_legacy_projects_dir, '*.amsproj')) + glob.glob(os.path.join(_legacy_projects_dir, '*.json')):
+        _target = os.path.join(PROJECTS_DIR, os.path.basename(_legacy_file))
+        if not os.path.exists(_target):
+            try:
+                shutil.copy2(_legacy_file, _target)
+            except OSError:
+                pass
 
 project_bp = Blueprint('project', __name__)
 
@@ -89,7 +101,9 @@ def save_project():
         
         target_filepath = data.get('filepath') or data.get('target_filepath')
         if target_filepath and os.path.isabs(target_filepath):
-            filepath = os.path.normpath(target_filepath)
+            filepath = os.path.realpath(target_filepath)
+            if not is_path_allowed(filepath, extensions={'.amsproj', '.json'}):
+                return jsonify({"success": False, "error": "Đường dẫn lưu chưa được người dùng cho phép"}), 403
             filename = os.path.basename(filepath)
             if project_name == 'Du_An_Moi':
                 project_name = os.path.splitext(filename)[0]
@@ -111,16 +125,13 @@ def save_project():
         data['format_version'] = "1.0"
         data['app_version'] = "2026.8"
 
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(filepath, data)
 
         # Tạo bản sao lưu trong projects/ để hiển thị danh sách gần đây
         internal_path = os.path.join(PROJECTS_DIR, f"{safe_name}.amsproj")
         if os.path.normpath(filepath) != os.path.normpath(internal_path):
             try:
-                with open(internal_path, 'w', encoding='utf-8') as f_copy:
-                    json.dump(data, f_copy, ensure_ascii=False, indent=2)
+                atomic_write_json(internal_path, data)
             except Exception:
                 pass
             
@@ -143,10 +154,12 @@ def load_project():
         filepath = req_data.get('filepath', '').strip()
         
         target_path = None
-        if filepath and os.path.exists(filepath):
-            target_path = filepath
+        if filepath and os.path.exists(filepath) and is_path_allowed(filepath, must_exist=True, extensions={'.amsproj', '.json'}):
+            target_path = os.path.realpath(filepath)
         elif filename:
-            cand = os.path.join(PROJECTS_DIR, filename)
+            if filename != os.path.basename(filename):
+                return jsonify({"success": False, "error": "Tên file dự án không hợp lệ"}), 400
+            cand = safe_join(PROJECTS_DIR, filename, extensions={'.amsproj', '.json'})
             if os.path.exists(cand):
                 target_path = cand
                 
@@ -164,8 +177,7 @@ def load_project():
         internal_path = os.path.join(PROJECTS_DIR, f"{safe_name}.amsproj")
         if os.path.normpath(target_path) != os.path.normpath(internal_path):
             try:
-                with open(internal_path, 'w', encoding='utf-8') as f_copy:
-                    json.dump(project_data, f_copy, ensure_ascii=False, indent=2)
+                atomic_write_json(internal_path, project_data)
             except Exception:
                 pass
 
@@ -187,7 +199,12 @@ def delete_project():
         if not filename:
             return jsonify({"success": False, "error": "Thiếu tên file cần xóa"}), 400
             
-        target_path = os.path.join(PROJECTS_DIR, filename)
+        if filename != os.path.basename(filename) or not filename.lower().endswith(('.amsproj', '.json')):
+            return jsonify({"success": False, "error": "Tên file dự án không hợp lệ"}), 400
+        project_root = os.path.realpath(PROJECTS_DIR)
+        target_path = os.path.realpath(os.path.join(project_root, filename))
+        if os.path.commonpath([project_root, target_path]) != project_root:
+            return jsonify({"success": False, "error": "Đường dẫn dự án không hợp lệ"}), 400
         if os.path.exists(target_path):
             os.remove(target_path)
             return jsonify({"success": True, "message": f"Đã xóa dự án {filename}!"})
@@ -207,8 +224,7 @@ def autosave_project():
         data['updated_at'] = now_str
         data['is_autosave'] = True
         
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(filepath, data)
             
         return jsonify({"success": True, "saved_at": now_str})
     except Exception as e:
