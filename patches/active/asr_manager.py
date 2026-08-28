@@ -6,17 +6,14 @@ import zipfile
 import subprocess
 import json
 import time
-import ssl
-
-try:
-    ssl._create_default_https_context = ssl._create_unverified_context
-except Exception:
-    pass
+import hashlib
+from platformdirs import user_data_dir
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-BIN_DIR = os.path.join(ROOT_DIR, "bin")
-MODELS_DIR = os.path.join(ROOT_DIR, "models", "asr")
-VENV_DIR = os.path.join(ROOT_DIR, ".asr_venv")
+USER_DATA_DIR = user_data_dir('NovaCut', 'NovaCut', roaming=True)
+BIN_DIR = os.path.join(USER_DATA_DIR, "bin")
+MODELS_DIR = os.path.join(USER_DATA_DIR, "models", "asr")
+VENV_DIR = os.path.join(USER_DATA_DIR, ".asr_venv")
 
 os.makedirs(BIN_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -27,6 +24,62 @@ WHISPER_MODELS = {
     "small": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
     "medium": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
 }
+
+MAX_BINARY_ZIP_BYTES = 250 * 1024 * 1024
+MAX_MODEL_BYTES = 4 * 1024 * 1024 * 1024
+
+
+def _expected_hash(name):
+    return os.environ.get(name, '').strip().lower()
+
+
+def _verify_sha256(path, expected):
+    if not expected or not re_full_sha256(expected):
+        return False
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest().lower() == expected
+
+
+def re_full_sha256(value):
+    return len(value) == 64 and all(ch in '0123456789abcdef' for ch in value)
+
+
+def _download_verified(url, destination, expected_sha256, max_bytes, timeout):
+    if not re_full_sha256(expected_sha256):
+        raise RuntimeError('Thiếu SHA256 tin cậy cho gói ASR; không tải tệp thực thi/model chưa xác minh.')
+    partial = f"{destination}.part"
+    digest = hashlib.sha256()
+    downloaded = 0
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'NovaCut-Updater/1.0'})
+        with urllib.request.urlopen(req, timeout=timeout) as response, open(partial, 'wb') as out_file:
+            length = response.getheader('content-length')
+            if length and int(length) > max_bytes:
+                raise RuntimeError('Tệp tải xuống vượt quá giới hạn an toàn.')
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    raise RuntimeError('Tệp tải xuống vượt quá giới hạn an toàn.')
+                digest.update(chunk)
+                out_file.write(chunk)
+            out_file.flush()
+            os.fsync(out_file.fileno())
+        if digest.hexdigest().lower() != expected_sha256:
+            raise RuntimeError('SHA256 của tệp ASR không khớp; đã hủy cài đặt.')
+        os.replace(partial, destination)
+    finally:
+        if os.path.exists(partial):
+            try:
+                os.remove(partial)
+            except OSError:
+                pass
+    return downloaded
 
 if os.name == 'nt':
     PYTHON_EXEC = os.path.join(VENV_DIR, "Scripts", "python.exe")
@@ -44,8 +97,11 @@ def get_whisper_cli():
         os.path.join(BIN_DIR, "whisper-cli.exe"),
         os.path.join(BIN_DIR, "main.exe"),
     ]
+    expected = _expected_hash('NOVACUT_WHISPER_CLI_SHA256')
     for c in candidates:
         if c and os.path.exists(c) and os.path.getsize(c) > 50000:
+            if os.path.commonpath([os.path.realpath(BIN_DIR), os.path.realpath(c)]) == os.path.realpath(BIN_DIR) and not _verify_sha256(c, expected):
+                continue
             return os.path.normpath(c)
     cand = shutil.which("whisper-cli.exe") or shutil.which("whisper-cli") or shutil.which("main.exe")
     if cand:
@@ -65,8 +121,11 @@ def get_whisper_model_path(model_key="base"):
         os.path.join(getattr(sys, '_MEIPASS', ''), "models", "asr", f"ggml-{normalized_key}.bin") if hasattr(sys, '_MEIPASS') else None,
         os.path.join(MODELS_DIR, f"ggml-{normalized_key}.bin"),
     ]
+    expected = _expected_hash(f'NOVACUT_WHISPER_{normalized_key.upper()}_SHA256')
     for target_file in candidates:
         if target_file and os.path.exists(target_file) and os.path.getsize(target_file) > 10000000:
+            if os.path.commonpath([os.path.realpath(MODELS_DIR), os.path.realpath(target_file)]) == os.path.realpath(MODELS_DIR) and not _verify_sha256(target_file, expected):
+                continue
             return os.path.normpath(target_file)
     return None
 
@@ -130,6 +189,9 @@ def install_model_stream(model_name):
     Không yêu cầu Python, không tạo venv, chạy siêu tốc trên mọi máy tính.
     """
     yield format_sse("🚀 Bắt đầu thiết lập Native Standalone ASR Engine...")
+    if os.name != 'nt':
+        yield format_sse("🛑 Gói Whisper binary hiện tại chỉ hỗ trợ Windows; hãy cài whisper-cli từ package manager của hệ điều hành.")
+        return
     
     # 1. Tải Whisper CLI Binary nếu chưa có
     whisper_cli = get_whisper_cli()
@@ -137,40 +199,31 @@ def install_model_stream(model_name):
         yield format_sse("📥 Đang tải Lõi Nhận Dạng Whisper Native C++ (Siêu nhẹ ~15MB)...")
         zip_path = os.path.join(BIN_DIR, "whisper_bin.zip")
         try:
-            req = urllib.request.Request(WHISPER_BIN_URL, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=30) as response, open(zip_path, 'wb') as out_file:
-                total_length = response.getheader('content-length')
-                if total_length:
-                    total_length = int(total_length)
-                    downloaded = 0
-                    last_pct = 0
-                    while True:
-                        buffer = response.read(8192 * 4)
-                        if not buffer:
-                            break
-                        downloaded += len(buffer)
-                        out_file.write(buffer)
-                        pct = int((downloaded / total_length) * 100)
-                        if pct - last_pct >= 10:
-                            last_pct = pct
-                            yield format_sse(f"📦 Đang tải Whisper Binary: {pct}% ({downloaded // (1024*1024)}MB / {total_length // (1024*1024)}MB)")
-                else:
-                    out_file.write(response.read())
+            zip_hash = _expected_hash('NOVACUT_WHISPER_BIN_ZIP_SHA256')
+            _download_verified(WHISPER_BIN_URL, zip_path, zip_hash, MAX_BINARY_ZIP_BYTES, 60)
 
             yield format_sse("📦 Đang giải nén Whisper Native Binary vào thư mục bin/...")
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 for fileinfo in zip_ref.infolist():
                     fname = os.path.basename(fileinfo.filename)
-                    if fname.endswith(('.exe', '.dll')):
+                    if fname.endswith(('.exe', '.dll')) and fileinfo.file_size <= MAX_BINARY_ZIP_BYTES:
                         # Chuẩn hóa tên main.exe -> whisper-cli.exe nếu cần
                         target_name = "whisper-cli.exe" if fname == "main.exe" else fname
                         target_path = os.path.join(BIN_DIR, target_name)
                         with zip_ref.open(fileinfo) as source, open(target_path, 'wb') as target:
                             shutil.copyfileobj(source, target)
 
+            installed_cli = os.path.join(BIN_DIR, 'whisper-cli.exe')
+            if not _verify_sha256(installed_cli, _expected_hash('NOVACUT_WHISPER_CLI_SHA256')):
+                try:
+                    os.remove(installed_cli)
+                except OSError:
+                    pass
+                raise RuntimeError('SHA256 của whisper-cli.exe sau giải nén không khớp.')
+
             yield format_sse("✅ Đã cài đặt xong Lõi Whisper Native C++!")
         except Exception as e:
-            yield format_sse(f"⚠️ Lỗi tải binary từ GitHub ({e}), đang thử tải từ Cloud Mirror...")
+            yield format_sse(f"🛑 Không thể cài Whisper binary an toàn: {e}")
         finally:
             if os.path.exists(zip_path):
                 try: os.remove(zip_path)
@@ -190,25 +243,8 @@ def install_model_stream(model_name):
         yield format_sse(f"📥 Đang tải Model AI Whisper '{model_key}' (Đa ngôn ngữ: Tiếng Việt, Tiếng Trung, Tiếng Anh)...")
         
         try:
-            req = urllib.request.Request(model_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=60) as response, open(target_model_file, 'wb') as out_file:
-                total_length = response.getheader('content-length')
-                if total_length:
-                    total_length = int(total_length)
-                    downloaded = 0
-                    last_pct = 0
-                    while True:
-                        buffer = response.read(8192 * 8)
-                        if not buffer:
-                            break
-                        downloaded += len(buffer)
-                        out_file.write(buffer)
-                        pct = int((downloaded / total_length) * 100)
-                        if pct - last_pct >= 5:
-                            last_pct = pct
-                            yield format_sse(f"🧠 Đang tải Model Whisper {model_key}: {pct}% ({downloaded // (1024*1024)}MB / {total_length // (1024*1024)}MB)")
-                else:
-                    out_file.write(response.read())
+            model_hash = _expected_hash(f'NOVACUT_WHISPER_{model_key.upper()}_SHA256')
+            _download_verified(model_url, target_model_file, model_hash, MAX_MODEL_BYTES, 120)
 
             yield format_sse(f"✅ Đã tải và cài đặt thành công Model Whisper '{model_key}'!")
         except Exception as e_model:

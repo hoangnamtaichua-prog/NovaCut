@@ -26,4 +26,7 @@
   4. **Tự động kiểm định Bảo mật & Bản quyền (Autonomous Security Audit):** Bất cứ khi nào can thiệp vào `license_manager.py`, xác thực API key, phân quyền tính năng hoặc dữ liệu nhạy cảm, tự động kích hoạt `codex-security-audit`.
 - **Nguyên tắc thực thi:** Luôn giữ nguyên bản (verbatim) phản hồi phân tích kỹ thuật từ Codex khi báo cáo đối chiếu, kết hợp sức mạnh kép của cả 2 mô hình (Gemini + Codex) để tối ưu hóa chất lượng phần mềm.
 
-
+# Autonomous Claude AI Collaboration Rule (Tự Động Phối Hợp Cùng Claude)
+- Bất cứ khi nào người dùng gõ lệnh `/claude <nội dung>`, hỏi "hỏi Claude", "nhờ Claude viết", "Claude review", hoặc yêu cầu tối ưu hóa kịch bản review phim:
+  1. Tự động kích hoạt Claude Runner (`node "C:\Users\hoang\.gemini\config\plugins\claude\scripts\claude-runner.mjs" task "<nội dung>"`) để Claude xử lý trực tiếp.
+  2. Báo cáo nguyên văn (verbatim) phản hồi từ Claude cho người dùng.

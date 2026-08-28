@@ -10,18 +10,18 @@ import time
 import json
 import urllib.parse
 import threading
-from flask import Blueprint, jsonify, request, Response
-import os, json, threading, time, traceback
-from routes.state import *
-import license_manager
+import copy
+from flask import Blueprint, jsonify, request
+from routes.state import ROOT_DIR
 from routes.security import is_path_allowed, parse_bool
 import audio_separator
+import license_manager
 
 audio_bp = Blueprint('audio', __name__)
 
 # Trạng thái tiến trình tách âm thanh & Cờ dừng khẩn cấp
 _cancel_requested = False
-_separation_lock = threading.Lock()
+_separation_lock = threading.RLock()
 _separation_progress = {
     "is_processing": False,
     "percent": 0,
@@ -40,9 +40,10 @@ def _add_log(msg):
     global _separation_progress
     timestamp = time.strftime('%H:%M:%S')
     formatted = f"[{timestamp}] {msg}"
-    _separation_progress["logs"].append(formatted)
-    if len(_separation_progress["logs"]) > 100:
-        _separation_progress["logs"] = _separation_progress["logs"][-100:]
+    with _separation_lock:
+        _separation_progress["logs"].append(formatted)
+        if len(_separation_progress["logs"]) > 100:
+            _separation_progress["logs"] = _separation_progress["logs"][-100:]
     print(formatted)
 
 
@@ -51,15 +52,17 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
     global _cancel_requested, _separation_progress
     def _progress_cb(pct, msg):
         global _separation_progress
-        _separation_progress["percent"] = pct
-        _separation_progress["message"] = msg
+        with _separation_lock:
+            _separation_progress["percent"] = max(0, min(100, int(pct)))
+            _separation_progress["message"] = str(msg)
 
     def _logger_cb(msg):
         _add_log(msg)
 
     def _cancel_check():
         global _cancel_requested
-        return _cancel_requested
+        with _separation_lock:
+            return _cancel_requested
 
     try:
         res = audio_separator.separate_audio_stems(
@@ -73,6 +76,9 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
             logger_cb=_logger_cb,
             cancel_check_cb=_cancel_check
         )
+
+        if _cancel_check():
+            raise RuntimeError('Đã dừng tác vụ theo yêu cầu')
 
         cleaned_path = res.get('cleaned_path', '')
         vocals_path = res.get('vocals_path', '')
@@ -92,18 +98,20 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
         }
 
         _add_log("✅ Hoàn tất tách và xuất file âm thanh thành công!")
-        _separation_progress["is_processing"] = False
-        _separation_progress["percent"] = 100
-        _separation_progress["status"] = "completed"
-        _separation_progress["message"] = "Hoàn tất tách âm thanh!"
-        _separation_progress["result"] = result_payload
+        with _separation_lock:
+            _separation_progress["is_processing"] = False
+            _separation_progress["percent"] = 100
+            _separation_progress["status"] = "completed"
+            _separation_progress["message"] = "Hoàn tất tách âm thanh!"
+            _separation_progress["result"] = result_payload
 
     except Exception as e:
-        is_cancelled = "dừng tác vụ" in str(e).lower() or _cancel_requested
-        _separation_progress["is_processing"] = False
-        _separation_progress["status"] = "cancelled" if is_cancelled else "error"
-        _separation_progress["error"] = str(e)
-        _separation_progress["message"] = "🛑 Đã dừng khẩn cấp theo yêu cầu." if is_cancelled else f"Lỗi: {str(e)}"
+        with _separation_lock:
+            is_cancelled = "dừng tác vụ" in str(e).lower() or _cancel_requested
+            _separation_progress["is_processing"] = False
+            _separation_progress["status"] = "cancelled" if is_cancelled else "error"
+            _separation_progress["error"] = str(e)
+            _separation_progress["message"] = "🛑 Đã dừng khẩn cấp theo yêu cầu." if is_cancelled else f"Lỗi: {str(e)}"
         _add_log(f"⚠️ {_separation_progress['message']}")
 
 
@@ -125,9 +133,15 @@ def api_separate_audio():
     media_path = data.get('media_path', '').strip()
     mode = data.get('mode', 'mdx_net_hq4').strip()
     device = data.get('device', 'auto').strip()
-    remove_vocals = parse_bool(data.get('remove_vocals'), True)
-    remove_bgm = parse_bool(data.get('remove_bgm'), False)
-    keep_sfx = parse_bool(data.get('keep_sfx'), True)
+    try:
+        remove_vocals = parse_bool(data.get('remove_vocals'), True)
+        remove_bgm = parse_bool(data.get('remove_bgm'), False)
+        keep_sfx = parse_bool(data.get('keep_sfx'), True)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    if mode not in {'mdx_net_hq4', 'mdx_net_hq5', 'ai_neural', 'dsp_turbo'} or device not in {'auto', 'cpu', 'cuda'}:
+        return jsonify({'success': False, 'error': 'Mode hoặc device không hợp lệ'}), 400
 
     if not media_path:
         return jsonify({'success': False, 'error': 'Vui lòng cung cấp đường dẫn video hoặc audio.'}), 400
@@ -135,21 +149,24 @@ def api_separate_audio():
     if not os.path.isabs(media_path):
         media_path = os.path.join(ROOT_DIR, media_path)
 
-    if not os.path.exists(media_path):
+    if not is_path_allowed(media_path, must_exist=True, extensions={'.mp4', '.mkv', '.mov', '.avi', '.webm', '.wav', '.mp3', '.m4a', '.flac', '.ogg'}):
         return jsonify({'success': False, 'error': f'Không tìm thấy file: {media_path}'}), 404
 
-    _cancel_requested = False
-    _separation_progress = {
-        "is_processing": True,
-        "percent": 5,
-        "message": "Đang khởi tạo bộ tách âm thanh AI...",
-        "status": "processing",
-        "device": device,
-        "mode": mode,
-        "logs": [],
-        "error": None,
-        "result": None
-    }
+    with _separation_lock:
+        if _separation_progress.get('is_processing'):
+            return jsonify({'success': False, 'error': 'Một tác vụ tách âm thanh khác đang chạy'}), 409
+        _cancel_requested = False
+        _separation_progress = {
+            "is_processing": True,
+            "percent": 5,
+            "message": "Đang khởi tạo bộ tách âm thanh AI...",
+            "status": "processing",
+            "device": device,
+            "mode": mode,
+            "logs": [],
+            "error": None,
+            "result": None
+        }
 
     _add_log(f"🚀 Bắt đầu tác vụ tách âm thanh (Mode: {mode}, Device: {device.upper()})...")
 
@@ -168,10 +185,13 @@ def api_separate_audio():
 def api_separate_cancel():
     """Dừng khẩn cấp tiến trình tách âm thanh."""
     global _cancel_requested, _separation_progress
-    _cancel_requested = True
-    _separation_progress["is_processing"] = False
-    _separation_progress["status"] = "cancelled"
-    _separation_progress["message"] = "🛑 Đang gửi tín hiệu dừng khẩn cấp..."
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'success': False, 'error': perm_msg}), 403
+    with _separation_lock:
+        _cancel_requested = True
+        _separation_progress["status"] = "cancelling" if _separation_progress.get('is_processing') else "idle"
+        _separation_progress["message"] = "🛑 Đang gửi tín hiệu dừng khẩn cấp..."
     _add_log("🛑 Người dùng nhấn [Dừng khẩn cấp]! Đang giải phóng bộ nhớ...")
     return jsonify({'success': True, 'message': 'Đã gửi yêu cầu dừng khẩn cấp.'})
 
@@ -180,4 +200,8 @@ def api_separate_cancel():
 def api_separate_progress():
     """Lấy tiến trình tách âm thanh & System log thời gian thực."""
     global _separation_progress
-    return jsonify(_separation_progress)
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'success': False, 'error': perm_msg}), 403
+    with _separation_lock:
+        return jsonify(copy.deepcopy(_separation_progress))

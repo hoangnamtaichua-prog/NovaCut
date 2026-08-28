@@ -9,6 +9,7 @@ import re
 import time
 import threading
 import asr_manager
+from platformdirs import user_data_dir
 from flask import Flask, send_from_directory, Response, jsonify, request, send_file
 
 def get_app_root_dir():
@@ -26,10 +27,19 @@ def get_app_root_dir():
 
 # Project Root Directory
 ROOT_DIR = get_app_root_dir()
+USER_DATA_DIR = user_data_dir('NovaCut', 'NovaCut', roaming=True)
+os.makedirs(USER_DATA_DIR, exist_ok=True)
 current_export_process = None
 STOP_OCR_FLAG = False
 review_stop_flag = False
-API_KEYS_FILE = os.path.join(ROOT_DIR, 'api_keys.txt')
+API_KEYS_FILE = os.path.join(USER_DATA_DIR, 'api_keys.txt')
+_legacy_keys = os.path.join(ROOT_DIR, 'api_keys.txt')
+if not os.path.exists(API_KEYS_FILE) and os.path.exists(_legacy_keys):
+    try:
+        import shutil
+        shutil.copy2(_legacy_keys, API_KEYS_FILE)
+    except Exception:
+        pass
 current_asr_process = None
 
 def _time_to_seconds(t_str):

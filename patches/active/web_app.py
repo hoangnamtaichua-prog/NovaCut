@@ -43,8 +43,17 @@ os.makedirs(PATCH_DIR, exist_ok=True)
 for p in [ROOT_DIR, PATCH_DIR]:
     if p in sys.path:
         sys.path.remove(p)
-sys.path.insert(0, ROOT_DIR)
-sys.path.insert(0, PATCH_DIR)
+
+is_dev = os.path.exists(os.path.join(ROOT_DIR, '.git')) and os.environ.get("NOVACUT_USE_PATCH_OVERLAY") != "1"
+if is_dev:
+    # Trên môi trường Dev (Git repo): Luôn ưu tiên nạp từ ROOT_DIR
+    # để tránh code mới đang phát triển bị các file cũ trong patches/active làm che khuất (shadowing)
+    sys.path.insert(0, PATCH_DIR)
+    sys.path.insert(0, ROOT_DIR)
+else:
+    # Trên môi trường Release / End-user: Bản vá OTA trong patches/active có độ ưu tiên cao nhất
+    sys.path.insert(0, ROOT_DIR)
+    sys.path.insert(0, PATCH_DIR)
 
 try:
     from importlib.machinery import PathFinder
@@ -180,18 +189,25 @@ def main():
 
     window_ref = None
 
+    def register_dialog_result(result):
+        path = result[0] if result else None
+        if path:
+            from routes.security import register_user_path
+            register_user_path(path)
+        return path
+
     class Api:
         def select_input_video(self):
             if window_ref:
                 file_types = ('Video files (*.mp4;*.mkv;*.avi)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_output_directory(self):
             if window_ref:
                 result = window_ref.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         
@@ -199,33 +215,33 @@ def main():
             import webview
             file_types = ('Image Files (*.png;*.jpg;*.jpeg)', 'All files (*.*)')
             result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-            return result[0] if result else None
+            return register_dialog_result(result)
 
         def select_audio_file(self):
             if window_ref:
                 file_types = ('Audio files (*.mp3;*.wav;*.m4a)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_model_file(self):
             if window_ref:
                 file_types = ('Model files (*.pth)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_rvc_index_file(self):
             if window_ref:
                 file_types = ('Index files (*.index)', 'All files (*.*)')
                 result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-                return result[0] if result else None
+                return register_dialog_result(result)
             return None
             
         def select_srt_file(self):
             file_types = ('SRT files (*.srt)', 'All files (*.*)')
             result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-            return result[0] if result else None
+            return register_dialog_result(result)
 
         def open_in_explorer(self, path):
             import subprocess

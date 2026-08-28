@@ -45,53 +45,109 @@ def _require_permission(feature):
 
 @video_edit_bp.route('/api/start', methods=['POST'])
 def start_generation():
-    global STOP_EXPORT_FLAG
-    STOP_EXPORT_FLAG = False
-    data = request.json or {}
-    mode = data.get('mode', 'api')
-    input_video = data.get('inputVideo')
-    output_dir = data.get('outputDir') or 'output'
-    output_name = data.get('outputName') or 'video_tom_tat.mp4'
-    manual_audio = data.get('manualAudio')
-    manual_srt = data.get('manualSrt')
-    dubbing = data.get('dubbing', {})
-    subtitles = data.get('subtitles', [])
-    subtitles_enabled = bool(data.get('subtitles_enabled', True))
-    subtitle_style = data.get('subtitle_style') or {}
-    blur_original_subtitles = data.get('blur_original_subtitles', False)
-    blur_intensity = data.get('blur_intensity', 15)
-    original_srt_path = data.get('original_srt_path', '')
-    ocr_region = data.get('ocr_region') or {}
-    blur_lead_offset = float(data.get('blur_lead_offset', -180)) / 1000.0
-    blur_padding = float(data.get('blur_padding', 220)) / 1000.0
-    blur_use_ai_scan = bool(data.get('blur_use_ai_scan', False))
-    
-    video_speed = float(data.get('video_speed', 1.0))
-    video_zoom = float(data.get('video_zoom', 1.0))
-    video_pan_x = float(data.get('video_pan_x', 0.0))
-    video_pan_y = float(data.get('video_pan_y', 0.0))
-    aspect_ratio = data.get('aspect_ratio', 'original')
-    mirror_flip = bool(data.get('mirror_flip', False))
-    trim_enabled = bool(data.get('trim_enabled', False))
-    trim_start = str(data.get('trim_start', '')).strip()
-    trim_end = str(data.get('trim_end', '')).strip()
-    encoder = data.get('encoder') or 'libx264'
-    resolution = data.get('resolution') or 'original'
-    bitrate = int(data.get('bitrate', 10000))
-    bitrate_mode = data.get('bitrate_mode', 'VBR')
+    global STOP_EXPORT_FLAG, _export_active
+    permission_error = _require_permission('can_access_editor')
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'Payload JSON không hợp lệ'}), 400
+    try:
+        mode = str(data.get('mode', 'none'))
+        input_video = str(data.get('inputVideo') or '').strip(' "\'')
+        output_dir = str(data.get('outputDir') or os.path.join(ROOT_DIR, 'output')).strip()
+        output_name = secure_filename(str(data.get('outputName') or 'video_tom_tat.mp4'))
+        manual_audio = str(data.get('manualAudio') or '').strip()
+        manual_srt = str(data.get('manualSrt') or '').strip()
+        dubbing = data.get('dubbing') or {}
+        subtitles = data.get('subtitles') or []
+        subtitles_enabled = parse_bool(data.get('subtitles_enabled'), True)
+        subtitle_style = data.get('subtitle_style') or {}
+        blur_original_subtitles = parse_bool(data.get('blur_original_subtitles'), False)
+        blur_intensity = max(5, min(30, int(data.get('blur_intensity', 15))))
+        original_srt_path = str(data.get('original_srt_path') or '').strip()
+        ocr_region = data.get('ocr_region') or {}
+        blur_lead_offset = max(-2.0, min(2.0, float(data.get('blur_lead_offset', -180)) / 1000.0))
+        blur_padding = max(0.0, min(2.0, float(data.get('blur_padding', 220)) / 1000.0))
+        blur_use_ai_scan = parse_bool(data.get('blur_use_ai_scan'), False)
+
+        video_speed = float(data.get('video_speed', 1.0))
+        video_zoom = float(data.get('video_zoom', 1.0))
+        video_pan_x = float(data.get('video_pan_x', 0.0))
+        video_pan_y = float(data.get('video_pan_y', 0.0))
+        aspect_ratio = str(data.get('aspect_ratio', 'original'))
+        mirror_flip = parse_bool(data.get('mirror_flip'), False)
+        trim_enabled = parse_bool(data.get('trim_enabled'), False)
+        trim_start = str(data.get('trim_start', '')).strip()
+        trim_end = str(data.get('trim_end', '')).strip()
+        encoder = str(data.get('encoder') or 'libx264')
+        resolution = str(data.get('resolution') or 'original')
+        bitrate = int(data.get('bitrate', 10000))
+        bitrate_mode = str(data.get('bitrate_mode', 'VBR')).upper()
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': f'Tham số xuất video không hợp lệ: {exc}'}), 400
+
+    if mode not in {'none', 'tts', 'manual', 'api'} or not isinstance(dubbing, dict) or not isinstance(subtitles, list):
+        return jsonify({'success': False, 'error': 'Cấu hình mode/dubbing/subtitles không hợp lệ'}), 400
+    if len(subtitles) > 50000:
+        return jsonify({'success': False, 'error': 'Danh sách phụ đề quá lớn'}), 413
+    if not 0.25 <= video_speed <= 4.0 or not 1.0 <= video_zoom <= 3.0 or not -100 <= video_pan_x <= 100 or not -100 <= video_pan_y <= 100:
+        return jsonify({'success': False, 'error': 'Thông số tốc độ/zoom/pan nằm ngoài giới hạn'}), 400
+    if aspect_ratio not in {'original', '9:16', '1:1', '21:9'} or resolution not in {'original', '720p', '1080p', '4k'}:
+        return jsonify({'success': False, 'error': 'Tỉ lệ hoặc độ phân giải không hợp lệ'}), 400
+    if encoder not in {'libx264', 'h264_nvenc', 'h264_mf', 'h264_amf', 'h264_qsv'} or bitrate_mode not in {'VBR', 'CBR'} or not 500 <= bitrate <= 100000:
+        return jsonify({'success': False, 'error': 'Encoder hoặc bitrate không hợp lệ'}), 400
+    if not input_video or not is_path_allowed(input_video, must_exist=True, extensions=_VIDEO_EXTENSIONS):
+        return jsonify({'success': False, 'error': 'Video đầu vào không hợp lệ hoặc chưa được cho phép'}), 400
+    if not os.path.isabs(output_dir):
+        output_dir = os.path.abspath(os.path.join(ROOT_DIR, output_dir))
+    if not is_path_allowed(output_dir):
+        return jsonify({'success': False, 'error': 'Thư mục đầu ra chưa được người dùng cho phép'}), 403
+    os.makedirs(output_dir, exist_ok=True)
+    if not output_name:
+        return jsonify({'success': False, 'error': 'Tên file đầu ra không hợp lệ'}), 400
+    if not output_name.lower().endswith('.mp4'):
+        output_name += '.mp4'
+    try:
+        safe_join(output_dir, output_name, extensions={'.mp4'})
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    for optional_path, extensions in ((manual_audio, _AUDIO_EXTENSIONS), (manual_srt, {'.srt'}), (original_srt_path, {'.srt'})):
+        if optional_path and not is_path_allowed(optional_path, must_exist=True, extensions=extensions):
+            return jsonify({'success': False, 'error': f'File phụ trợ không hợp lệ: {optional_path}'}), 400
+    try:
+        dubbing['enabled'] = parse_bool(dubbing.get('enabled'), False)
+        dubbing['speed'] = max(0.5, min(2.0, float(dubbing.get('speed', 1.0))))
+        dubbing['threads'] = max(1, min(8, int(dubbing.get('threads', 4))))
+        nested_manual_audio = str(dubbing.get('manual_audio') or '').strip()
+        if nested_manual_audio and not is_path_allowed(nested_manual_audio, must_exist=True, extensions=_AUDIO_EXTENSIONS):
+            return jsonify({'success': False, 'error': 'File lồng tiếng thủ công không hợp lệ'}), 400
+        stem_cfg = dubbing.get('stem_separation') or {}
+        if stem_cfg and not isinstance(stem_cfg, dict):
+            return jsonify({'success': False, 'error': 'Cấu hình tách âm thanh không hợp lệ'}), 400
+        precomputed_path = str(stem_cfg.get('precomputed_cleaned_path') or '').strip()
+        if precomputed_path and not is_path_allowed(precomputed_path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
+            return jsonify({'success': False, 'error': 'File stem đã xử lý không hợp lệ'}), 400
+        logo_data = data.get('logo') or {}
+        if logo_data and not isinstance(logo_data, dict):
+            return jsonify({'success': False, 'error': 'Cấu hình logo không hợp lệ'}), 400
+        logo_path = str(logo_data.get('path') or '').strip()
+        if logo_path and not is_path_allowed(logo_path, must_exist=True, extensions={'.png', '.jpg', '.jpeg', '.webp'}):
+            return jsonify({'success': False, 'error': 'File logo không hợp lệ'}), 400
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': f'Cấu hình lồng tiếng không hợp lệ: {exc}'}), 400
+
+    with _export_lock:
+        if _export_active:
+            return jsonify({'success': False, 'error': 'Một tác vụ xuất video khác đang chạy'}), 409
+        _export_active = True
+        STOP_EXPORT_FLAG = False
 
     def generate():
         nonlocal mode, manual_audio, input_video
         blurred_temp_video = None
         process = None
         try:
-            import license_manager
-            allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
-            if not allowed:
-                yield f"data: 🛑 ERROR: {perm_msg}\n\n"
-                yield "data: 🔒 KHÓA TÍNH NĂNG: Vui lòng gia hạn hoặc kích hoạt bản quyền để xuất video!\n\n"
-                return
-
             ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
             
             if not input_video or not os.path.exists(input_video):
@@ -109,7 +165,7 @@ def start_generation():
                             ffprobe_path, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type',
                             '-of', 'json', v_path
                         ]
-                        res_p = subprocess.run(cmd_probe, capture_output=True, text=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
+                        res_p = subprocess.run(cmd_probe, capture_output=True, text=True, timeout=30, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                         if res_p.returncode == 0:
                             info_p = json.loads(res_p.stdout)
                             d_sec = float(info_p.get('format', {}).get('duration', 0.0))
@@ -122,7 +178,7 @@ def start_generation():
                 # Fallback to ffmpeg -i
                 try:
                     cmd = [ffmpeg_path, '-i', v_path]
-                    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **ffmpeg_installer.get_stealth_subprocess_kwargs())
+                    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', timeout=30, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                     m = re.search(r'Duration:\s*(\d+):(\d+):([0-9.]+)', proc.stderr)
                     if m:
                         h, mins, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
@@ -282,12 +338,12 @@ def start_generation():
                         yield "data: 🛑 [LỖI LỒNG TIẾNG] Danh sách phụ đề trống! Vui lòng nạp hoặc dịch phụ đề trước khi xuất video có lồng tiếng.\n\n"
                     else:
                         voice_id = dubbing.get('voice_id', 'ngoc_huyen')
-                        speed_dub = float(dubbing.get('speed', 1.0))
+                        speed_dub = dubbing.get('speed', 1.0)
                         yield f"data: 🎙️ Đang tiến hành tạo giọng lồng tiếng AI cho {len(subs_for_dubbing)} câu phụ đề (Giọng: {voice_id})...\n\n"
                         import ai_dubbing
                         
                         open_speaker_key = ''
-                        api_keys_file = os.path.join(ROOT_DIR, 'api_keys.txt')
+                        api_keys_file = API_KEYS_FILE
                         if os.path.exists(api_keys_file):
                             with open(api_keys_file, 'r', encoding='utf-8') as f:
                                 for line in f:
@@ -295,7 +351,7 @@ def start_generation():
                                         open_speaker_key = line.split('=', 1)[1].strip()
                                         
                         temp_dub_dir = os.path.join(output_dir, f'dubbing_temp_{int(time.time())}')
-                        dub_threads = int(dubbing.get('threads', 16))
+                        dub_threads = dubbing.get('threads', 4)
                         try:
                             for event_type, msg in ai_dubbing.build_dubbing_track_for_subtitles_generator(
                                 subtitles=subs_for_dubbing,
@@ -337,7 +393,7 @@ def start_generation():
             # ═══════════════════════════════════════════════════════
             os.makedirs(output_dir, exist_ok=True)
             out_file_name = output_name if output_name.lower().endswith('.mp4') else f"{output_name}.mp4"
-            final_output_path = os.path.normpath(os.path.join(output_dir, out_file_name))
+            final_output_path = safe_join(output_dir, out_file_name, extensions={'.mp4'})
             
             yield f"data: 🚀 Đang khởi chạy bộ biên mã FFmpeg ({encoder})...\n\n"
 
@@ -396,8 +452,8 @@ def start_generation():
                 srt_target = temp_srt_path or manual_srt or original_srt_path
                 if srt_target and os.path.exists(srt_target):
                     escaped_srt = srt_target.replace('\\', '/').replace(':', '\\:')
-                    font_name = str(subtitle_style.get('font', 'Arial')).replace("'", "").replace('"', '')
-                    font_size = int(subtitle_style.get('size', 18))
+                    font_name = re.sub(r'[^\w .-]', '', str(subtitle_style.get('font', 'Arial')))[:80] or 'Arial'
+                    font_size = max(8, min(120, int(subtitle_style.get('size', 18))))
                     def hex_to_ass(hex_val, default='&H00FFFFFF'):
                         if not hex_val: return default
                         h = str(hex_val).lstrip('#')
@@ -406,9 +462,9 @@ def start_generation():
                         return default
                     primary_col = hex_to_ass(subtitle_style.get('color'), '&H00FFFFFF')
                     outline_col = hex_to_ass(subtitle_style.get('outline_color'), '&H00000000')
-                    outline_w = int(subtitle_style.get('outline', 2))
-                    bold_flag = 1 if subtitle_style.get('bold') else 0
-                    italic_flag = 1 if subtitle_style.get('italic') else 0
+                    outline_w = max(0, min(10, int(subtitle_style.get('outline', 2))))
+                    bold_flag = 1 if parse_bool(subtitle_style.get('bold'), False) else 0
+                    italic_flag = 1 if parse_bool(subtitle_style.get('italic'), False) else 0
                     style_str = f"Fontname={font_name},Fontsize={font_size},PrimaryColour={primary_col},OutlineColour={outline_col},BorderStyle=1,Outline={outline_w},Bold={bold_flag},Italic={italic_flag},Alignment=2,MarginV=25"
                     v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='{style_str}'[v_sub]")
                     curr_v = "v_sub"
@@ -424,7 +480,7 @@ def start_generation():
 
             # 3.5 Logo Watermark Overlay
             logo_data = data.get('logo') or {}
-            logo_enabled = bool(logo_data.get('enabled', False))
+            logo_enabled = parse_bool(logo_data.get('enabled'), False)
             logo_path = logo_data.get('path', '').strip()
             
             if logo_enabled and logo_path and os.path.exists(logo_path):
@@ -449,20 +505,32 @@ def start_generation():
                 v_filters[-1] = re.sub(r'\[[a-zA-Z0-9_]+\]$', '[v_final]', v_filters[-1])
 
             # 3.6 AI Stem & Vocal Separation (Lọc bỏ giọng thoại cũ, giữ lại hiệu ứng SFX)
-            stem_enabled = bool(dubbing.get('remove_original_vocals', False) or (isinstance(dubbing.get('stem_separation'), dict) and dubbing.get('stem_separation', {}).get('enabled')))
+            stem_enabled = parse_bool(dubbing.get('remove_original_vocals'), False) or (
+                isinstance(dubbing.get('stem_separation'), dict)
+                and parse_bool(dubbing.get('stem_separation', {}).get('enabled'), False)
+            )
             stem_mode = 'mdx_net_hq4'
             stem_device = 'auto'
+            precomputed_cleaned_path = ''
             if isinstance(dubbing.get('stem_separation'), dict):
-                stem_mode = dubbing.get('stem_separation', {}).get('mode', 'mdx_net_hq4')
-                stem_device = dubbing.get('stem_separation', {}).get('device', 'auto')
+                stem_cfg = dubbing.get('stem_separation', {})
+                stem_mode = stem_cfg.get('mode', 'mdx_net_hq4')
+                stem_device = stem_cfg.get('device', 'auto')
+                precomputed_cleaned_path = stem_cfg.get('precomputed_cleaned_path', '')
 
             sfx_input_idx = None
             if stem_enabled and has_orig_audio:
                 try:
-                    import audio_separator
-                    temp_stem_dir = os.path.join(ROOT_DIR, "output", "temp_stems")
-                    sep_res = audio_separator.separate_audio_stems(input_video, output_dir=temp_stem_dir, mode=stem_mode, device=stem_device)
-                    cleaned_sfx = sep_res.get('cleaned_path')
+                    cleaned_sfx = None
+                    if precomputed_cleaned_path and os.path.exists(precomputed_cleaned_path) and os.path.getsize(precomputed_cleaned_path) > 1000:
+                        cleaned_sfx = precomputed_cleaned_path
+                        print(f"[Export Pipeline] ⚡ Tái sử dụng file âm thanh SFX đã tách sẵn: {cleaned_sfx}")
+                    else:
+                        import audio_separator
+                        temp_stem_dir = os.path.join(ROOT_DIR, "output", "temp_stems")
+                        sep_res = audio_separator.separate_audio_stems(input_video, output_dir=temp_stem_dir, mode=stem_mode, device=stem_device)
+                        cleaned_sfx = sep_res.get('cleaned_path')
+
                     if cleaned_sfx and os.path.exists(cleaned_sfx):
                         sfx_input_idx = len(inputs) // 2
                         inputs.extend(['-i', cleaned_sfx])
@@ -588,7 +656,7 @@ def start_generation():
             encoder_label = "GPU " + active_encoder.upper() if active_encoder != 'libx264' else "CPU libx264"
             yield f"data: 🎬 Đang xuất video chất lượng cao (Bộ mã hóa: {encoder_label}, Âm lượng lồng tiếng: {int(voice_vol*100)}%, Âm lượng gốc: {int(orig_vol*100)}%)...\n\n"
 
-            global current_export_process
+            global current_export_process, _export_active
             process = subprocess.Popen(
                 cmd_export,
                 stdout=subprocess.PIPE,
@@ -600,7 +668,8 @@ def start_generation():
                 errors='replace',
                 **ffmpeg_installer.get_stealth_subprocess_kwargs()
             )
-            current_export_process = process
+            with _export_lock:
+                current_export_process = process
 
             time_regex = re.compile(r'time=(\d+):(\d+):([0-9.]+)')
             for line in iter(process.stdout.readline, ''):
@@ -632,19 +701,14 @@ def start_generation():
                 yield f"data: 📋 Nguyên nhân có thể: File video đầu vào bị hỏng, bộ mã hóa ({active_encoder}) gặp sự cố, hoặc ổ đĩa đầy.\n\n"
                 yield f"data: 💡 Thử lại với bộ mã hóa CPU (libx264) nếu đang dùng GPU, hoặc kiểm tra lại file video gốc.\n\n"
         except GeneratorExit:
-            if process and process.poll() is None:
-                try:
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
-                    process.kill()
-                except Exception:
-                    pass
+            _terminate_process_tree(process)
         except Exception as ex:
-            import traceback
-            tb_str = traceback.format_exc()
             yield f"data: 🛑 [LỖI HỆ THỐNG]: {str(ex)}\n\n"
-            yield f"data: 📋 Chi tiết lỗi:\n{tb_str}\n\n"
         finally:
-            current_export_process = None
+            with _export_lock:
+                if current_export_process is process:
+                    current_export_process = None
+                _export_active = False
             if blurred_temp_video and os.path.exists(blurred_temp_video):
                 try:
                     os.remove(blurred_temp_video)
@@ -664,6 +728,7 @@ def stop_export_process():
     with _export_lock:
         process = current_export_process
     stopped = _terminate_process_tree(process)
+        
     return jsonify({
         'success': True,
         'stopped': stopped,
@@ -967,3 +1032,4 @@ def review_start():
                 _review_active = False
             
     return Response(generate(), mimetype='text/event-stream')
+

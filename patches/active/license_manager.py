@@ -16,6 +16,7 @@ import requests
 import re
 import threading
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 import email.utils
 import uuid
@@ -50,16 +51,42 @@ def get_user_data_dir():
 
 DATA_DIR = get_user_data_dir()
 LICENSE_CACHE_FILE = os.path.join(DATA_DIR, '.license.dat')
-CONFIG_FILE = os.path.join(ROOT_DIR, 'license_config.json')
+CONFIG_FILE = os.path.join(DATA_DIR, 'license_config.json')
+FROZEN_RESOURCE_DIR = getattr(sys, '_MEIPASS', '')
+BOOTSTRAP_CONFIG_FILE = os.path.join(FROZEN_RESOURCE_DIR, 'license_bootstrap.json') if FROZEN_RESOURCE_DIR else ''
 PROCESSED_TX_FILE = os.path.join(DATA_DIR, '.processed_txs.dat')
 TOKEN_CACHE_FILE = os.path.join(DATA_DIR, '.token_quota.dat')
 MAX_PROMPT_TOKENS = 1_000_000      # 1,000,000 Token gửi đi (Prompt)
 MAX_COMPLETION_TOKENS = 1_000_000  # 1,000,000 Token nhận về (Completion)
 
-# Secret Salt bảo mật chống giả mạo chữ ký HMAC cục bộ
-SECRET_SALT = "AMS_SECRET_SALT_2026_@GOOGLE_DEEPMIND_ANTIGRAVITY_SECURE_KEY"
+# Secret Salt bảo mật chống giả mạo chữ ký HMAC cục bộ và định danh HWID máy
+DEFAULT_LOCAL_SALT = "AMS_SECRET_SALT_2026_@GOOGLE_DEEPMIND_ANTIGRAVITY_SECURE_KEY"
+SECRET_SALT = os.environ.get("NOVACUT_LOCAL_INTEGRITY_KEY", "").strip() or DEFAULT_LOCAL_SALT
 
 _last_qr_generation_epoch = 0
+_quota_lock = threading.RLock()
+_processed_tx_lock = threading.RLock()
+_trial_registration_lock = threading.RLock()
+_last_trial_registration_attempt = 0
+TRIAL_REGISTRATION_RETRY_SECONDS = 60
+
+
+def _atomic_write_json(path, payload):
+    """Write security-sensitive state without leaving a partial file on interruption."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(temp_path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 def _load_processed_tx_ids():
     """Tải danh sách các mã giao dịch SePay đã từng được kích hoạt để chống lặp lại."""
@@ -77,21 +104,29 @@ def _save_processed_tx_id(tx_id):
     if not tx_id:
         return
     try:
-        current = _load_processed_tx_ids()
-        current.add(str(tx_id))
-        with open(PROCESSED_TX_FILE, 'w', encoding='utf-8') as f:
-            json.dump(list(current), f)
+        with _processed_tx_lock:
+            current = _load_processed_tx_ids()
+            current.add(str(tx_id))
+            _atomic_write_json(PROCESSED_TX_FILE, sorted(current))
     except Exception as e:
         print(f"Lỗi lưu lịch sử giao dịch: {e}")
 
+# Thông tin nhận thanh toán là dữ liệu công khai, nhưng phải do bản phát hành
+# quản lý. Không lấy ba trường này từ %APPDATA% để tránh một cấu hình cũ (hoặc
+# bị chỉnh sửa) hiển thị QR chuyển tiền sai trên máy khách.
+MANAGED_PAYMENT_CONFIG = {
+    "bank_code": "TPBank",
+    "bank_account": "02151334904",
+    "bank_account_name": "NGUYEN HOANG NAM",
+}
+
 # Cấu hình Mặc định Bảng giá & VietQR SePay
 DEFAULT_CONFIG = {
-    "google_apps_script_url": "https://script.google.com/macros/s/AKfycbzUYURCg16dCFRo3SohtH-V1bS7zGesCvN4iBspTUjlrEpEbUNtXr-MYcTck1nNEDzo/exec",
-    "api_secret_token": "AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY",
-    "sepay_api_token": "AR9BTZINU7FAUGS84GNX3QAIYDHWBAVY8SOMMO5ISC1JRO5DQSUWPLBI1KP2LXZV",
-    "bank_code": "TPBank",            # TPBank
-    "bank_account": "02151334904",      # Số tài khoản nhận tiền
-    "bank_account_name": "NGUYEN HOANG NAM", # Tên chủ tài khoản
+    "google_apps_script_url": os.environ.get("NOVACUT_LICENSE_API_URL", "").strip(),
+    "client_license_token": os.environ.get("NOVACUT_CLIENT_LICENSE_TOKEN", "").strip(),
+    "api_secret_token": os.environ.get("NOVACUT_LICENSE_API_TOKEN", "").strip(),
+    "sepay_api_token": "",
+    **MANAGED_PAYMENT_CONFIG,
     "prices": {
         "trial": 0,
         "pro": 300000,
@@ -101,16 +136,52 @@ DEFAULT_CONFIG = {
 }
 
 def load_app_config():
-    """Đọc cấu hình thanh toán & URL cloud từ license_config.json."""
-    cfg = DEFAULT_CONFIG.copy()
-    cfg_path = CONFIG_FILE if os.path.exists(CONFIG_FILE) else os.path.join(ROOT_DIR, 'config.json')
-    if os.path.exists(cfg_path):
+    """Đọc cấu hình cloud và thông tin thanh toán do bản phát hành quản lý."""
+    cfg = {**DEFAULT_CONFIG, "prices": dict(DEFAULT_CONFIG["prices"])}
+    legacy_cfg = os.path.join(ROOT_DIR, 'license_config.json')
+    # Bản EXE nhận cấu hình kết nối tối thiểu từ PyInstaller resource. File này
+    # chỉ chứa URL + token bản quyền, không có SePay token hoặc thông tin ngân
+    # hàng; như vậy máy cài mới vẫn đồng bộ được mà không phụ thuộc AppData.
+    if BOOTSTRAP_CONFIG_FILE and os.path.exists(BOOTSTRAP_CONFIG_FILE):
         try:
-            with open(cfg_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                cfg.update(data)
+            with open(BOOTSTRAP_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                bootstrap_data = json.load(f)
+            for key in ("google_apps_script_url", "client_license_token"):
+                value = bootstrap_data.get(key)
+                if isinstance(value, str) and value.strip():
+                    cfg[key] = value.strip()
         except Exception:
             pass
+    # Trong môi trường phát triển, file gốc vẫn là nơi cấu hình server. Khi
+    # đóng gói, file này không được phát hành vì có secret.
+    if not getattr(sys, 'frozen', False) and os.path.exists(legacy_cfg):
+        try:
+            with open(legacy_cfg, 'r', encoding='utf-8') as f:
+                legacy_data = json.load(f)
+            # license_config.json từ các bản cũ có thể còn tài khoản MBBank.
+            # Chỉ lấy cấu hình kết nối cloud; đích nhận tiền luôn theo bản phát
+            # hành hoặc biến môi trường triển khai bên dưới.
+            for key in ("google_apps_script_url", "client_license_token", "api_secret_token", "sepay_api_token", "prices"):
+                if key in legacy_data:
+                    cfg[key] = legacy_data[key]
+        except Exception:
+            pass
+
+    # Không nhận endpoint hoặc credential từ AppData. Nếu người dùng có thể
+    # trỏ app tới server của họ và tự chọn token, họ cũng có thể tự ký phản hồi
+    # HMAC để vượt bản quyền. EXE mới dùng resource bootstrap chỉ-đọc; môi
+    # trường triển khai đáng tin cậy có thể ghi đè ở bên dưới.
+
+    # Cho phép cấu hình ở môi trường triển khai đáng tin cậy ghi đè khi cần,
+    # nhưng không dùng dữ liệu tùy ý trong AppData.
+    for key, env_name in (
+        ("bank_code", "NOVACUT_BANK_CODE"),
+        ("bank_account", "NOVACUT_BANK_ACCOUNT"),
+        ("bank_account_name", "NOVACUT_BANK_ACCOUNT_NAME"),
+    ):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            cfg[key] = value
     return cfg
 
 def save_app_config(new_cfg):
@@ -118,6 +189,7 @@ def save_app_config(new_cfg):
     cfg = load_app_config()
     cfg.update(new_cfg)
     try:
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, indent=4, ensure_ascii=False)
     except Exception:
@@ -130,7 +202,7 @@ def get_trusted_network_time():
     Trả về (epoch: int, date_str: str) nếu có mạng, hoặc None nếu hoàn toàn offline.
     """
     endpoints = [
-        "http://www.google.com",
+        "https://www.google.com",
         "https://1.1.1.1",
         "https://www.cloudflare.com"
     ]
@@ -320,6 +392,8 @@ def get_short_hwid(hwid=None):
 
 def _sign_payload(data_dict):
     """Ký số HMAC-SHA256 cho dữ liệu cache để chống người dùng sửa file offline."""
+    if not SECRET_SALT:
+        return ""
     raw_str = json.dumps(data_dict, sort_keys=True, separators=(',', ':'))
     sig = hmac.new(SECRET_SALT.encode('utf-8'), raw_str.encode('utf-8'), hashlib.sha256).hexdigest()
     return sig
@@ -346,12 +420,14 @@ def save_local_license_cache(license_data):
             "features": license_data.get('features', {})
         }
         sig = _sign_payload(payload)
+        if not sig:
+            print("Không thể lưu cache bản quyền: thiếu NOVACUT_LOCAL_INTEGRITY_KEY")
+            return False
         envelope = {
             "p": base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii'),
             "s": sig
         }
-        with open(LICENSE_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(envelope, f)
+        _atomic_write_json(LICENSE_CACHE_FILE, envelope)
         return True
     except Exception as e:
         print(f"Lỗi lưu cache bản quyền: {e}")
@@ -377,7 +453,7 @@ def load_local_license_cache(auto_update_clock=True):
         
         # 1. Kiểm tra chữ ký HMAC
         expected_sig = _sign_payload(payload)
-        if not hmac.compare_digest(sig, expected_sig):
+        if not expected_sig or not hmac.compare_digest(sig, expected_sig):
             print("⚠️ Chữ ký bản quyền không hợp lệ (Dữ liệu đã bị can thiệp)!")
             return None
         
@@ -425,6 +501,12 @@ def load_token_quota_stats():
         "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "max_total_tokens": MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
     }
+    if not SECRET_SALT:
+        default_stats["prompt_tokens"] = MAX_PROMPT_TOKENS
+        default_stats["completion_tokens"] = MAX_COMPLETION_TOKENS
+        default_stats["total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
+        default_stats["integrity_error"] = "Thiếu NOVACUT_LOCAL_INTEGRITY_KEY"
+        return default_stats
     if not os.path.exists(TOKEN_CACHE_FILE):
         return default_stats
     try:
@@ -436,8 +518,12 @@ def load_token_quota_stats():
         payload = json.loads(raw_json)
 
         expected_sig = _sign_payload(payload)
-        if not hmac.compare_digest(sig, expected_sig):
+        if not expected_sig or not hmac.compare_digest(sig, expected_sig):
             print("⚠️ Chữ ký bộ đếm Token không hợp lệ!")
+            default_stats["prompt_tokens"] = MAX_PROMPT_TOKENS
+            default_stats["completion_tokens"] = MAX_COMPLETION_TOKENS
+            default_stats["total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
+            default_stats["integrity_error"] = "Chữ ký bộ đếm không hợp lệ"
             return default_stats
 
         payload["max_prompt_tokens"] = MAX_PROMPT_TOKENS
@@ -461,12 +547,13 @@ def save_token_quota_stats(stats):
             "last_updated": int(time.time())
         }
         sig = _sign_payload(payload)
+        if not sig:
+            return False
         envelope = {
             "p": base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii'),
             "s": sig
         }
-        with open(TOKEN_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(envelope, f)
+        _atomic_write_json(TOKEN_CACHE_FILE, envelope)
         return True
     except Exception as e:
         print(f"Lỗi lưu token quota: {e}")
@@ -493,13 +580,14 @@ def check_token_quota():
 
 def record_token_usage(prompt_tokens=0, completion_tokens=0):
     """Ghi nhận số lượng token đã sử dụng sau mỗi lượt gọi OpenAI."""
-    stats = load_token_quota_stats()
-    stats["prompt_tokens"] = stats.get("prompt_tokens", 0) + max(0, int(prompt_tokens))
-    stats["completion_tokens"] = stats.get("completion_tokens", 0) + max(0, int(completion_tokens))
-    stats["total_tokens"] = stats["prompt_tokens"] + stats["completion_tokens"]
-    stats["requests"] = stats.get("requests", 0) + 1
-    save_token_quota_stats(stats)
-    return stats
+    with _quota_lock:
+        stats = load_token_quota_stats()
+        stats["prompt_tokens"] = stats.get("prompt_tokens", 0) + max(0, int(prompt_tokens))
+        stats["completion_tokens"] = stats.get("completion_tokens", 0) + max(0, int(completion_tokens))
+        stats["total_tokens"] = stats["prompt_tokens"] + stats["completion_tokens"]
+        stats["requests"] = stats.get("requests", 0) + 1
+        save_token_quota_stats(stats)
+        return stats
 
 
 def reset_token_quota_stats():
@@ -511,8 +599,8 @@ def reset_token_quota_stats():
         "requests": 0,
         "last_updated": int(time.time())
     }
-    save_token_quota_stats(stats)
-    return True
+    with _quota_lock:
+        return save_token_quota_stats(stats)
 
 
 # --- PHÂN QUYỀN TÍNH NĂNG TỪNG GÓI ---
@@ -706,22 +794,10 @@ def get_current_license_status(force_cloud_sync=False):
             }
             save_local_license_cache(cached)
 
-            # Đồng bộ đăng ký dùng thử lên Google Sheet trong background thread (không block)
-            cfg = load_app_config()
-            gas_url = cfg.get('google_apps_script_url', '').strip()
-            token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
-            if gas_url:
-                try:
-                    threading.Thread(target=lambda: requests.post(gas_url, json={
-                        "action": "register_trial",
-                        "token": token,
-                        "hwid": f"AMS-{short_hwid}",
-                        "user_name": "Khách Dùng Thử 24h",
-                        "phone_zalo": "",
-                        "expire_date": expire_str
-                    }, timeout=5), daemon=True).start()
-                except Exception:
-                    pass
+    # Máy đã có cache dùng thử từ một lần gửi hỏng trước đó cũng được tự đồng
+    # bộ lại theo nhịp giới hạn. Đây là phần còn thiếu khiến khách không xuất
+    # hiện trên Sheet dù vẫn dùng thử bình thường trên máy.
+    schedule_trial_cloud_registration(cached)
 
     # Anti-Clock Rollback: Nếu phát hiện đồng hồ bị lùi giờ
     if cached.get('clock_tampered'):
@@ -839,12 +915,73 @@ def check_permission(feature_name):
     return True, "OK", status
 
 
+def register_trial_in_cloud(license_info=None, timeout=6):
+    """Đăng ký (hoặc cập nhật) máy dùng thử trên Google Sheet có kiểm tra lỗi."""
+    cfg = load_app_config()
+    gas_url = cfg.get('google_apps_script_url', '').strip()
+    token = cfg.get('client_license_token', '').strip()
+    if not gas_url or not token:
+        return False, 'Chưa cấu hình máy chủ bản quyền'
+
+    info = license_info or load_local_license_cache() or {}
+    hwid = get_hardware_id()
+    expire_str = str(info.get('expire_str') or '').strip()
+    if not expire_str:
+        expire_epoch = int(info.get('expire_epoch') or 0)
+        if expire_epoch:
+            expire_str = datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M')
+
+    payload = {
+        'action': 'register_trial',
+        'token': token,
+        # Gửi đủ HWID 12 ký tự. Apps Script sẽ nâng cấp dòng short-HWID cũ
+        # thay vì tạo thêm một dòng trùng.
+        'hwid': hwid,
+        'user_name': str(info.get('user_name') or 'Khách Dùng Thử 24h'),
+        'phone_zalo': str(info.get('phone_zalo') or ''),
+        'expire_date': expire_str,
+    }
+    try:
+        response = requests.post(gas_url, json=payload, timeout=timeout)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get('success'):
+            return False, str(data.get('error') or data.get('message') or 'Máy chủ từ chối đăng ký dùng thử')
+        return True, ''
+    except (requests.RequestException, ValueError) as exc:
+        return False, str(exc)
+
+
+def schedule_trial_cloud_registration(license_info):
+    """Gửi lại đăng ký dùng thử có giới hạn nhịp để không làm chậm giao diện."""
+    global _last_trial_registration_attempt
+    if not license_info or license_info.get('tier') != 'trial':
+        return
+    if int(license_info.get('expire_epoch') or 0) <= int(time.time()):
+        return
+
+    with _trial_registration_lock:
+        now = time.monotonic()
+        if now - _last_trial_registration_attempt < TRIAL_REGISTRATION_RETRY_SECONDS:
+            return
+        _last_trial_registration_attempt = now
+
+    def _worker():
+        success, error = register_trial_in_cloud(license_info)
+        if not success:
+            # Không log token/HWID/payload để tránh lộ dữ liệu nhạy cảm.
+            print(f"Chưa đồng bộ được đăng ký dùng thử lên Google Sheet: {error}")
+
+    threading.Thread(target=_worker, name='trial-sheet-sync', daemon=True).start()
+
 
 def activate_trial_license(user_name="Khách Dùng Thử", phone_zalo=""):
     """Tự động kích hoạt gói Trial 24h cho máy mới."""
     current = get_current_license_status()
     if current.get('status') == 'ACTIVE':
         return False, "Máy tính của bạn đang có bản quyền hoạt động!"
+    if not current.get('can_activate_trial', False):
+        return False, "Máy tính này đã dùng hết lượt trải nghiệm 24h. Vui lòng nâng cấp gói để tiếp tục sử dụng."
 
     hwid = get_hardware_id()
     now = datetime.now()
@@ -865,23 +1002,14 @@ def activate_trial_license(user_name="Khách Dùng Thử", phone_zalo=""):
     }
 
     save_local_license_cache(license_info)
+    _set_machine_trial_anchor(expire_epoch)
 
-    # Nếu có Google Sheets, gửi cập nhật lên Cloud
-    cfg = load_app_config()
-    gas_url = cfg.get('google_apps_script_url', '').strip()
-    token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
-    if gas_url:
-        try:
-            requests.post(gas_url, json={
-                "action": "register_trial",
-                "token": token,
-                "hwid": hwid,
-                "user_name": user_name,
-                "phone_zalo": phone_zalo,
-                "expire_date": expire_str
-            }, timeout=6)
-        except Exception:
-            pass
+    # Khi người dùng chủ động bấm kích hoạt, phản hồi phải phản ánh được việc
+    # Sheet đã nhận dữ liệu hay chưa; lỗi mạng sẽ được thử lại ở nền.
+    cloud_success, cloud_error = register_trial_in_cloud(license_info)
+    if not cloud_success:
+        schedule_trial_cloud_registration(license_info)
+        return True, f"🎉 Đã kích hoạt Dùng Thử 24h trên máy. Hệ thống sẽ tự đồng bộ lên Sheet khi có mạng ({cloud_error})."
 
     return True, "🎉 Chúc mừng! Đã kích hoạt thành công 24h Dùng Thử trải nghiệm đầy đủ tính năng!"
 
@@ -920,6 +1048,8 @@ def activate_test_tier(tier="vip", days=30):
     Kích hoạt trực tiếp gói cước (Trial, Pro, VIP, Yearly) không cần chờ thanh toán thật.
     Tự động lưu cache .license.dat và đẩy dòng cập nhật lên Google Sheet!
     """
+    if os.environ.get("NOVACUT_ENABLE_DEV_ENDPOINTS") != "1":
+        return False, "Chức năng kích hoạt thử nghiệm bị tắt trong bản phát hành."
     tier = tier.lower()
     if tier not in PACKAGE_TIERS:
         tier = "vip"
@@ -979,6 +1109,8 @@ def check_sepay_direct_api(tier="vip"):
       2. Tự động gửi dữ liệu giao dịch lên Google Sheet để đồng bộ
       3. Trả về True kèm thông tin bản quyền mới!
     """
+    if os.environ.get("NOVACUT_ENABLE_DIRECT_SEPAY") != "1":
+        return False, "Đối soát trực tiếp bị tắt; vui lòng xác thực qua máy chủ bản quyền."
     cfg = load_app_config()
     sepay_token = cfg.get('sepay_api_token', '').strip()
     bank_account = cfg.get('bank_account', '').strip()
@@ -1033,13 +1165,14 @@ def check_sepay_direct_api(tier="vip"):
                 
             # 2. Kiểm tra mốc thời gian giao dịch (Chống nhận nhầm giao dịch cũ trong quá khứ)
             tx_date_str = str(tx.get('transaction_date') or '').strip()
-            if tx_date_str:
-                try:
-                    tx_dt = datetime.strptime(tx_date_str, '%Y-%m-%d %H:%M:%S')
-                    if int(tx_dt.timestamp()) < min_valid_epoch:
-                        continue # Bỏ qua giao dịch đã cũ
-                except Exception:
-                    pass
+            if not tx_date_str:
+                continue
+            try:
+                tx_dt = datetime.strptime(tx_date_str, '%Y-%m-%d %H:%M:%S')
+                if int(tx_dt.timestamp()) < min_valid_epoch:
+                    continue
+            except (TypeError, ValueError):
+                continue
                 
             content = str(tx.get('transaction_content') or tx.get('content') or '').upper()
             amount_in = float(tx.get('amount_in') or tx.get('transferAmount') or 0)
@@ -1049,18 +1182,14 @@ def check_sepay_direct_api(tier="vip"):
             
             if is_content_matched:
                 # 4. So khớp số tiền chuyển khoản (Amount Verification)
-                if 'YEARLY' in content or amount_in >= prices.get('yearly', 3990000):
-                    matched_tier = 'yearly'
-                elif 'VIP' in content or amount_in >= prices.get('vip', 500000):
-                    matched_tier = 'vip'
-                elif 'PRO' in content or amount_in >= prices.get('pro', 300000):
-                    matched_tier = 'pro'
-                elif 'TEST' in content or amount_in >= 5000:
-                    matched_tier = 'vip'
-                else:
-                    if amount_in < 5000:
-                        continue
-                    matched_tier = tier or 'vip'
+                requested_tier = str(tier or '').lower()
+                content_tiers = [name for name in ('yearly', 'vip', 'pro') if name.upper() in content]
+                matched_tier = content_tiers[0] if len(content_tiers) == 1 else requested_tier
+                if matched_tier not in ('yearly', 'vip', 'pro'):
+                    continue
+                expected_amount = float(prices.get(matched_tier, 0) or 0)
+                if expected_amount <= 0 or amount_in < expected_amount:
+                    continue
                     
                 matched_tx = tx
                 break
@@ -1125,23 +1254,25 @@ def check_sepay_direct_api(tier="vip"):
 
 
 _cached_bank_details = None
+_cached_bank_details_key = None
 
 def resolve_bank_details(cfg=None):
     """
     Tự động lấy thông tin Ngân hàng (Bank Code, Số tài khoản, Tên chủ tài khoản)
     trực tiếp từ SePay API nếu trong cấu hình để trống!
     """
-    global _cached_bank_details
-    if _cached_bank_details:
-        return _cached_bank_details
-        
     if cfg is None:
         cfg = load_app_config()
-        
+
     bank_code = cfg.get('bank_code', '').strip()
     bank_account = cfg.get('bank_account', '').strip()
     bank_name = cfg.get('bank_account_name', '').strip()
     sepay_token = cfg.get('sepay_api_token', '').strip()
+    cache_key = (bank_code, bank_account, bank_name, sepay_token)
+
+    global _cached_bank_details, _cached_bank_details_key
+    if _cached_bank_details and _cached_bank_details_key == cache_key:
+        return _cached_bank_details
     
     # Nếu chưa có bank_code hoặc bank_account mà có SePay token -> Tự động truy vấn SePay API
     if (not bank_code or not bank_account) and sepay_token:
@@ -1168,19 +1299,12 @@ def resolve_bank_details(cfg=None):
         except Exception as e:
             print(f"Lỗi tự động lấy tài khoản từ SePay: {e}")
             
-    # Fallback mặc định an toàn
-    if not bank_code:
-        bank_code = 'TPBank'
-    if not bank_account:
-        bank_account = '02151334904'
-    if not bank_name:
-        bank_name = 'NGUYEN HOANG NAM'
-        
     _cached_bank_details = {
         'bank_code': bank_code,
         'bank_account': bank_account,
         'bank_account_name': bank_name
     }
+    _cached_bank_details_key = cache_key
     return _cached_bank_details
 
 
@@ -1188,32 +1312,40 @@ def generate_vietqr_url(tier="vip", amount=None):
     """
     Tạo link mã QR VietQR động (chuẩn Napas 247) tích hợp SePay.
     Tự động lấy ngân hàng từ SePay API nếu để trống!
-    Cú pháp nội dung: AMS <SHORT_HWID> <TIER_CODE>
+    Cú pháp nội dung: AMS <HWID_12_KÝ_TỰ> <TIER_CODE>
     """
     cfg = load_app_config()
     bank_info = resolve_bank_details(cfg)
-    bank_code = bank_info.get('bank_code', 'TPBank')
-    bank_account = bank_info.get('bank_account', '02151334904')
-    bank_name = bank_info.get('bank_account_name', 'NGUYEN HOANG NAM')
+    bank_code = bank_info.get('bank_code', '').strip()
+    bank_account = bank_info.get('bank_account', '').strip()
+    bank_name = bank_info.get('bank_account_name', '').strip()
+    if not bank_code or not bank_account or not bank_name:
+        raise RuntimeError('Chưa cấu hình đầy đủ NOVACUT_BANK_CODE, NOVACUT_BANK_ACCOUNT và NOVACUT_BANK_ACCOUNT_NAME')
+    if not re.fullmatch(r'[A-Za-z0-9]{3,20}', bank_code):
+        raise RuntimeError('Mã ngân hàng không hợp lệ')
+    if not re.fullmatch(r'\d{6,24}', bank_account):
+        raise RuntimeError('Số tài khoản nhận tiền không hợp lệ')
     
     hwid = get_hardware_id()
     short_hwid = get_short_hwid(hwid)
+    payment_hwid = hwid.replace('AMS-', '').replace('-', '').upper()
 
     global _last_qr_generation_epoch
     _last_qr_generation_epoch = int(time.time())
 
-    if tier == 'test':
-        amount = 5000 if amount is None else amount
-        transfer_content = f"AMS {short_hwid} TEST".replace(' ', '%20')
-        raw_content = f"AMS {short_hwid} TEST"
-    else:
-        if amount is None:
-            amount = cfg.get('prices', {}).get(tier, 500000)
-        transfer_content = f"AMS {short_hwid} {tier.upper()}".replace(' ', '%20')
-        raw_content = f"AMS {short_hwid} {tier.upper()}"
+    if tier not in ('pro', 'vip', 'yearly'):
+        raise ValueError('Gói thanh toán không hợp lệ')
+    configured_amount = int(cfg.get('prices', {}).get(tier, 0) or 0)
+    if configured_amount <= 0:
+        raise RuntimeError(f'Chưa cấu hình giá hợp lệ cho gói {tier}')
+    amount = configured_amount
+    # Dùng đủ 12 ký tự HWID để webhook không thể gia hạn nhầm khi hai máy có
+    # cùng 6 ký tự đầu. VietQR tự điền nội dung này nên khách không phải gõ tay.
+    transfer_content = quote(f"AMS {payment_hwid} {tier.upper()}", safe='')
+    raw_content = f"AMS {payment_hwid} {tier.upper()}"
 
     # Link VietQR QuickLink (hỗ trợ hiển thị trực tiếp ảnh QR sắc nét)
-    qr_image_url = f"https://img.vietqr.io/image/{bank_code}-{bank_account}-compact2.png?amount={amount}&addInfo={transfer_content}&accountName={bank_name.replace(' ', '%20')}"
+    qr_image_url = f"https://img.vietqr.io/image/{bank_code}-{bank_account}-compact2.png?amount={amount}&addInfo={transfer_content}&accountName={quote(bank_name, safe='')}"
 
     return {
         "qr_image_url": qr_image_url,
@@ -1238,43 +1370,11 @@ def activate_license_with_key(key_str):
     if not key_str:
         return False, "Vui lòng nhập mã kích hoạt!"
 
-    # 1. Thử xác thực Key Offline
-    try:
-        parts = key_str.split('-')
-        if len(parts) == 5 and parts[0] == 'AMS' and parts[1] == 'KEY':
-            tier = parts[2].lower()
-            days = int(parts[3])
-            sig_received = parts[4]
-
-            hwid = get_hardware_id()
-            short_hwid = get_short_hwid(hwid)
-            expected_sig = hashlib.sha256(f"{short_hwid}|{tier}|{days}|{SECRET_SALT}".encode('utf-8')).hexdigest()[:8].upper()
-
-            if sig_received == expected_sig and tier in PACKAGE_TIERS:
-                now = datetime.now()
-                expire_dt = now + timedelta(days=days)
-                expire_epoch = int(expire_dt.timestamp())
-                expire_str = expire_dt.strftime('%d/%m/%Y %H:%M')
-
-                license_info = {
-                    "hwid": hwid,
-                    "tier": tier,
-                    "plan_name": PACKAGE_TIERS[tier]["plan_name"],
-                    "expire_epoch": expire_epoch,
-                    "expire_str": expire_str,
-                    "activated_at": int(now.timestamp()),
-                    "pro_selected_module": None if tier == 'pro' else None,
-                    "features": PACKAGE_TIERS[tier]["features"]
-                }
-                save_local_license_cache(license_info)
-                return True, f"🎉 Kích hoạt thành công {PACKAGE_TIERS[tier]['plan_name']} ({days} ngày)!"
-    except Exception:
-        pass
-
-    # 2. Thử xác thực Key qua Google Sheets Cloud
+    # Key phải được xác thực bởi máy chủ. Cơ chế offline HMAC cũ đã bị loại bỏ
+    # vì secret nằm trong client cho phép người dùng tự tạo license.
     cfg = load_app_config()
     gas_url = cfg.get('google_apps_script_url', '').strip()
-    token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
+    token = cfg.get('client_license_token', '')
     if gas_url:
         try:
             hwid = get_hardware_id()
@@ -1297,11 +1397,8 @@ def activate_license_with_key(key_str):
 
 
 def generate_offline_master_key(short_hwid, tier="vip", days=30):
-    """(Dành cho Admin) Sinh mã kích hoạt offline cho khách hàng."""
-    short_hwid = short_hwid.strip().upper()
-    tier = tier.lower()
-    sig = hashlib.sha256(f"{short_hwid}|{tier}|{days}|{SECRET_SALT}".encode('utf-8')).hexdigest()[:8].upper()
-    return f"AMS-KEY-{tier.upper()}-{days}-{sig}"
+    """Cơ chế key offline cũ không còn an toàn và đã bị vô hiệu hóa."""
+    raise RuntimeError("Offline master key generation has been disabled; use the license server.")
 
 
 def sync_with_cloud():
@@ -1312,8 +1409,8 @@ def sync_with_cloud():
     """
     cfg = load_app_config()
     gas_url = cfg.get('google_apps_script_url', '').strip()
-    token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
-    if not gas_url:
+    token = cfg.get('client_license_token', '')
+    if not gas_url or not token:
         return None
 
     hwid = get_hardware_id()
@@ -1321,7 +1418,9 @@ def sync_with_cloud():
     nonce = uuid.uuid4().hex[:12]
     client_time = int(time.time())
 
-    hwid_candidates = [f"AMS-{short_hwid}", hwid, short_hwid]
+    # Kiểm tra bản ghi HWID đầy đủ trước; short-HWID chỉ để tương thích các
+    # dòng đã được tạo bởi phiên bản cũ.
+    hwid_candidates = [hwid, f"AMS-{short_hwid}", short_hwid]
 
     for cand_hwid in hwid_candidates:
         try:
@@ -1368,7 +1467,7 @@ def sync_with_cloud():
                     server_time = int(data.get('server_time') or time.time())
                     local_cached = load_local_license_cache()
                     pro_mod = data.get('pro_selected_module') or (local_cached.get('pro_selected_module') if local_cached else None)
-                    vip_keys = data.get('api_keys') or (local_cached.get('vip_api_keys') if local_cached else {})
+                    vip_keys = local_cached.get('vip_api_keys', {}) if local_cached else {}
 
                     # Tự động nạp API Keys cho Gói VIP / Gói Năm / Gói Admin
                     if vip_keys and isinstance(vip_keys, dict) and (tier in ['vip', 'yearly', 'admin']):
@@ -1408,6 +1507,20 @@ def sync_with_cloud():
                     return license_info
         except Exception as e:
             print(f"Lỗi đồng bộ Google Sheets: {e}")
+
+    # Nếu cloud không có dòng nhưng máy còn Trial hợp lệ, đăng ký lại ngay khi
+    # người dùng bấm "Đồng bộ". Nhờ vậy lỗi mạng ở lần mở máy đầu không còn
+    # khiến máy khách bị mất khỏi Google Sheet mãi mãi.
+    local_cached = load_local_license_cache()
+    if (
+        local_cached
+        and local_cached.get('tier') == 'trial'
+        and int(local_cached.get('expire_epoch') or 0) > int(time.time())
+    ):
+        success, error = register_trial_in_cloud(local_cached)
+        if success:
+            return local_cached
+        print(f"Chưa thể đăng ký lại Trial lên Google Sheet: {error}")
     return None
 
 
@@ -1418,8 +1531,8 @@ def sync_user_keys_to_cloud(keys_dict):
     """
     cfg = load_app_config()
     gas_url = cfg.get('google_apps_script_url', '').strip()
-    token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
-    if not gas_url:
+    token = cfg.get('client_license_token', '')
+    if not gas_url or not token or os.environ.get('NOVACUT_SYNC_KEYS_TO_CLOUD') != '1':
         return False
 
     hwid = get_hardware_id()

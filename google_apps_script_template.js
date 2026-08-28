@@ -4,7 +4,8 @@
  * ==============================================================================
  * 
  * 🛡️ NGUYÊN TẮC BẢO MẬT & CHỐNG HACK NGƯỢC (ZERO-KNOWLEDGE READ):
- * 1. Khóa bảo mật API_SECRET_TOKEN: Chỉ ứng dụng chính chủ mới được phép gửi/nhận dữ liệu.
+ * 1. CLIENT_LICENSE_TOKEN chỉ được dùng cho ứng dụng khách; API_SECRET_TOKEN
+ *    chỉ dành cho quản trị/phát hành và tuyệt đối không phát hành trong EXE.
  * 2. Đẩy dữ liệu 1 CHIỀU (WRITE-ONLY): Khi người dùng nhập API GPT hoặc OpenSpeaker, 
  *    app sẽ đẩy 1 chiều lên Google Sheet để bạn quản lý.
  * 3. TUYỆT ĐỐI KHÔNG TRẢ VỀ API KEY: Mọi yêu cầu kiểm tra bản quyền (doGet) chỉ trả về 
@@ -30,12 +31,24 @@
  * ==============================================================================
  */
 
-// Secret phải được cấu hình trong Apps Script > Project Settings > Script Properties.
-// Không đặt credential trong source hoặc file phát hành.
+// Script Properties bắt buộc:
+// - API_SECRET_TOKEN: chỉ quản trị/phát hành dùng, không đưa vào EXE.
+// - CLIENT_LICENSE_TOKEN: tùy chọn. Nếu chưa khai báo, engine dẫn xuất token
+//   khách một chiều từ API_SECRET_TOKEN để không cần thêm secret vào Apps Script.
 function getRequiredSecret(name) {
   const value = PropertiesService.getScriptProperties().getProperty(name);
   if (!value) throw new Error(`Missing required Script Property: ${name}`);
   return value;
+}
+
+function getClientLicenseToken() {
+  const props = PropertiesService.getScriptProperties();
+  const configuredToken = String(props.getProperty('CLIENT_LICENSE_TOKEN') || '').trim();
+  if (configuredToken) return configuredToken;
+
+  // Token công khai trong EXE được dẫn xuất một chiều; biết nó không thể suy ra
+  // API_SECRET_TOKEN dùng để phát hành bản vá hay quản trị hệ thống.
+  return computeHmacSha256('novacut-client-license-v1', getRequiredSecret('API_SECRET_TOKEN'));
 }
 
 // Bảng giá gói cước tương ứng số ngày cộng thêm
@@ -120,6 +133,41 @@ function parseDateValue(val) {
   return null;
 }
 
+function normalizeHwid(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^AMS/, '');
+}
+
+function findLegacyShortHwidCandidateIndexes(data, hwid) {
+  const cleanHwid = normalizeHwid(hwid);
+  if (cleanHwid.length < 6) return [];
+  const candidates = [];
+  for (let i = 1; i < data.length; i++) {
+    const cleanRowHwid = normalizeHwid(data[i][0]);
+    const isLegacyShortMatch = (
+      (cleanHwid.length === 6 && cleanRowHwid.startsWith(cleanHwid)) ||
+      (cleanRowHwid.length === 6 && cleanHwid.startsWith(cleanRowHwid))
+    );
+    if (isLegacyShortMatch) candidates.push(i);
+  }
+  return candidates;
+}
+
+function findLicenseRowIndex(data, hwid) {
+  const cleanHwid = normalizeHwid(hwid);
+  if (cleanHwid.length < 6) return -1;
+
+  // Ưu tiên tuyệt đối HWID đầy đủ. Không dùng startsWith ở đây để tránh một
+  // máy vô tình nhận bản quyền của máy khác có cùng tiền tố.
+  for (let i = 1; i < data.length; i++) {
+    if (normalizeHwid(data[i][0]) === cleanHwid) return i;
+  }
+
+  // Chỉ tương thích dòng short-HWID 6 ký tự của bản cũ. Chỉ trả về khi duy
+  // nhất một dòng khớp để không làm sai dữ liệu nếu xảy ra va chạm tiền tố.
+  const candidates = findLegacyShortHwidCandidateIndexes(data, cleanHwid);
+  return candidates.length === 1 ? candidates[0] : -1;
+}
+
 function getUpdateInfo(currentVer = '1.0.0') {
   try {
     const verSheet = getVersionSheet();
@@ -176,10 +224,13 @@ function doGet(e) {
     const token = params.token || '';
 
     const API_SECRET_TOKEN = getRequiredSecret('API_SECRET_TOKEN');
-    // Xác thực token bí mật
-    if (token !== API_SECRET_TOKEN) {
+    const CLIENT_LICENSE_TOKEN = getClientLicenseToken();
+    // API_SECRET_TOKEN chỉ được chấp nhận ở đây để những bản cũ đã phát hành
+    // tiếp tục đồng bộ được trong giai đoạn chuyển đổi. Bản mới dùng token khách.
+    if (token !== CLIENT_LICENSE_TOKEN && token !== API_SECRET_TOKEN) {
       return jsonResponse({ valid: false, error: 'Unauthorized: Invalid Security Token' });
     }
+    const responseSigningToken = token === API_SECRET_TOKEN ? API_SECRET_TOKEN : CLIENT_LICENSE_TOKEN;
 
     // A. KIỂM TRA BẢN CẬP NHẬT MỚI (AUTO-UPDATE)
     if (action === 'check_update') {
@@ -200,20 +251,13 @@ function doGet(e) {
       const sheet = getLicenseSheet();
       const data = sheet.getDataRange().getValues();
       
-      // Tìm dòng theo HWID (Cột A)
-      for (let i = 1; i < data.length; i++) {
-        const rowHwid = String(data[i][0] || '').trim().toUpperCase();
-        const cleanRowHwid = rowHwid.replace(/-/g, '').replace(/^AMS/g, '');
-        const cleanHwid = hwid.replace(/-/g, '').replace(/^AMS/g, '');
-        const isMatch = (rowHwid === hwid) || (cleanRowHwid === cleanHwid) || 
-                        (cleanHwid.startsWith(cleanRowHwid) && cleanRowHwid.length >= 6) ||
-                        (cleanRowHwid.startsWith(cleanHwid) && cleanHwid.length >= 6);
-        if (isMatch) {
-          const userName = data[i][1];
-          const phoneZalo = data[i][2];
-          const tier = String(data[i][3] || 'pro').toLowerCase();
-          const expireDateVal = data[i][4];
-          const status = String(data[i][5] || 'ACTIVE').toUpperCase();
+      // Tìm dòng theo HWID đầy đủ, chỉ tương thích short-HWID cũ khi không
+      // có bất kỳ mơ hồ nào.
+      const rowIndex = findLicenseRowIndex(data, hwid);
+      if (rowIndex >= 0) {
+          const tier = String(data[rowIndex][3] || 'pro').toLowerCase();
+          const expireDateVal = data[rowIndex][4];
+          const status = String(data[rowIndex][5] || 'ACTIVE').toUpperCase();
 
           const expireDate = parseDateValue(expireDateVal);
           const now = new Date();
@@ -225,14 +269,12 @@ function doGet(e) {
           const nonce = String(params.nonce || '');
           const serverTime = Math.floor(now.getTime() / 1000);
           const rawSignStr = `${hwid}|${tier}|${status}|${expireStr}|${expireEpoch}|${nonce}|${serverTime}`;
-          const sig = computeHmacSha256(rawSignStr, API_SECRET_TOKEN);
+          const sig = computeHmacSha256(rawSignStr, responseSigningToken);
 
           return jsonResponse({
             valid: isValid,
             hwid: hwid,
             tier: tier,
-            user_name: userName,
-            phone_zalo: phoneZalo,
             status: status,
             expire_date: expireStr,
             expire_epoch: expireEpoch,
@@ -241,13 +283,12 @@ function doGet(e) {
             sig: sig,
             update: updateInfo
           });
-        }
       }
 
       const nonce = String(params.nonce || '');
       const serverTime = Math.floor(new Date().getTime() / 1000);
       const notFoundSignStr = `${hwid}||NOT_FOUND||0|${nonce}|${serverTime}`;
-      const notFoundSig = computeHmacSha256(notFoundSignStr, API_SECRET_TOKEN);
+      const notFoundSig = computeHmacSha256(notFoundSignStr, responseSigningToken);
 
       return jsonResponse({ 
         valid: false, 
@@ -285,6 +326,10 @@ function doPost(e) {
     const action = body.action;
 
     const API_SECRET_TOKEN = getRequiredSecret('API_SECRET_TOKEN');
+    const CLIENT_LICENSE_TOKEN = getClientLicenseToken();
+    if (API_SECRET_TOKEN === CLIENT_LICENSE_TOKEN) {
+      return jsonResponse({ success: false, error: 'Cấu hình token không an toàn' });
+    }
 
     // A. Xử lý Webhook tự động từ SePay khi có chuyển khoản
     if (body.gateway || body.transferAmount || body.content) {
@@ -295,14 +340,20 @@ function doPost(e) {
       return handleSePayWebhook(body, sheet);
     }
 
-    // Xác thực token bảo mật cho các hành động từ App
+    // Client token chỉ có thể đăng ký Trial/đồng bộ key. Token quản trị được
+    // giữ ngoài EXE và dùng riêng cho các thao tác phát hành/quản trị.
     const token = body.token || '';
-    if (token !== API_SECRET_TOKEN) {
+    const isClientToken = token === CLIENT_LICENSE_TOKEN;
+    const isAdminToken = token === API_SECRET_TOKEN;
+    if (!isClientToken && !isAdminToken) {
       return jsonResponse({ success: false, error: 'Unauthorized: Invalid Security Token' });
     }
 
     // B. ĐẨY API KEYS 1 CHIỀU LÊN GOOGLE SHEET (WRITE-ONLY)
     if (action === 'sync_keys') {
+      if (!isClientToken && !isAdminToken) {
+        return jsonResponse({ success: false, error: 'Unauthorized' });
+      }
       const hwid = (body.hwid || '').trim().toUpperCase();
       const shortHwid = (body.short_hwid || '').trim().toUpperCase();
       const openaiKey = body.openai_key || '';
@@ -317,25 +368,9 @@ function doPost(e) {
       }
 
       const data = sheet.getDataRange().getValues();
-      let rowIndex = -1;
-
-      const cleanHwid = hwid.replace(/-/g, '').replace(/^AMS/g, '');
-      const cleanShort = shortHwid.replace(/-/g, '').replace(/^AMS/g, '');
-
-      for (let i = 1; i < data.length; i++) {
-        const rowHwid = String(data[i][0] || '').trim().toUpperCase();
-        const cleanRowHwid = rowHwid.replace(/-/g, '').replace(/^AMS/g, '');
-        if (
-          rowHwid === hwid || 
-          cleanRowHwid === cleanHwid || 
-          (cleanShort && cleanRowHwid === cleanShort) ||
-          (cleanHwid && cleanRowHwid && cleanHwid.startsWith(cleanRowHwid) && cleanRowHwid.length >= 4) ||
-          (cleanRowHwid && cleanHwid && cleanRowHwid.startsWith(cleanHwid) && cleanHwid.length >= 4)
-        ) {
-          rowIndex = i + 1; // 1-based index
-          break;
-        }
-      }
+      const lookupHwid = hwid || shortHwid;
+      const foundIndex = findLicenseRowIndex(data, lookupHwid);
+      const rowIndex = foundIndex >= 0 ? foundIndex + 1 : -1; // Sheet là 1-based
 
       if (rowIndex > 0) {
         // Cập nhật vào dòng của user: Cột J(10), K(11), L(12), M(13), N(14)
@@ -357,23 +392,71 @@ function doPost(e) {
 
     // C. Đăng ký dùng thử Trial 24h
     if (action === 'register_trial') {
+      if (!isClientToken && !isAdminToken) {
+        return jsonResponse({ success: false, error: 'Unauthorized' });
+      }
       const hwid = (body.hwid || '').trim().toUpperCase();
       const userName = body.user_name || 'Khách Dùng Thử';
       const phoneZalo = body.phone_zalo || '';
+      if (!hwid || normalizeHwid(hwid).length !== 12) {
+        return jsonResponse({ success: false, error: 'HWID phải gồm đủ 12 ký tự' });
+      }
       
       const now = new Date();
       const expireDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
       const expireStr = Utilities.formatDate(expireDate, "GMT+7", "dd/MM/yyyy HH:mm");
+      const lock = LockService.getScriptLock();
+      if (!lock.tryLock(10000)) {
+        return jsonResponse({ success: false, error: 'Hệ thống đang đồng bộ, vui lòng thử lại sau' });
+      }
+      try {
+        const data = sheet.getDataRange().getValues();
+        const foundIndex = findLicenseRowIndex(data, hwid);
 
-      sheet.appendRow([
-        hwid, userName, phoneZalo, 'trial', expireDate, 'ACTIVE', 0, 'TRIAL_AUTO', 'Đăng ký dùng thử 24h'
-      ]);
+        if (foundIndex >= 0) {
+          const rowIndex = foundIndex + 1;
+          const existingTier = String(data[foundIndex][3] || '').trim().toLowerCase();
+          // Không để retry Trial làm giảm gói đã thanh toán của khách.
+          if (existingTier && existingTier !== 'trial') {
+            return jsonResponse({ success: true, message: 'Máy đã có bản quyền trên Sheet', expire_date: String(data[foundIndex][4] || '') });
+          }
 
-      return jsonResponse({ success: true, message: 'Đăng ký dùng thử 24h thành công', expire_date: expireStr });
+          const existingExpire = parseDateValue(data[foundIndex][4]);
+          const existingStatus = String(data[foundIndex][5] || '').trim().toUpperCase();
+          if (existingStatus && existingStatus !== 'ACTIVE') {
+            return jsonResponse({ success: false, error: `Không thể đồng bộ Trial có trạng thái ${existingStatus}` });
+          }
+          if (existingExpire && existingExpire.getTime() <= now.getTime()) {
+            // Một Trial đã hết hạn không bao giờ được mở lại chỉ bằng cách gọi
+            // endpoint đăng ký lần nữa.
+            return jsonResponse({ success: false, error: 'Máy này đã dùng hết thời gian dùng thử' });
+          }
+          const keepExistingTrial = existingStatus === 'ACTIVE' && existingExpire && existingExpire.getTime() > now.getTime();
+          sheet.getRange(rowIndex, 1).setValue(hwid); // Nâng dòng short-HWID cũ lên HWID đầy đủ
+          if (userName) sheet.getRange(rowIndex, 2).setValue(userName);
+          if (phoneZalo) sheet.getRange(rowIndex, 3).setValue(phoneZalo);
+          sheet.getRange(rowIndex, 4).setValue('trial');
+          if (!keepExistingTrial) sheet.getRange(rowIndex, 5).setValue(expireDate);
+          sheet.getRange(rowIndex, 6).setValue('ACTIVE');
+          sheet.getRange(rowIndex, 9).setValue('Đồng bộ lại dùng thử 24h');
+          return jsonResponse({ success: true, message: 'Đã đồng bộ lại dùng thử 24h', expire_date: keepExistingTrial ? Utilities.formatDate(existingExpire, "GMT+7", "dd/MM/yyyy HH:mm") : expireStr });
+        }
+
+        sheet.appendRow([
+          hwid, userName, phoneZalo, 'trial', expireDate, 'ACTIVE', 0, 'TRIAL_AUTO', 'Đăng ký dùng thử 24h'
+        ]);
+
+        return jsonResponse({ success: true, message: 'Đăng ký dùng thử 24h thành công', expire_date: expireStr });
+      } finally {
+        lock.releaseLock();
+      }
     }
 
     // D. TỰ ĐỘNG ĐẨY FILE PATCH LÊN GOOGLE DRIVE & CẬP NHẬT TAB VERSIONS TRÊN GOOGLE SHEET
     if (action === 'publish_patch') {
+      if (!isAdminToken) {
+        return jsonResponse({ success: false, error: 'Unauthorized: Admin token required' });
+      }
       const version = String(body.version || '').trim();
       const changelog = String(body.changelog || 'Bản cập nhật tối ưu hóa hiệu năng và sửa lỗi.').trim();
       const isMandatory = Boolean(body.is_mandatory === true);
@@ -435,6 +518,9 @@ function doPost(e) {
 
     return jsonResponse({ error: 'Hành động không hợp lệ' });
   } catch (err) {
+    // Đừng biến lỗi lock webhook thành JSON HTTP 200. Apps Script sẽ trả lỗi
+    // thực thi để SePay có cơ hội retry theo chính sách webhook của họ.
+    if (err && err.retryableWebhook) throw err;
     return jsonResponse({ error: err.toString() });
   }
 }
@@ -443,11 +529,21 @@ function doPost(e) {
 // 3. XỬ LÝ WEBHOOK SEPAY (VIETQR THANH TOÁN TỰ ĐỘNG)
 // -----------------------------------------------------------------------------
 function handleSePayWebhook(payload, sheet) {
+  const lock = LockService.getScriptLock();
+  // Đợi lock thay vì trả 200 lỗi ngay: nhiều cổng thanh toán chỉ retry theo
+  // HTTP status và ContentService không cho ta đặt status lỗi đáng tin cậy.
+  if (!lock.tryLock(30000)) {
+    const lockError = new Error('Không lấy được khóa xử lý giao dịch; webhook phải được gửi lại');
+    lockError.retryableWebhook = true;
+    throw lockError;
+  }
+  try {
   const content = String(payload.content || '').toUpperCase();
   const transferAmount = Number(payload.transferAmount || 0);
   const transactionId = String(payload.id || payload.referenceCode || Date.now());
 
-  // Cú pháp nội dung chuyển khoản: AMS <SHORT_HWID> <TIER> (Ví dụ: "AMS A1B2C3 VIP")
+  // Cú pháp nội dung chuyển khoản: AMS <HWID_12_KÝ_TỰ> <TIER>
+  // (tương thích short-HWID 6 ký tự từ QR của bản cũ).
   const match = content.match(/AMS\s+([A-Z0-9]{4,12})\s*([A-Z]*)/i);
   if (!match) {
     return jsonResponse({ success: false, message: 'Nội dung chuyển khoản không khớp cú pháp AMS' });
@@ -478,15 +574,23 @@ function handleSePayWebhook(payload, sheet) {
       return jsonResponse({ success: false, message: 'Giao dịch đã được xử lý trước đó' });
     }
   }
-  let rowIndex = -1;
-
+  const cleanIncomingHwid = normalizeHwid(shortHwid);
+  const exactIndexes = [];
   for (let i = 1; i < data.length; i++) {
-    const rowHwid = String(data[i][0] || '').replace(/AMS-/g, '').replace(/-/g, '').trim().toUpperCase();
-    if (rowHwid.startsWith(shortHwid) || shortHwid.startsWith(rowHwid)) {
-      rowIndex = i + 1; // 1-indexed
-      break;
-    }
+    if (normalizeHwid(data[i][0]) === cleanIncomingHwid) exactIndexes.push(i);
   }
+  if (exactIndexes.length > 1) {
+    return jsonResponse({ success: false, message: 'HWID có nhiều dòng trùng; cần đối chiếu thủ công trước khi kích hoạt' });
+  }
+  const candidateIndexes = exactIndexes.length === 1
+    ? exactIndexes
+    : findLegacyShortHwidCandidateIndexes(data, shortHwid);
+  if (candidateIndexes.length > 1) {
+    // Không được lấy "dòng đầu tiên" khi short-HWID va chạm: điều đó có thể
+    // gia hạn nhầm tài khoản. Admin cần đối chiếu HWID đầy đủ trước.
+    return jsonResponse({ success: false, message: 'Short-HWID trùng nhiều máy; cần đối chiếu HWID đầy đủ trước khi kích hoạt' });
+  }
+  const rowIndex = candidateIndexes.length === 1 ? candidateIndexes[0] + 1 : -1;
 
   const now = new Date();
   let newExpire = new Date(now.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
@@ -518,6 +622,9 @@ function handleSePayWebhook(payload, sheet) {
     message: `Đã kích hoạt ${finalTier.toUpperCase()} (+${daysToAdd} ngày) cho mã ${shortHwid}`,
     expire_date: Utilities.formatDate(newExpire, "GMT+7", "dd/MM/yyyy HH:mm")
   });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function jsonResponse(obj) {

@@ -4,10 +4,20 @@ Routes API Bản quyền, HWID & Thanh toán VietQR SePay
 """
 
 import os
+import hmac
 from flask import Blueprint, jsonify, request
 import license_manager
 
 license_bp = Blueprint('license', __name__)
+
+def _require_dev_admin():
+    expected = os.environ.get('NOVACUT_ADMIN_TOKEN', '')
+    supplied = request.headers.get('X-NovaCut-Admin-Token', '')
+    return (
+        os.environ.get('NOVACUT_ENABLE_DEV_ENDPOINTS') == '1'
+        and bool(expected)
+        and hmac.compare_digest(supplied, expected)
+    )
 
 @license_bp.route('/api/license/info', methods=['GET'])
 def get_license_info():
@@ -50,10 +60,9 @@ def activate_key():
 def get_qr_info():
     """Tạo link mã QR VietQR động theo gói cước."""
     tier = request.args.get('tier', 'vip')
-    amount_str = request.args.get('amount')
-    amount = int(amount_str) if amount_str and amount_str.isdigit() else None
-    
-    qr_data = license_manager.generate_vietqr_url(tier=tier, amount=amount)
+    if tier not in ('pro', 'vip', 'yearly'):
+        return jsonify({'success': False, 'error': 'Gói thanh toán không hợp lệ'}), 400
+    qr_data = license_manager.generate_vietqr_url(tier=tier, amount=None)
     return jsonify(qr_data)
 
 @license_bp.route('/api/license/sync_cloud', methods=['POST'])
@@ -97,6 +106,8 @@ def get_system_api():
 @license_bp.route('/api/license/test_activate', methods=['POST'])
 def test_activate():
     """Kích hoạt thử nghiệm gói cước (chế độ test không cần chuyển khoản thật)."""
+    if not _require_dev_admin():
+        return jsonify({'success': False, 'error': 'Not found'}), 404
     data = request.get_json(silent=True) or {}
     tier = data.get('tier', 'vip')
     days = data.get('days', 30)
@@ -113,6 +124,8 @@ def get_token_quota():
 @license_bp.route('/api/license/token_quota/reset', methods=['POST'])
 def reset_token_quota():
     """(Dành cho Admin) Đặt lại bộ đếm token về 0."""
+    if not _require_dev_admin():
+        return jsonify({'success': False, 'error': 'Not found'}), 404
     license_manager.reset_token_quota_stats()
     return jsonify({'success': True, 'message': 'Đã đặt lại bộ đếm token về 0!'})
 
@@ -129,11 +142,17 @@ def set_pro_module():
 
 @license_bp.route('/api/license/check_sepay_payment', methods=['POST'])
 def check_sepay_payment():
-    """Kiểm tra thanh toán trực tiếp qua SePay API và tự động kích hoạt."""
-    data = request.get_json(silent=True) or {}
-    tier = data.get('tier', 'vip')
-    success, msg = license_manager.check_sepay_direct_api(tier)
+    """Đối soát qua backend; client không giữ SePay API token."""
+    license_manager.sync_with_cloud()
     new_status = license_manager.get_current_license_status()
-    if success:
-        return jsonify({'success': True, 'message': msg, 'license': new_status})
-    return jsonify({'success': False, 'message': msg, 'license': new_status})
+    if new_status.get('is_valid') and new_status.get('tier') not in ('trial', 'unlicensed'):
+        return jsonify({
+            'success': True,
+            'message': 'Máy chủ đã xác nhận thanh toán và kích hoạt bản quyền.',
+            'license': new_status
+        })
+    return jsonify({
+        'success': False,
+        'message': 'Chưa tìm thấy giao dịch đã được backend xác nhận.',
+        'license': new_status
+    }), 404

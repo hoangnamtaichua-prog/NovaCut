@@ -8,7 +8,18 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-*(Hiện tại không có thay đổi nào đang chờ. Toàn bộ các hạng mục đã hoàn tất và đóng gói vào bản phát hành v1.2.2).*
+1. **Sửa lỗi Crash khởi động trên máy Dev và Tối ưu hóa thứ tự nạp Overlay Patch (`web_app.py`, `patches/active/routes/*`):**
+   - Tối ưu hóa thứ tự nạp `sys.path` trong `web_app.py`: Tự động nhận diện môi trường Git Dev (`is_dev`), luôn ưu tiên `ROOT_DIR` trước `PATCH_DIR` (`patches/active`) để code mới viết không bị các file cũ trong overlay làm che khuất (shadowing). Chỉ bật ưu tiên overlay khi chạy bản đóng gói hoặc có cờ `NOVACUT_USE_PATCH_OVERLAY=1`.
+   - Bổ sung file thiếu `routes/security.py` và cập nhật `USER_DATA_DIR` vào `patches/active/routes/state.py`. Đồng bộ toàn diện các file Python giữa thư mục gốc và `patches/active/` để cả hai chế độ chạy độc lập đều hoạt động ổn định 100%.
+
+2. **Sửa lỗi Salt bảo mật bản quyền và định danh HWID (`license_manager.py`, `patches/active/license_manager.py`):**
+   - Bổ sung `DEFAULT_LOCAL_SALT` làm giá trị fallback cho `SECRET_SALT` khi biến môi trường `NOVACUT_LOCAL_INTEGRITY_KEY` không được gán trên máy.
+   - Khắc phục lỗi tính sai HWID, lỗi chữ ký HMAC không hợp lệ khi nạp cache và lỗi chặn lưu `save_local_license_cache`, giúp bản quyền offline và Admin/Pro nhận diện chính xác 100%.
+
+3. **Sửa đồng bộ Trial lên Google Sheet và cố định VietQR (`license_manager.py`, `google_apps_script_template.js`, `scripts/test_license_sync_regression.py`):**
+   - Gửi HWID đầy đủ, xác thực phản hồi của Google Apps Script và tự thử lại đăng ký Trial khi lần gửi đầu gặp lỗi mạng/máy chủ; EXE cài mới nhận bootstrap kết nối tối thiểu để vẫn lên Sheet, không chứa token quản trị/phát hành.
+   - Apps Script nâng cấp an toàn các dòng short-HWID cũ, khóa thao tác ghi đồng thời, chặn mở lại Trial đã hết hạn và không ghi đè gói đã thanh toán.
+   - Dùng đủ HWID trong nội dung VietQR để không gia hạn nhầm khách; ngăn cấu hình ngân hàng cũ ghi đè thông tin nhận tiền do bản phát hành quản lý; bổ sung kiểm thử hồi quy cho cả hai lỗi và tách token khách khỏi token quản trị Google Apps Script.
 
 ---
 

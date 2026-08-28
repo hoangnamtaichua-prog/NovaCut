@@ -1,10 +1,38 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading
 from routes.state import *
+from routes.security import is_path_allowed, safe_join
 import asr_manager
 import license_manager
+from urllib.parse import urlparse
 
 subtitles_bp = Blueprint('subtitles', __name__)
+MAX_SUBTITLE_FILE_BYTES = 20 * 1024 * 1024
+MAX_SUBTITLE_ITEMS = 50000
+MAX_AI_SUBTITLE_ITEMS = 5000
+MAX_AI_TEXT_CHARS = 500000
+
+
+def _require_editor():
+    allowed, message, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'success': False, 'error': message}), 403
+    return None
+
+
+def _validate_api_base_url(value):
+    parsed = urlparse(str(value or '').strip())
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('OpenAI Base URL phải là HTTPS hợp lệ và không chứa thông tin đăng nhập.')
+    allowed_hosts = {'api.openai.com', 'api.ai33.pro'}
+    allowed_hosts.update(
+        item.strip().lower()
+        for item in os.environ.get('NOVACUT_ALLOWED_AI_HOSTS', '').split(',')
+        if item.strip()
+    )
+    if parsed.hostname.lower() not in allowed_hosts:
+        raise ValueError('Tên miền OpenAI Base URL chưa có trong NOVACUT_ALLOWED_AI_HOSTS.')
+    return str(value).rstrip('/')
 
 def _time_to_seconds(t_str):
     try:
@@ -36,13 +64,10 @@ def _normalize_timestamp(t_str):
         total_sec = hrs * 3600 + mins * 60 + secs
         if total_sec < 0:
             total_sec = 0.0
-        h = int(total_sec // 3600)
-        m = int((total_sec % 3600) // 60)
-        s = int(total_sec % 60)
-        ms = int(round((total_sec % 1) * 1000))
-        if ms >= 1000:
-            s += 1
-            ms = 0
+        total_ms = max(0, int(round(total_sec * 1000)))
+        h, remainder = divmod(total_ms, 3_600_000)
+        m, remainder = divmod(remainder, 60_000)
+        s, ms = divmod(remainder, 1000)
         return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
     except Exception:
         return "00:00:00.000"
@@ -101,17 +126,18 @@ def _parse_srt_tolerant(content):
 
 @subtitles_bp.route('/api/subtitles/parse_file', methods=['POST'])
 def parse_subtitles_file():
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
     data = request.json or {}
     srt_path = data.get('srt_path')
     if not srt_path:
         return jsonify({'success': False, 'error': 'Chưa chọn file phụ đề', 'subtitles': []})
     srt_path = os.path.normpath(srt_path.strip('\'"'))
-    if not os.path.exists(srt_path):
-        alt_path = os.path.abspath(srt_path)
-        if os.path.exists(alt_path):
-            srt_path = alt_path
-        else:
-            return jsonify({'success': False, 'error': 'File phụ đề không tồn tại', 'subtitles': []})
+    if not is_path_allowed(srt_path, must_exist=True, extensions={'.srt', '.vtt'}):
+        return jsonify({'success': False, 'error': 'File phụ đề không tồn tại hoặc chưa được cho phép', 'subtitles': []}), 400
+    if os.path.getsize(srt_path) > MAX_SUBTITLE_FILE_BYTES:
+        return jsonify({'success': False, 'error': 'File phụ đề vượt quá 20 MB', 'subtitles': []}), 413
     try:
         # Hỗ trợ nhiều loại encoding (utf-8, utf-8-sig, gbk, utf-16)
         content = ""
@@ -123,40 +149,48 @@ def parse_subtitles_file():
             except Exception:
                 continue
         subs = _parse_srt_tolerant(content)
+        if len(subs) > MAX_SUBTITLE_ITEMS:
+            return jsonify({'success': False, 'error': 'File có quá nhiều mục phụ đề', 'subtitles': []}), 413
         return jsonify({'success': True, 'subtitles': subs})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'subtitles': []})
 
 def _format_srt_timestamp_helper(seconds):
-    if seconds is None or seconds < 0:
-        seconds = 0
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int(round((seconds - int(seconds)) * 1000))
-    if ms >= 1000:
-        s += 1
-        ms = 0
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    total_ms = max(0, int(round(seconds * 1000)))
+    h, remainder = divmod(total_ms, 3_600_000)
+    m, remainder = divmod(remainder, 60_000)
+    s, ms = divmod(remainder, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 @subtitles_bp.route('/api/subtitles/export_temp', methods=['POST'])
 def export_temp_srt():
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
     data = request.json or {}
     subtitles = data.get('subtitles', [])
     video_path = data.get('video_path', '')
     
     if not subtitles:
         return jsonify({'success': False, 'error': 'Danh sách phụ đề rỗng'}), 400
+    if not isinstance(subtitles, list) or len(subtitles) > MAX_SUBTITLE_ITEMS:
+        return jsonify({'success': False, 'error': 'Danh sách phụ đề không hợp lệ hoặc quá lớn'}), 413
+    if video_path and not is_path_allowed(video_path, must_exist=True, extensions={'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'}):
+        return jsonify({'success': False, 'error': 'Video tham chiếu không hợp lệ hoặc chưa được cho phép'}), 400
         
     try:
-        if video_path and os.path.exists(video_path):
+        if video_path and is_path_allowed(video_path, must_exist=True, extensions={'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'}):
             base_dir = os.path.dirname(os.path.abspath(video_path))
             video_name = os.path.splitext(os.path.basename(video_path))[0]
-            out_path = os.path.join(base_dir, f"{video_name}_extracted.srt")
+            out_path = safe_join(base_dir, f"{video_name}_extracted.srt", extensions={'.srt'})
         else:
-            temp_dir = os.path.join(ROOT_DIR, 'auto_edit_temp')
+            temp_dir = os.path.join(USER_DATA_DIR, 'temp')
             os.makedirs(temp_dir, exist_ok=True)
-            out_path = os.path.join(temp_dir, f"subtitles_transfer_{int(time.time())}.srt")
+            out_path = safe_join(temp_dir, f"subtitles_transfer_{time.time_ns()}.srt", extensions={'.srt'})
             
         with open(out_path, 'w', encoding='utf-8') as f:
             for idx, sub in enumerate(subtitles):
@@ -164,7 +198,7 @@ def export_temp_srt():
                 end_sec = sub.get('endSeconds', start_sec + 2.0)
                 if end_sec <= start_sec:
                     end_sec = start_sec + 2.0
-                text = (sub.get('translation') or sub.get('text') or sub.get('original_text') or '').strip()
+                text = str(sub.get('translation') or sub.get('text') or sub.get('original_text') or '').strip()[:20000]
                 f.write(f"{idx + 1}\n")
                 f.write(f"{_format_srt_timestamp_helper(start_sec)} --> {_format_srt_timestamp_helper(end_sec)}\n")
                 f.write(f"{text}\n\n")
@@ -175,10 +209,15 @@ def export_temp_srt():
 
 @subtitles_bp.route('/api/read_srt', methods=['POST'])
 def read_srt():
-    data = request.json
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
     srt_path = data.get('srt_path')
-    if not os.path.exists(srt_path):
+    if not is_path_allowed(srt_path, must_exist=True, extensions={'.srt'}):
         return jsonify({'error': 'File not found'}), 404
+    if os.path.getsize(srt_path) > MAX_SUBTITLE_FILE_BYTES:
+        return jsonify({'error': 'File phụ đề vượt quá 20 MB'}), 413
         
     try:
         with open(srt_path, 'r', encoding='utf-8') as f:
@@ -214,14 +253,7 @@ def _resolve_openai_credentials(data=None):
     openai_model = data.get('openai_model') or 'gpt-5.6-luna'
 
     if not openai_key or not str(openai_key).strip() or str(openai_key).startswith('•'):
-        candidate_files = [
-            os.path.join(ROOT_DIR, 'api_keys.txt'),
-        ]
-        try:
-            import license_manager
-            candidate_files.append(os.path.join(license_manager.get_user_data_dir(), 'api_keys.txt'))
-        except Exception:
-            pass
+        candidate_files = [API_KEYS_FILE]
 
         for api_keys_file in candidate_files:
             if os.path.exists(api_keys_file):
@@ -240,34 +272,13 @@ def _resolve_openai_credentials(data=None):
                     pass
 
         if not openai_key:
-            try:
-                import license_manager
-                st = license_manager.get_current_license_status()
-                vk = st.get('vip_api_keys') or {}
-                if isinstance(vk, dict):
-                    openai_key = vk.get('openaiKey') or vk.get('openai_key') or vk.get('api_key')
-            except Exception:
-                pass
-
-        if not openai_key:
-            cfg_file = os.path.join(ROOT_DIR, 'license_config.json')
-            if not os.path.exists(cfg_file):
-                cfg_file = os.path.join(ROOT_DIR, 'config.json')
-            if os.path.exists(cfg_file):
-                try:
-                    with open(cfg_file, 'r', encoding='utf-8') as f:
-                        cfg = json.load(f)
-                        openai_key = cfg.get('openai_key') or cfg.get('openaiKey')
-                        if not openai_base_url or openai_base_url == 'https://api.openai.com/v1':
-                            openai_base_url = cfg.get('openai_base_url') or cfg.get('openaiBaseUrl') or 'https://api.openai.com/v1'
-                        if not openai_model or openai_model in ['gpt-4o-mini', 'gpt-5.6-luna']:
-                            openai_model = cfg.get('openai_model') or cfg.get('openaiModel') or 'gpt-5.6-luna'
-                except Exception:
-                    pass
-
-        if not openai_key:
             openai_key = os.environ.get('OPENAI_API_KEY')
 
+    openai_key = str(openai_key or '').strip()
+    openai_base_url = _validate_api_base_url(openai_base_url)
+    openai_model = re.sub(r'[^a-zA-Z0-9_.:/-]', '', str(openai_model))[:200]
+    if not openai_model:
+        raise ValueError('Tên model OpenAI không hợp lệ.')
     return openai_key, openai_base_url, openai_model
 
 @subtitles_bp.route('/api/translate_subtitles', methods=['POST'])
@@ -277,15 +288,22 @@ def translate_subtitles():
     if not allowed:
         return jsonify({'error': perm_msg}), 403
 
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     subtitles = data.get('subtitles', [])
     mode = data.get('mode', 'free')  # 'free' or 'ai'
     source_lang = data.get('source_lang', 'auto')
     target_lang = data.get('target_lang', 'vi')
-    openai_key, openai_base_url, openai_model = _resolve_openai_credentials(data)
+    try:
+        openai_key, openai_base_url, openai_model = _resolve_openai_credentials(data)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     
     if not subtitles:
         return jsonify({'error': 'Không có phụ đề nào để dịch.'}), 400
+    if mode not in {'free', 'ai'} or not isinstance(subtitles, list) or len(subtitles) > MAX_AI_SUBTITLE_ITEMS or not all(isinstance(s, dict) for s in subtitles):
+        return jsonify({'error': 'Mode hoặc danh sách phụ đề không hợp lệ/quá lớn.'}), 400
+    if sum(len(str(s.get('text', ''))) for s in subtitles if isinstance(s, dict)) > MAX_AI_TEXT_CHARS:
+        return jsonify({'error': 'Tổng nội dung phụ đề vượt quá giới hạn 500.000 ký tự.'}), 413
         
     try:
         if mode == 'free':
@@ -336,7 +354,9 @@ def translate_subtitles():
             import prompt_vault
             client = openai.OpenAI(
                 api_key=openai_key,
-                base_url=openai_base_url.rstrip('/')
+                base_url=openai_base_url,
+                timeout=60.0,
+                max_retries=1
             )
             
             system_prompt = prompt_vault.get_prompt('prompt_dich_phu_de', "You are a professional video subtitle translator. Translate each subtitle accurately and naturally.")
@@ -403,6 +423,9 @@ def translate_subtitles():
                 is_reasoning_model = any(m in openai_model.lower() for m in ['o1', 'o3', 'o4', 'luna', 'reasoning', 'gpt-5'])
                 if not is_reasoning_model:
                     req_kwargs["temperature"] = 0.3
+                    req_kwargs["max_tokens"] = 8000
+                else:
+                    req_kwargs["max_completion_tokens"] = 8000
                     
                 try:
                     response = client.chat.completions.create(**req_kwargs)
@@ -472,12 +495,22 @@ def translate_subtitles():
 
 @subtitles_bp.route('/api/clean_subtitles_ai', methods=['POST'])
 def clean_subtitles_ai():
-    data = request.json or {}
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
     subtitles = data.get('subtitles', [])
-    openai_key, openai_base_url, openai_model = _resolve_openai_credentials(data)
+    try:
+        openai_key, openai_base_url, openai_model = _resolve_openai_credentials(data)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     
     if not subtitles:
         return jsonify({'error': 'Không có phụ đề nào để làm sạch.'}), 400
+    if not isinstance(subtitles, list) or len(subtitles) > MAX_AI_SUBTITLE_ITEMS or not all(isinstance(s, dict) for s in subtitles):
+        return jsonify({'error': 'Danh sách phụ đề không hợp lệ hoặc quá lớn.'}), 400
+    if sum(len(str(s.get('text', ''))) for s in subtitles if isinstance(s, dict)) > MAX_AI_TEXT_CHARS:
+        return jsonify({'error': 'Tổng nội dung phụ đề vượt quá giới hạn 500.000 ký tự.'}), 413
         
     if not openai_key:
         return jsonify({'error': 'Chưa cấu hình OpenAI API Key trên hệ thống/máy chủ!'}), 400
@@ -510,7 +543,9 @@ def clean_subtitles_ai():
         import openai
         client = openai.OpenAI(
             api_key=openai_key,
-            base_url=openai_base_url.rstrip('/')
+            base_url=openai_base_url,
+            timeout=90.0,
+            max_retries=1
         )
         
         req_kwargs = {
@@ -524,6 +559,9 @@ def clean_subtitles_ai():
         is_reasoning_model = any(m in openai_model.lower() for m in ['o1', 'o3', 'o4', 'luna', 'reasoning', 'gpt-5'])
         if not is_reasoning_model:
             req_kwargs["temperature"] = 0.3
+            req_kwargs["max_tokens"] = 16000
+        else:
+            req_kwargs["max_completion_tokens"] = 16000
             
         try:
             response = client.chat.completions.create(**req_kwargs)

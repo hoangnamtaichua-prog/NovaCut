@@ -1,8 +1,8 @@
 {
-  "version": "1.2.2",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.2/patch.zip",
-  "sha256": "fa6428be74900b485be34d3f4885f71d9e4138fe4ef7521acf8b18ffb7dab795",
-  "changelog": "1. Nâng cấp Auto-Updater cho kho GitHub Public: Hỗ trợ tải trực tiếp qua browser_download_url siêu tốc, tự động đối soát mã băm toàn vẹn SHA-256 không cần cấu hình token. 2. Khóa an toàn đơn luồng & Quản lý tiến trình: Bổ sung _ocr_lock, _review_lock, _export_lock và cơ chế _terminate_process_tree(pid) diệt chính xác cây tiến trình FFmpeg con. 3. Bảo mật toàn diện API Keys & Bản quyền: Che giấu API keys trên GET /api/keys, ghi file nguyên tử, chặn SSRF, phòng chống PowerShell injection với _ps_literal(), và bắt buộc xác thực nonce / chữ ký HMAC-SHA256 cloud. 4. Tối ưu Pipeline & Bộ nhớ đệm: Sửa lỗi đọc cache script rỗng, bổ sung fingerprint MD5 cho kịch bản AI, bảo vệ cache 500+ giọng TTS không bị xóa khi mất mạng. 5. Nâng cấp Hàng đợi Batch Queue: Hỗ trợ giải nén thư mục tự động và phân loại chính xác trạng thái task bị hủy (cancelled).",
+  "version": "1.2.4",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.4/patch.zip",
+  "sha256": "1cd0c6592362d117a4802deaabcdd170036c7fdcff22ee5cd02dd7c4313c70c2",
+  "changelog": "1. Sửa lỗi bản quyền & định danh HWID: Bổ sung khóa Salt mặc định bảo mật, khắc phục triệt để lỗi tính sai HWID và lỗi chặn lưu bản quyền offline khi thiếu biến môi trường. 2. Tối ưu hóa nạp module & Chống xung đột Overlay: Tự động nhận diện môi trường Git Dev, bổ sung routes/security.py và đồng bộ toàn diện các tệp routes. 3. Bảo toàn API Keys người dùng: Tự động di chuyển cấu hình api_keys.txt sang USER_DATA_DIR, đảm bảo không bị thất lạc key AI sau khi cập nhật. 4. Đồng bộ Trial & VietQR an toàn: Gửi HWID đầy đủ lên Google Sheet và cố định thông tin thanh toán VietQR chính xác.",
   "is_mandatory": false,
-  "updated_at": "2026-08-27 17:01:21"
+  "updated_at": "2026-08-29 00:05:03"
 }

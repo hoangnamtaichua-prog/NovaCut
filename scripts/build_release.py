@@ -63,6 +63,8 @@ INCLUDE_FILES = [
     "local_voice_engine.py",
     "rvc_bridge.py",
     "audio_separator.py",
+    "mdx_separator.py",
+    "custom_pronunciations.json",
     "douyin_browser_downloader.py",
     "tts_cli.py",
     "requirements.txt",
@@ -213,6 +215,34 @@ setup(
         log(f" [INFO] Cython build info: {e}")
 
 
+def create_license_bootstrap_config():
+    """Tạo resource tối thiểu để EXE mới cài vẫn kết nối được License Server."""
+    source_path = os.path.join(ROOT_DIR, 'license_config.json')
+    if not os.path.exists(source_path):
+        raise RuntimeError('Thiếu license_config.json: không thể tạo bản phát hành có đồng bộ bản quyền.')
+
+    try:
+        with open(source_path, 'r', encoding='utf-8') as handle:
+            source_config = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f'Không đọc được license_config.json: {exc}') from exc
+
+    bootstrap = {
+        key: str(source_config.get(key, '')).strip()
+        for key in ('google_apps_script_url', 'client_license_token')
+    }
+    if not all(bootstrap.values()):
+        raise RuntimeError('license_config.json thiếu google_apps_script_url hoặc client_license_token.')
+
+    # PyInstaller giữ nguyên tên tệp nguồn khi ``--add-data`` trỏ tới một
+    # thư mục đích. Dùng đúng tên mà license_manager.py sẽ đọc trong
+    # ``sys._MEIPASS`` thay vì tạo một thư mục tên ``license_bootstrap.json``.
+    bootstrap_path = os.path.join(RELEASE_DIR, 'license_bootstrap.json')
+    with open(bootstrap_path, 'w', encoding='utf-8') as handle:
+        json.dump(bootstrap, handle, ensure_ascii=False)
+    return bootstrap_path
+
+
 def build_pyinstaller_exe():
     """Tạo file chạy NovaCut.exe bằng PyInstaller với Icon thương hiệu và ẩn console."""
     log("Dang tao file thuc thi NovaCut.exe qua PyInstaller...")
@@ -223,6 +253,8 @@ def build_pyinstaller_exe():
     add_data_args = []
     if os.path.exists(sea_g2p_bin):
         add_data_args.append(f"--add-data={sea_g2p_bin}{os.pathsep}sea_g2p")
+    bootstrap_path = create_license_bootstrap_config()
+    add_data_args.append(f"--add-data={bootstrap_path}{os.pathsep}.")
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -268,10 +300,27 @@ def build_pyinstaller_exe():
         launcher_src
     ]
     
-    res = subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True)
+    try:
+        res = subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True)
+    finally:
+        if os.path.exists(bootstrap_path):
+            os.remove(bootstrap_path)
     dist_novacut = os.path.join(ROOT_DIR, "dist", "NovaCut")
     
     if os.path.exists(dist_novacut):
+        bootstrap_dest = os.path.join(dist_novacut, "_internal", "license_bootstrap.json")
+        if not os.path.exists(bootstrap_dest):
+            raise RuntimeError("PyInstaller không đóng gói license_bootstrap.json vào bản phát hành.")
+        try:
+            with open(bootstrap_dest, 'r', encoding='utf-8') as handle:
+                bootstrap_data = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"license_bootstrap.json trong bản phát hành không hợp lệ: {exc}") from exc
+        expected_bootstrap_keys = {"google_apps_script_url", "client_license_token"}
+        if set(bootstrap_data) != expected_bootstrap_keys or not all(str(bootstrap_data[key]).strip() for key in expected_bootstrap_keys):
+            raise RuntimeError("license_bootstrap.json phải chỉ chứa URL và client_license_token hợp lệ.")
+        log(" [ASSERTION PASS] license_bootstrap.json contains only required client configuration.")
+
         # Post-Build Assertion: Đảm bảo sea_g2p.bin đã được đóng gói chính xác
         sea_dest = os.path.join(dist_novacut, "_internal", "sea_g2p", "sea_g2p.bin")
         if not os.path.exists(sea_dest) or os.path.getsize(sea_dest) < 10 * 1024 * 1024:

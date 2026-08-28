@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
-import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, requests, tempfile, uuid
+import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, requests, tempfile, ipaddress, socket, uuid
 from routes.state import *
 import asr_manager
 from routes.security import is_path_allowed, register_user_path, safe_join
@@ -28,7 +28,8 @@ def _validate_external_api_url(value):
     )
     if parsed.hostname.lower() not in allowed_hosts:
         raise ValueError('Tên miền Base URL chưa có trong NOVACUT_ALLOWED_AI_HOSTS.')
-    return str(value).strip().rstrip('/')
+    return str(value).rstrip('/')
+
 
 def _require_any_media_permission():
     import license_manager

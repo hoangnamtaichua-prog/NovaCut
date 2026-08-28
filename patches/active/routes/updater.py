@@ -32,16 +32,13 @@ def restart_app_api():
 @updater_bp.route('/api/updater/start_update', methods=['POST'])
 def start_update_api():
     """Bắt đầu tải và cài đặt bản cập nhật trong luồng nền."""
-    data = request.get_json(silent=True) or {}
-    download_url = data.get('download_url', '').strip()
-    drive_file_id = data.get('google_drive_file_id', '').strip()
-    target_version = data.get('target_version', '').strip()
-
-    if not download_url and not drive_file_id:
-        info = updater.check_for_updates()
-        download_url = info.get('download_url', '').strip()
-        drive_file_id = info.get('google_drive_file_id', '').strip()
-        target_version = info.get('latest_version', '').strip()
+    # Không tin URL/version do client gửi. Chỉ dùng manifest từ nguồn cấu hình.
+    info = updater.check_for_updates()
+    if not info.get('has_update'):
+        return jsonify({'success': False, 'error': 'Không có bản cập nhật hợp lệ.'}), 409
+    download_url = str(info.get('download_url') or '').strip()
+    drive_file_id = str(info.get('google_drive_file_id') or '').strip()
+    target_version = str(info.get('latest_version') or '').strip()
 
     target_source = download_url or drive_file_id
     if not target_source:
@@ -50,7 +47,12 @@ def start_update_api():
             'error': 'Không tìm thấy đường dẫn tải bản cập nhật!'
         }), 400
 
-    updater.perform_auto_update_async(target_source, target_version)
+    try:
+        updater._validate_update_url(target_source if download_url else f"https://drive.google.com/uc?export=download&id={drive_file_id}")
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    updater.perform_auto_update_async(target_source, target_version, info.get('sha256', ''))
     return jsonify({
         'success': True,
         'message': f'Đã bắt đầu quá trình cập nhật lên phiên bản v{target_version}!'

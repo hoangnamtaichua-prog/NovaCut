@@ -43,8 +43,17 @@ os.makedirs(PATCH_DIR, exist_ok=True)
 for p in [ROOT_DIR, PATCH_DIR]:
     if p in sys.path:
         sys.path.remove(p)
-sys.path.insert(0, ROOT_DIR)
-sys.path.insert(0, PATCH_DIR)
+
+is_dev = os.path.exists(os.path.join(ROOT_DIR, '.git')) and os.environ.get("NOVACUT_USE_PATCH_OVERLAY") != "1"
+if is_dev:
+    # Trên môi trường Dev (Git repo): Luôn ưu tiên nạp từ ROOT_DIR
+    # để tránh code mới đang phát triển bị các file cũ trong patches/active làm che khuất (shadowing)
+    sys.path.insert(0, PATCH_DIR)
+    sys.path.insert(0, ROOT_DIR)
+else:
+    # Trên môi trường Release / End-user: Bản vá OTA trong patches/active có độ ưu tiên cao nhất
+    sys.path.insert(0, ROOT_DIR)
+    sys.path.insert(0, PATCH_DIR)
 
 try:
     from importlib.machinery import PathFinder

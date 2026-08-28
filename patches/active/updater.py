@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Module Auto-Updater (Hệ Thống Tự Động Cập Nhật Trực Tiếp Qua GitHub Private/Public Repository)
-- Hỗ trợ kho Private & Public 100%.
+Module Auto-Updater (Hệ Thống Tự Động Cập Nhật Trực Tiếp Qua GitHub Private Repository)
+- Hỗ trợ kho Private 100%: Mã nguồn được bảo mật tuyệt đối, người ngoài không thể nhìn thấy.
 - Máy Dev: Chỉ cần chạy 1 lệnh python scripts/publish_patch.py.
 - Máy Khách: Mở app nhận diện phiên bản mới -> Bấm Cập nhật -> Tự động tải patch.zip và nâng cấp trong 2 giây.
 - Bảo toàn 100% dữ liệu bản quyền (.license.dat), API keys, dự án (projects/) và mô hình AI.
@@ -40,7 +40,7 @@ ROOT_DIR = get_app_root_dir()
 VERSION_FILE = os.path.join(ROOT_DIR, 'version.json')
 DEFAULT_VERSION = "1.0.0"
 
-# Cấu hình kho GitHub chính thức
+# Cấu hình kho GitHub Private chính thức
 GITHUB_REPO = "hoangnamtaichua-prog/NovaCut"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
 
@@ -74,7 +74,7 @@ PROTECTED_PATTERNS = {
 
 
 def _get_auth_headers(accept_type="application/vnd.github.v3+json"):
-    """Tạo Header xác thực an toàn truy cập kho GitHub."""
+    """Tạo Header xác thực an toàn truy cập kho GitHub Private."""
     token = os.environ.get('NOVACUT_GITHUB_TOKEN', '').strip()
     headers = {
         "Accept": accept_type,
@@ -256,9 +256,9 @@ def check_for_updates():
     # 3. Fallback: Google Apps Script (nếu có cấu hình)
     cfg = license_manager.load_app_config()
     gas_url = cfg.get('google_apps_script_url', '').strip()
-    token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
+    token = cfg.get('client_license_token', '')
 
-    if gas_url:
+    if gas_url and token:
         try:
             res = requests.get(gas_url, params={
                 "action": "check_update",

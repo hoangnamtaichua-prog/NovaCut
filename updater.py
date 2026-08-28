@@ -256,9 +256,9 @@ def check_for_updates():
     # 3. Fallback: Google Apps Script (nếu có cấu hình)
     cfg = license_manager.load_app_config()
     gas_url = cfg.get('google_apps_script_url', '').strip()
-    token = cfg.get('api_secret_token', 'AMS_SECURE_TOKEN_2026_@DEEPMIND_ANTIGRAVITY')
+    token = cfg.get('client_license_token', '')
 
-    if gas_url:
+    if gas_url and token:
         try:
             res = requests.get(gas_url, params={
                 "action": "check_update",
