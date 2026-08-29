@@ -316,14 +316,17 @@ def upload_github_release(version, changelog, patch_path, sha256_hash="", token=
 def git_push_changes(version):
     """Tự động commit và push thay đổi lên GitHub qua git."""
     try:
-        log("Đang đồng bộ mã nguồn và version.json lên GitHub repo...")
+        log("Đang commit và đẩy code lên GitHub...")
         subprocess.run(["git", "add", "."], cwd=ROOT_DIR, check=True)
         subprocess.run(["git", "commit", "-m", f"Release patch v{version}"], cwd=ROOT_DIR, check=False)
-        res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, capture_output=True, text=True)
-        if res.returncode == 0:
-            log("✅ Đã push thành công lên GitHub origin main!")
-        else:
-            log(f"⚠️ Git push notice: {res.stderr or res.stdout}")
+        try:
+            res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, capture_output=True, text=True, timeout=15)
+            if res.returncode == 0:
+                log("✅ Đã push thành công lên GitHub origin main!")
+            else:
+                log(f"⚠️ Git push notice: {res.stderr or res.stdout}")
+        except subprocess.TimeoutExpired:
+            log("⚠️ Git push quá thời gian chờ (15s). Vui lòng chạy 'git push origin main' thủ công nếu cần.")
     except Exception as e:
         log(f"⚠️ Lỗi git push: {e}")
 

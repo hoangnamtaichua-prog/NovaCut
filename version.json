@@ -1,8 +1,8 @@
 {
   "version": "1.2.5",
   "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.5/patch.zip",
-  "sha256": "c3b7bdb98eb305b8262ab2d47269c7169bd02ce515883be8df12bf6e37eec871",
-  "changelog": "1. Sửa lỗi bản quyền & định danh HWID: Bổ sung khóa Salt mặc định bảo mật, khắc phục triệt để lỗi tính sai HWID và lỗi chặn lưu bản quyền offline khi thiếu biến môi trường. 2. Tối ưu hóa nạp module & Chống xung đột Overlay: Tự động nhận diện môi trường Git Dev, bổ sung routes/security.py và đồng bộ toàn diện các tệp routes. 3. Bảo toàn API Keys người dùng: Tự động di chuyển cấu hình api_keys.txt sang USER_DATA_DIR, đảm bảo không bị thất lạc key AI sau khi cập nhật. 4. Đồng bộ Trial & VietQR an toàn: Gửi HWID đầy đủ lên Google Sheet và cố định thông tin thanh toán VietQR chính xác.",
+  "sha256": "141e6e5e2ddd4ae38169bc8bd017721d3d10e90244c6be79ab1e300ff0ef11b3",
+  "changelog": "1. Khắc phục triệt để lỗi chúc mừng kích hoạt & pháo hoa confetti nổ giả mạo: Sử dụng cơ chế đối soát và khóa luồng nguyên tử sync_and_detect_event, chặn polling khi bản quyền đã active, xử lý an toàn mốc baseline rỗng. 2. Tối ưu hóa cơ chế đồng bộ bản quyền: Chuyển sang Startup Cloud Sync 1 lần duy nhất khi khởi động, không spam Google Sheets và không làm chậm giao diện. 3. Sửa lỗi cú pháp JavaScript: Khôi phục khối điều khiển logo Review Phim, giải phóng app khỏi treo 'Đang kiểm tra...'. 4. Cố định VietQR & đồng bộ Trial: Gửi đầy đủ HWID trên mã QR, chống ghi đè gói đã thanh toán. 5. Sửa lỗi Salt bảo mật & định danh HWID: Bổ sung fallback salt, sửa HMAC chữ ký cache offline. 6. Sửa lỗi khởi động máy Dev & nạp Overlay Patch: Tối ưu thứ tự ưu tiên ROOT_DIR, bổ sung routes/security.py. 7. Hiệu chỉnh tốc độ đọc kịch bản: Điều chỉnh định mức 3.5 từ/giây (210 từ/phút) giúp AI sinh kịch bản chuẩn thời lượng video mục tiêu khi lồng tiếng TTS.",
   "is_mandatory": false,
-  "updated_at": "2026-08-29 16:33:38"
+  "updated_at": "2026-08-29 16:34:26"
 }
