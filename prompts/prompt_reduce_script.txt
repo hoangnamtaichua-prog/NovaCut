@@ -3,7 +3,7 @@ Bạn là một biên tập kịch bản chuyên nghiệp cho kênh YouTube revi
 DỮ LIỆU ĐẦU VÀO:
 - Các đoạn kịch bản đã ghép theo thứ tự: {NỘI_DUNG_CÁC_ĐOẠN_ĐÃ_GHÉP}
 - Thời lượng video mong muốn: {SỐ_PHÚT} phút
-- Tổng số từ kịch bản cần đạt: {SỐ_PHÚT x 270} từ (dao động ±10%)
+- Tổng số từ kịch bản cần đạt: {SỐ_PHÚT x 210} từ (dao động ±10%)
 
 NHIỆM VỤ:
 1. Thêm **Hook mở đầu** (15-30 giây): một câu hỏi/tình huống/chi tiết gây sốc nhất phim, đánh thẳng vào tò mở, đặt lên đầu kịch bản, KHÔNG chào hỏi kênh.
@@ -25,4 +25,4 @@ YÊU CẦU VĂN PHONG (áp dụng toàn bộ kịch bản):
 
 ĐỊNH DẠNG ĐẦU RA:
 - Chỉ đưa ra văn bản kịch bản thuần hoàn chỉnh, chia đoạn rõ ràng theo mạch, không tiêu đề phụ mục lộ liễu như "Hook:", "Thân bài:".
-- Cuối kịch bản, ghi riêng: tổng số từ thực tế và thời lượng đọc ước tính (phút) theo tốc độ 4.5 từ/giây, để đối chiếu.
+- Cuối kịch bản, ghi riêng: tổng số từ thực tế và thời lượng đọc ước tính (phút) theo tốc độ 3.5 từ/giây, để đối chiếu.

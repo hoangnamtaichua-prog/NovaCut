@@ -8,18 +8,44 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-1. **Sửa lỗi Crash khởi động trên máy Dev và Tối ưu hóa thứ tự nạp Overlay Patch (`web_app.py`, `patches/active/routes/*`):**
+1. **Tự động đồng bộ ngầm bản quyền từ Google Sheets (Silent Background License Sync) (`license_manager.py`, `routes/license.py`, `web/app.js`, `google_apps_script_template.js`):**
+   - Mỗi lượt kiểm tra bản quyền trả về cache cục bộ ngay lập tức và kích hoạt worker daemon đồng bộ nền tối đa một lần mỗi 60 giây; không làm chậm giao diện hoặc spam Google Sheets.
+   - Lệnh chặn (`BLOCKED`), hết hạn (`EXPIRED`) hoặc phản hồi `valid=false` từ Sheet được ghi vào cache đã ký, vì vậy việc thu hồi/hết hạn có hiệu lực ngay trên app. Endpoint đồng bộ trả về đồng thời trạng thái hiện tại và cờ `updated`.
+   - Giao diện tự đồng bộ sau khi tải cache và khi mở modal bản quyền, tự cập nhật khi gói, hạn dùng, trạng thái hoặc quyền lợi thay đổi; thông báo toast khi kích hoạt, nâng cấp hoặc gia hạn thành công. Chuẩn hóa các trường `expire_epoch`/`expire_str` và `tier` trong luồng đối soát SePay.
+   - Apps Script chuẩn hóa gói nhập theo cách gọi tiếng Việt (ví dụ `Gói VIP`, `Gói 1 Năm`) và các trạng thái kích hoạt như `HOẠT ĐỘNG`, `KÍCH HOẠT`, `BẬT`.
+
+2. **Sửa lỗi Crash khởi động trên máy Dev và Tối ưu hóa thứ tự nạp Overlay Patch (`web_app.py`, `patches/active/routes/*`):**
    - Tối ưu hóa thứ tự nạp `sys.path` trong `web_app.py`: Tự động nhận diện môi trường Git Dev (`is_dev`), luôn ưu tiên `ROOT_DIR` trước `PATCH_DIR` (`patches/active`) để code mới viết không bị các file cũ trong overlay làm che khuất (shadowing). Chỉ bật ưu tiên overlay khi chạy bản đóng gói hoặc có cờ `NOVACUT_USE_PATCH_OVERLAY=1`.
    - Bổ sung file thiếu `routes/security.py` và cập nhật `USER_DATA_DIR` vào `patches/active/routes/state.py`. Đồng bộ toàn diện các file Python giữa thư mục gốc và `patches/active/` để cả hai chế độ chạy độc lập đều hoạt động ổn định 100%.
 
-2. **Sửa lỗi Salt bảo mật bản quyền và định danh HWID (`license_manager.py`, `patches/active/license_manager.py`):**
+3. **Sửa lỗi Salt bảo mật bản quyền và định danh HWID (`license_manager.py`, `patches/active/license_manager.py`):**
    - Bổ sung `DEFAULT_LOCAL_SALT` làm giá trị fallback cho `SECRET_SALT` khi biến môi trường `NOVACUT_LOCAL_INTEGRITY_KEY` không được gán trên máy.
    - Khắc phục lỗi tính sai HWID, lỗi chữ ký HMAC không hợp lệ khi nạp cache và lỗi chặn lưu `save_local_license_cache`, giúp bản quyền offline và Admin/Pro nhận diện chính xác 100%.
 
-3. **Sửa đồng bộ Trial lên Google Sheet và cố định VietQR (`license_manager.py`, `google_apps_script_template.js`, `scripts/test_license_sync_regression.py`):**
+4. **Sửa đồng bộ Trial lên Google Sheet và cố định VietQR (`license_manager.py`, `google_apps_script_template.js`, `scripts/test_license_sync_regression.py`):**
    - Gửi HWID đầy đủ, xác thực phản hồi của Google Apps Script và tự thử lại đăng ký Trial khi lần gửi đầu gặp lỗi mạng/máy chủ; EXE cài mới nhận bootstrap kết nối tối thiểu để vẫn lên Sheet, không chứa token quản trị/phát hành.
    - Apps Script nâng cấp an toàn các dòng short-HWID cũ, khóa thao tác ghi đồng thời, chặn mở lại Trial đã hết hạn và không ghi đè gói đã thanh toán.
    - Dùng đủ HWID trong nội dung VietQR để không gia hạn nhầm khách; ngăn cấu hình ngân hàng cũ ghi đè thông tin nhận tiền do bản phát hành quản lý; bổ sung kiểm thử hồi quy cho cả hai lỗi và tách token khách khỏi token quản trị Google Apps Script.
+
+5. **Tái cấu trúc cơ chế đồng bộ bản quyền & tối ưu hóa Toast Thông Báo (`license_manager.py`, `routes/license.py`, `web/app.js`):**
+   - Thay thế toàn bộ cơ chế đồng bộ ngầm lặp lại (`scheduleBackgroundLicenseSync`) bằng **Startup Cloud Sync một lần duy nhất** (`runStartupLicenseSync`): gọi `/api/license/sync_cloud` đúng 1 lần sau khi tải cache, không bao giờ gọi lại trong cùng một phiên.
+   - Backend bổ sung file `LAST_SYNC_STATE_FILE` (`.last_sync_state.dat`) lưu trạng thái `tier + expire_epoch + status` của lần sync cloud thành công gần nhất. Mỗi lần sync mới, backend tự so sánh và trả về flag `was_upgraded` / `was_renewed` thay vì để frontend tự suy luận.
+   - Toast **chỉ nổ** khi backend xác nhận có nâng gói (tier rank cao hơn) hoặc gia hạn thực sự (expire_epoch xa hơn); tuyệt đối không toast lại cùng trạng thái đã biết. Loại bỏ toàn bộ state guard `_lastNotified*` phức tạp ở frontend.
+
+6. **Khắc phục lỗi cú pháp JavaScript khiến app treo ở màn hình 'Đang kiểm tra...' (`web/app.js`, `web/index.html`, `patches/active/web/*`):**
+   - Khôi phục hoàn chỉnh khối điều khiển kéo thả & co giãn watermark logo Review Phim (`setupInteractiveReviewLogo`), dọn sạch các đoạn mã đóng ngoặc mồ côi gây `SyntaxError`.
+   - Loại bỏ lời gọi khởi tạo `fetchLicenseInfo()` kép khi tải trang, tránh phát 2 request bản quyền đồng thời.
+   - Nâng phiên bản cache-buster script `app.js?v=20260829_1022` trong `index.html` để pywebview / trình duyệt nạp ngay file mới mà không bị dính cache script cũ.
+
+7. **Khắc phục lỗi thông báo chúc mừng kích hoạt & pháo hoa confetti nổ giả mạo (`routes/license.py`, `web/app.js`, `patches/active/*`):**
+   - Route `/api/license/check_sepay_payment` trên backend được siết chặt: chỉ trả về `success: True` kèm cờ `new_payment_detected: True` khi thực sự phát hiện kích hoạt mới, nâng gói hoặc gia hạn hạn dùng so với trạng thái trước đó. Không còn trả về thành công giả tạo cho tài khoản đã active sẵn.
+   - Frontend `startSepayPolling` và `btnCheckPaymentNow`: áp dụng đồng bộ guard đối soát `isNewlyActivated || isPlanUpgraded || isExpiryExtended` cho cả 2 luồng SePay và Cloud, triệt tiêu tình trạng nổ pháo hoa đóng modal bất thường khi xem HWID.
+   - Hàm `openLicenseModal` chỉ bật polling khi máy chưa kích hoạt hoặc đang dùng thử; `fetchLicenseInfo` có retry 2 lần (600ms) chống race condition lúc Flask khởi động.
+
+8. **Hiệu chỉnh tốc độ đọc kịch bản xuống 3.5 từ/giây (210 từ/phút) chuẩn thời lượng video (`auto_edit_pipeline.py`, `prompt_vault.py`, `prompts/*`, `web/app.js`):**
+   - Điều chỉnh định mức tính số từ kịch bản `target_words = int(target_minutes * 210)` thay vì 270 (4.5 từ/giây cũ), giúp kịch bản AI sinh ra ngắn gọn, súc tích và bám sát thời lượng video mong muốn khi TTS lồng tiếng.
+   - Đồng bộ hiển thị số từ ước tính trên giao diện Frontend (`Math.round(mins * 60 * 3.5)`).
+   - Cập nhật toàn bộ các file Prompt AI (`prompt_map_chunk.txt`, `prompt_reduce_script.txt`, `prompt_script.txt`) và tái biên dịch kho mã hóa Prompt Vault `.prompt_vault.dat`.
 
 ---
 

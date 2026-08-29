@@ -831,8 +831,9 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
             q.put({"type": "log", "msg": "🔄 Bắt đầu Reduce: Gộp các kịch bản thành một kịch bản hoàn chỉnh..."})
             combined = "\n\n--- ĐOẠN TIẾP THEO ---\n\n".join(map_results)
             prompt_red = prompt_reduce.replace("{NỘI_DUNG_CÁC_ĐOẠN_ĐÃ_GHÉP}", combined)\
-                                      .replace("{SỐ_PHÚT}", str(target_words // 270))\
-                                      .replace("{SỐ_PHÚT x 270}", str(target_words))
+                                      .replace("{SỐ_PHÚT}", str(target_words // 210))\
+                                      .replace("{SỐ_PHÚT x 270}", str(target_words))\
+                                      .replace("{SỐ_PHÚT x 210}", str(target_words))
             
             if style_directive:
                 prompt_red = f"{style_directive}\n\n{prompt_red}"
@@ -1191,7 +1192,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
             style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
             yield log(f"🎭 Phong cách Review: {style_info.get('icon', '🎬')} {style_info.get('name', 'Mặc định')}")
 
-            target_words = int(target_minutes * 270)
+            target_words = int(target_minutes * 210)  # 3.5 từ/giây = 210 từ/phút
             condensed_srt = condense_srt_for_llm(srt_content, max_chars=40000)
             
             yield log("Đang phân chia file phụ đề thành các chunk...")

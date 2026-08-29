@@ -92,6 +92,7 @@ PATCH_EXCLUDES = [
     ".license.dat",
     ".processed_txs.dat",
     ".token_quota.dat",
+    ".last_sync_state.dat",
     "api_keys.txt",
     "license_config.json",
     "projects",

@@ -82,14 +82,14 @@ def decrypt_prompt_data(vault_bytes):
 _MEMORY_PROMPT_CACHE = None
 
 
-def load_all_prompts():
+def load_all_prompts(force_reload_files=False):
     """Tải toàn bộ Prompts (ưu tiên từ Vault bảo mật, fallback sang file .txt nếu đang ở môi trường dev)."""
     global _MEMORY_PROMPT_CACHE
-    if _MEMORY_PROMPT_CACHE is not None:
+    if _MEMORY_PROMPT_CACHE is not None and not force_reload_files:
         return _MEMORY_PROMPT_CACHE
 
-    # 1. Nếu có file Vault mã hóa .prompt_vault.dat:
-    if os.path.exists(VAULT_FILE):
+    # 1. Nếu có file Vault mã hóa .prompt_vault.dat (và không ép tải từ file txt):
+    if not force_reload_files and os.path.exists(VAULT_FILE):
         try:
             with open(VAULT_FILE, 'rb') as f:
                 content = f.read()
@@ -143,7 +143,7 @@ def compile_prompt_vault(output_path=VAULT_FILE):
     """
     global _MEMORY_PROMPT_CACHE
     _MEMORY_PROMPT_CACHE = None
-    all_prompts = load_all_prompts()
+    all_prompts = load_all_prompts(force_reload_files=True)
 
     if not all_prompts:
         raise Exception("Không tìm thấy tệp Prompt nào để mã hóa!")

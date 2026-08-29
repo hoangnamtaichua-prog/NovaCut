@@ -6,8 +6,8 @@ Dựa vào nội dung file phụ đề (.srt) tôi cung cấp bên dưới, hãy
 DỮ LIỆU ĐẦU VÀO:
 - Nội dung file .srt: {DÁN_NỘI_DUNG_SRT_VÀO_ĐÂY}
 - Thời lượng video mong muốn: {SỐ_PHÚT} phút
-- Tốc độ đọc: 4.5 từ/giây = 270 từ/phút
-- Tổng số từ kịch bản cần đạt: {SỐ_PHÚT x 270} từ (dao động ±10%)
+- Tốc độ đọc: 3.5 từ/giây = 210 từ/phút
+- Tổng số từ kịch bản cần đạt: {SỐ_PHÚT x 210} từ (dao động ±10%)
 
 YÊU CẦU XỬ LÝ NỘI DUNG:
 1. Đọc và hiểu toàn bộ mạch phim từ phụ đề: nhân vật chính, bối cảnh, xung đột, các nút thắt, cao trào, kết thúc.
@@ -38,6 +38,6 @@ YÊU CẦU VĂN PHONG:
 
 ĐỊNH DẠNG ĐẦU RA:
 - Chỉ đưa ra văn bản kịch bản thuần, chia đoạn rõ ràng theo mạch (có thể xuống dòng giữa các đoạn để dễ đọc khi thu âm), không tiêu đề phụ mục lộ liễu như "Hook:", "Thân bài:".
-- Cuối kịch bản, ghi riêng: tổng số từ thực tế và thời lượng đọc ước tính (phút) theo tốc độ 4.5 từ/giây, để tôi đối chiếu.
+- Cuối kịch bản, ghi riêng: tổng số từ thực tế và thời lượng đọc ước tính (phút) theo tốc độ 3.5 từ/giây, để tôi đối chiếu.
 
 Bây giờ hãy phân tích file .srt tôi cung cấp và viết kịch bản review theo đúng yêu cầu trên.

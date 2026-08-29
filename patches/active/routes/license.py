@@ -67,12 +67,15 @@ def get_qr_info():
 
 @license_bp.route('/api/license/sync_cloud', methods=['POST'])
 def sync_cloud():
-    """Chủ động đồng bộ dữ liệu từ Google Sheets Cloud."""
-    license_info = license_manager.sync_with_cloud()
-    current_status = license_manager.get_current_license_status()
-    if license_info:
-        return jsonify({'success': True, 'message': 'Đồng bộ bản quyền thành công!', 'license': current_status})
-    return jsonify({'success': False, 'message': 'Không có cập nhật mới từ máy chủ.', 'license': current_status})
+    """Đồng bộ bản quyền từ Google Sheets. Trả về new_payment_detected qua critical section."""
+    success, current_status, is_event, was_upgraded, was_renewed = license_manager.sync_and_detect_event(force=False)
+    return jsonify({
+        'success': success,
+        'license': current_status,
+        'new_payment_detected': is_event,
+        'was_upgraded': was_upgraded,
+        'was_renewed': was_renewed,
+    })
 
 @license_bp.route('/api/license/get_system_api', methods=['POST', 'GET'])
 def get_system_api():
@@ -142,17 +145,27 @@ def set_pro_module():
 
 @license_bp.route('/api/license/check_sepay_payment', methods=['POST'])
 def check_sepay_payment():
-    """Đối soát qua backend; client không giữ SePay API token."""
-    license_manager.sync_with_cloud()
-    new_status = license_manager.get_current_license_status()
-    if new_status.get('is_valid') and new_status.get('tier') not in ('trial', 'unlicensed'):
+    """Đối soát qua backend; client không giữ SePay API token.
+    Chỉ trả về success=True khi thực sự phát hiện giao dịch thanh toán mới
+    (mới kích hoạt từ hết hạn/unlicensed, nâng gói cao hơn, hoặc gia hạn thời gian).
+    """
+    success, new_status, is_event, was_upgraded, was_renewed = license_manager.sync_and_detect_event(force=False)
+
+    if is_event and new_status.get('tier') not in ('trial', 'unlicensed'):
         return jsonify({
             'success': True,
             'message': 'Máy chủ đã xác nhận thanh toán và kích hoạt bản quyền.',
-            'license': new_status
+            'license': new_status,
+            'new_payment_detected': True,
+            'was_upgraded': was_upgraded,
+            'was_renewed': was_renewed,
         })
+
     return jsonify({
         'success': False,
-        'message': 'Chưa tìm thấy giao dịch đã được backend xác nhận.',
-        'license': new_status
-    }), 404
+        'message': 'Chưa tìm thấy giao dịch thanh toán mới được xác nhận.',
+        'license': new_status,
+        'new_payment_detected': False,
+        'was_upgraded': False,
+        'was_renewed': False,
+    }), 200

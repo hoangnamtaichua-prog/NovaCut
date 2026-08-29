@@ -56,6 +56,9 @@ FROZEN_RESOURCE_DIR = getattr(sys, '_MEIPASS', '')
 BOOTSTRAP_CONFIG_FILE = os.path.join(FROZEN_RESOURCE_DIR, 'license_bootstrap.json') if FROZEN_RESOURCE_DIR else ''
 PROCESSED_TX_FILE = os.path.join(DATA_DIR, '.processed_txs.dat')
 TOKEN_CACHE_FILE = os.path.join(DATA_DIR, '.token_quota.dat')
+# Lưu trạng thái (tier, expire_epoch, status) của lần sync cloud gần nhất đã thành công.
+# Dùng để phát hiện nâng gói / gia hạn khi check bản quyền lần đầu mỗi phiên.
+LAST_SYNC_STATE_FILE = os.path.join(DATA_DIR, '.last_sync_state.dat')
 MAX_PROMPT_TOKENS = 1_000_000      # 1,000,000 Token gửi đi (Prompt)
 MAX_COMPLETION_TOKENS = 1_000_000  # 1,000,000 Token nhận về (Completion)
 
@@ -69,6 +72,14 @@ _processed_tx_lock = threading.RLock()
 _trial_registration_lock = threading.RLock()
 _last_trial_registration_attempt = 0
 TRIAL_REGISTRATION_RETRY_SECONDS = 60
+CLOUD_SYNC_MIN_INTERVAL_SECONDS = 60
+_cloud_sync_lock = threading.Lock()
+_last_cloud_sync_attempt = 0.0
+_cloud_sync_in_progress = False
+_sync_execution_lock = threading.Lock()
+_last_sync_result = None
+_last_sync_result_time = 0.0
+SYNC_CACHE_DEBOUNCE_SECONDS = 5.0
 
 
 def _atomic_write_json(path, payload):
@@ -87,6 +98,86 @@ def _atomic_write_json(path, payload):
                 os.remove(temp_path)
             except OSError:
                 pass
+
+def load_last_sync_state():
+    """Đọc trạng thái (tier, expire_epoch, status) của lần sync cloud gần nhất từ file local."""
+    try:
+        if os.path.exists(LAST_SYNC_STATE_FILE):
+            with open(LAST_SYNC_STATE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_last_sync_state(license_status: dict):
+    """Lưu trạng thái cloud sync thành công vào file — chỉ giữ các field cần so sánh."""
+    state = {
+        'tier': license_status.get('tier', ''),
+        'expire_epoch': license_status.get('expire_epoch', 0),
+        'status': license_status.get('status', ''),
+        'saved_at': time.time(),
+    }
+    try:
+        _atomic_write_json(LAST_SYNC_STATE_FILE, state)
+    except Exception:
+        pass
+
+
+def _tier_rank(tier: str) -> int:
+    """Trả về thứ bậc của tier để so sánh nâng/hạ gói."""
+    order = {'unlicensed': 0, 'trial': 1, 'basic': 2, 'pro': 3, 'vip': 4, 'yearly': 5, 'admin': 99}
+    return order.get(str(tier).lower(), -1)
+
+
+_last_sync_state_lock = threading.RLock()
+
+
+def sync_and_detect_event(force=False):
+    """
+    Critical section nguyên tử (Thread-safe & Race-condition free):
+    1. Đồng bộ cloud
+    2. Đọc baseline cũ trong lock
+    3. Xác định sự kiện (kích hoạt mới, nâng gói, gia hạn)
+    4. Luôn cập nhật baseline mới (kể cả downgrade hay no-event)
+    5. Trả về (success, current_status, is_event, was_upgraded, was_renewed)
+    """
+    with _last_sync_state_lock:
+        license_info = sync_with_cloud(force=force)
+        current_status = get_current_license_status()
+
+        if not current_status or not current_status.get('is_valid'):
+            if current_status:
+                save_last_sync_state(current_status)
+            return bool(license_info), current_status, False, False, False
+
+        prev_state = load_last_sync_state()
+
+        # Nếu chưa từng có baseline (lần đầu khởi chạy), chỉ lưu baseline và không bắn event
+        if not prev_state or not prev_state.get('tier'):
+            save_last_sync_state(current_status)
+            return bool(license_info), current_status, False, False, False
+
+        prev_tier = str(prev_state.get('tier', '') or '').lower()
+        curr_tier = str(current_status.get('tier', '') or '').lower()
+        prev_expire = int(prev_state.get('expire_epoch') or 0)
+        curr_expire = int(current_status.get('expire_epoch') or 0)
+        prev_status = str(prev_state.get('status', '') or '').upper()
+        curr_status = str(current_status.get('status', '') or '').upper()
+
+        was_newly_activated = (prev_status != 'ACTIVE' and curr_status == 'ACTIVE')
+        was_upgraded = (curr_tier != prev_tier and _tier_rank(curr_tier) > _tier_rank(prev_tier))
+        # Chỉ coi là gia hạn nếu cùng gói (hoặc không bị hạ gói) và hạn dùng tăng lên
+        was_renewed = (_tier_rank(curr_tier) >= _tier_rank(prev_tier) and curr_expire > prev_expire > 0)
+
+        is_event = was_newly_activated or was_upgraded or was_renewed
+
+        # Luôn lưu baseline mới nhất để các lần sau có dữ liệu đối soát chuẩn xác
+        save_last_sync_state(current_status)
+
+        return bool(license_info), current_status, is_event, was_upgraded, was_renewed
+
+
 
 def _load_processed_tx_ids():
     """Tải danh sách các mã giao dịch SePay đã từng được kích hoạt để chống lặp lại."""
@@ -409,6 +500,7 @@ def save_local_license_cache(license_data):
         payload = {
             "hwid": hwid,
             "tier": license_data.get('tier', 'unlicensed'),
+            "status": str(license_data.get('status') or '').upper(),
             "plan_name": license_data.get('plan_name', 'Chưa kích hoạt'),
             "expire_epoch": int(license_data.get('expire_epoch', 0)),
             "expire_str": license_data.get('expire_str', ''),
@@ -717,6 +809,38 @@ PACKAGE_TIERS = {
 }
 
 
+def schedule_background_cloud_sync():
+    """Đồng bộ cloud ở nền, tối đa một lần mỗi phút để không chặn UI hay spam Sheet."""
+    global _last_cloud_sync_attempt, _cloud_sync_in_progress
+
+    now = time.monotonic()
+    with _cloud_sync_lock:
+        if _cloud_sync_in_progress or (now - _last_cloud_sync_attempt) < CLOUD_SYNC_MIN_INTERVAL_SECONDS:
+            return False
+        _last_cloud_sync_attempt = now
+        _cloud_sync_in_progress = True
+
+    def _worker():
+        global _cloud_sync_in_progress
+        try:
+            sync_with_cloud()
+        except Exception as exc:
+            # sync_with_cloud đã tự xử lý lỗi thông thường; đây là hàng rào cuối
+            # để worker daemon không làm gián đoạn luồng ứng dụng.
+            print(f"Lỗi đồng bộ bản quyền nền: {exc}")
+        finally:
+            with _cloud_sync_lock:
+                _cloud_sync_in_progress = False
+
+    try:
+        threading.Thread(target=_worker, name='silent-license-cloud-sync', daemon=True).start()
+        return True
+    except Exception:
+        with _cloud_sync_lock:
+            _cloud_sync_in_progress = False
+        return False
+
+
 def get_current_license_status(force_cloud_sync=False):
     """
     Trả về thông tin bản quyền hiện tại của máy tính trong < 1ms.
@@ -726,11 +850,11 @@ def get_current_license_status(force_cloud_sync=False):
     short_hwid = get_short_hwid(hwid)
     cached = load_local_license_cache()
 
-    # Chỉ đồng bộ Cloud khi được yêu cầu chủ động (e.g. ấn nút Đồng Bộ)
     if force_cloud_sync:
-        cloud_info = sync_with_cloud()
-        if cloud_info:
-            cached = cloud_info
+        sync_with_cloud(force=True)
+        cached = load_local_license_cache()
+    else:
+        schedule_background_cloud_sync()
 
     now_epoch = int(time.time())
 
@@ -822,6 +946,49 @@ def get_current_license_status(force_cloud_sync=False):
     expire_epoch = int(cached.get('expire_epoch', 0))
     tier = cached.get('tier', 'unlicensed')
     base_tier_info = PACKAGE_TIERS.get(tier, PACKAGE_TIERS["unlicensed"])
+    cached_status = str(cached.get('status') or '').upper()
+
+    # Trạng thái bị khóa/hết hạn từ cloud phải được ưu tiên hơn cache cũ để
+    # quản trị viên có thể vô hiệu hóa hoặc hết hạn bản quyền ngay lập tức.
+    if cached_status == 'BLOCKED':
+        return {
+            "hwid": hwid,
+            "short_hwid": short_hwid,
+            "status": "BLOCKED",
+            "is_valid": False,
+            "tier": "unlicensed",
+            "plan_name": cached.get('plan_name') or "Bản quyền đã bị khóa",
+            "badge_class": "badge-expired",
+            "badge_text": "🔒 Bản quyền bị khóa",
+            "expire_str": cached.get('expire_str', ''),
+            "expire_epoch": 0,
+            "days_left": 0,
+            "hours_left": 0,
+            "user_name": cached.get('user_name', ''),
+            "phone_zalo": cached.get('phone_zalo', ''),
+            "features": PACKAGE_TIERS["unlicensed"]["features"],
+            "can_activate_trial": False
+        }
+
+    if cached_status == 'EXPIRED':
+        return {
+            "hwid": hwid,
+            "short_hwid": short_hwid,
+            "status": "EXPIRED",
+            "is_valid": False,
+            "tier": "expired",
+            "plan_name": f"Hết hạn ({base_tier_info['plan_name']})",
+            "badge_class": "badge-expired",
+            "badge_text": "🔒 Đã hết hạn",
+            "expire_str": cached.get('expire_str') or (datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M') if expire_epoch else ''),
+            "expire_epoch": expire_epoch,
+            "days_left": 0,
+            "hours_left": 0,
+            "user_name": cached.get('user_name', ''),
+            "phone_zalo": cached.get('phone_zalo', ''),
+            "features": PACKAGE_TIERS["unlicensed"]["features"],
+            "can_activate_trial": False
+        }
 
     machine_has_used_trial = _get_machine_trial_anchor() is not None
 
@@ -1401,12 +1568,32 @@ def generate_offline_master_key(short_hwid, tier="vip", days=30):
     raise RuntimeError("Offline master key generation has been disabled; use the license server.")
 
 
-def sync_with_cloud():
-    """
-    Đồng bộ trạng thái bản quyền với Google Sheets Apps Script.
-    Tự động cập nhật cache nếu khách hàng vừa thanh toán SePay thành công.
-    Hỗ trợ đối soát cả HWID đầy đủ (AMS-XXXX-XXXX-XXXX) và Short HWID (AMS-XXXXXX / XXXXXX).
-    """
+def _record_cloud_sync_attempt():
+    """Ghi nhận cả các lần đồng bộ chủ động để lượt đọc cache kế tiếp không tạo worker thừa."""
+    global _last_cloud_sync_attempt
+    with _cloud_sync_lock:
+        _last_cloud_sync_attempt = time.monotonic()
+
+
+def _parse_cloud_expire_epoch(expire_epoch_value, expire_str, fallback_epoch=0):
+    """Chuẩn hóa hạn dùng cloud, hỗ trợ cả epoch lẫn định dạng ngày cũ của Sheet."""
+    try:
+        expire_epoch = int(expire_epoch_value or 0)
+        if expire_epoch > 0:
+            return expire_epoch
+    except (TypeError, ValueError):
+        pass
+
+    for date_format in ('%d/%m/%Y %H:%M', '%d/%m/%Y %H:%M:%S', '%d/%m/%Y'):
+        try:
+            return int(datetime.strptime(str(expire_str), date_format).timestamp())
+        except (TypeError, ValueError):
+            continue
+    return int(fallback_epoch or 0)
+
+
+def _do_sync_with_cloud():
+    _record_cloud_sync_attempt()
     cfg = load_app_config()
     gas_url = cfg.get('google_apps_script_url', '').strip()
     token = cfg.get('client_license_token', '')
@@ -1444,28 +1631,72 @@ def sync_with_cloud():
                     print("⚠️ Gói tin bản quyền thiếu hoặc sai chữ ký HMAC!")
                     continue
 
-                if data.get('status') == 'NOT_FOUND':
+                cloud_status = str(data.get('status') or '').upper()
+                if cloud_status == 'NOT_FOUND':
                     continue
 
-                if data.get('status') != 'NOT_FOUND' and (data.get('tier') or data.get('expire_date')):
-                    tier = data.get('tier', 'pro').lower()
-                    expire_str = data.get('expire_date', '')
-                    expire_epoch = int(data.get('expire_epoch') or 0)
-                    if not expire_epoch and expire_str:
-                        try:
-                            expire_epoch = int(datetime.strptime(expire_str, '%d/%m/%Y %H:%M').timestamp())
-                        except Exception:
-                            try:
-                                expire_epoch = int(datetime.strptime(expire_str, '%d/%m/%Y %H:%M:%S').timestamp())
-                            except Exception:
-                                try:
-                                    expire_epoch = int(datetime.strptime(expire_str, '%d/%m/%Y').timestamp())
-                                except Exception:
-                                    expire_epoch = int(time.time() + 86400 * 30)
+                local_cached = load_local_license_cache()
+                is_cloud_invalid = data.get('valid') is False
+                if cloud_status == 'BLOCKED' or cloud_status == 'EXPIRED' or is_cloud_invalid:
+                    expire_str = str(data.get('expire_date') or '')
+                    existing_tier = (local_cached or {}).get('tier', 'unlicensed')
+                    tier = str(data.get('tier') or existing_tier or 'unlicensed').lower()
+                    server_time = int(data.get('server_time') or time.time())
+
+                    if cloud_status == 'BLOCKED':
+                        tier_info = PACKAGE_TIERS['unlicensed']
+                        license_info = {
+                            "hwid": hwid,
+                            "status": "BLOCKED",
+                            "tier": "unlicensed",
+                            "plan_name": "Bản quyền đã bị khóa",
+                            "expire_epoch": 0,
+                            "expire_str": expire_str,
+                            "activated_at": int(time.time()),
+                            "last_seen_epoch": server_time,
+                            "user_name": data.get('user_name', (local_cached or {}).get('user_name', '')),
+                            "phone_zalo": data.get('phone_zalo', (local_cached or {}).get('phone_zalo', '')),
+                            "pro_selected_module": None,
+                            "vip_api_keys": {},
+                            "features": tier_info["features"]
+                        }
+                    else:
+                        expire_epoch = _parse_cloud_expire_epoch(
+                            data.get('expire_epoch'), expire_str, int(time.time()) - 1
+                        )
+                        if not expire_str and expire_epoch:
+                            expire_str = datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M')
+                        tier_info = PACKAGE_TIERS.get(tier, PACKAGE_TIERS['unlicensed'])
+                        license_info = {
+                            "hwid": hwid,
+                            "status": "EXPIRED",
+                            "tier": tier,
+                            "plan_name": tier_info["plan_name"],
+                            "expire_epoch": expire_epoch,
+                            "expire_str": expire_str,
+                            "activated_at": int(time.time()),
+                            "last_seen_epoch": server_time,
+                            "user_name": data.get('user_name', (local_cached or {}).get('user_name', '')),
+                            "phone_zalo": data.get('phone_zalo', (local_cached or {}).get('phone_zalo', '')),
+                            "pro_selected_module": (local_cached or {}).get('pro_selected_module'),
+                            "vip_api_keys": {},
+                            "features": PACKAGE_TIERS['unlicensed']["features"]
+                        }
+
+                    save_local_license_cache(license_info)
+                    return license_info
+
+                if data.get('tier') or data.get('expire_date'):
+                    tier = str(data.get('tier', 'pro')).lower()
+                    expire_str = str(data.get('expire_date') or '')
+                    expire_epoch = _parse_cloud_expire_epoch(
+                        data.get('expire_epoch'), expire_str, int(time.time() + 86400 * 30)
+                    )
+                    if not expire_str and expire_epoch:
+                        expire_str = datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M')
 
                     tier_info = PACKAGE_TIERS.get(tier, PACKAGE_TIERS["pro"])
                     server_time = int(data.get('server_time') or time.time())
-                    local_cached = load_local_license_cache()
                     pro_mod = data.get('pro_selected_module') or (local_cached.get('pro_selected_module') if local_cached else None)
                     vip_keys = local_cached.get('vip_api_keys', {}) if local_cached else {}
 
@@ -1491,6 +1722,7 @@ def sync_with_cloud():
 
                     license_info = {
                         "hwid": hwid,
+                        "status": "ACTIVE",
                         "tier": tier,
                         "plan_name": tier_info["plan_name"],
                         "expire_epoch": expire_epoch,
@@ -1522,6 +1754,24 @@ def sync_with_cloud():
             return local_cached
         print(f"Chưa thể đăng ký lại Trial lên Google Sheet: {error}")
     return None
+
+
+def sync_with_cloud(force=False):
+    """
+    Đồng bộ trạng thái bản quyền với Google Sheets Apps Script (Thread-safe & Debounced).
+    Tự động cập nhật cache nếu khách hàng vừa thanh toán SePay thành công.
+    Hỗ trợ đối soát cả HWID đầy đủ (AMS-XXXX-XXXX-XXXX) và Short HWID (AMS-XXXXXX / XXXXXX).
+    """
+    global _last_sync_result, _last_sync_result_time
+    with _sync_execution_lock:
+        now_mono = time.monotonic()
+        if not force and _last_sync_result is not None and (now_mono - _last_sync_result_time) < SYNC_CACHE_DEBOUNCE_SECONDS:
+            return _last_sync_result
+
+        result = _do_sync_with_cloud()
+        _last_sync_result = result
+        _last_sync_result_time = time.monotonic()
+        return result
 
 
 def sync_user_keys_to_cloud(keys_dict):

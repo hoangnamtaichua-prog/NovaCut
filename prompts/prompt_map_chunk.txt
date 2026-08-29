@@ -9,7 +9,7 @@ BỐI CẢNH TIẾP NỐI:
 
 DỮ LIỆU ĐẦU VÀO:
 - Nội dung phụ đề của đoạn này: {NỘI_DUNG_SRT_CHUNK}
-- Số từ mục tiêu cho đoạn này: khoảng {SỐ_TỪ_MỤC_TIÊU_CHUNK} từ (dao động ±10%), tính theo tỷ lệ thời lượng đoạn / tổng thời lượng video mong muốn, tốc độ đọc 4.5 từ/giây = 270 từ/phút.
+- Số từ mục tiêu cho đoạn này: khoảng {SỐ_TỪ_MỤC_TIÊU_CHUNK} từ (dao động ±10%), tính theo tỷ lệ thời lượng đoạn / tổng thời lượng video mong muốn, tốc độ đọc 3.5 từ/giây = 210 từ/phút.
 
 YÊU CẦU XỬ LÝ NỘI DUNG:
 1. Đọc và hiểu diễn biến trong đoạn phụ đề này, đặt trong bối cảnh tiếp nối đã cho.

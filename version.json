@@ -1,8 +1,8 @@
 {
-  "version": "1.2.4",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.4/patch.zip",
-  "sha256": "1cd0c6592362d117a4802deaabcdd170036c7fdcff22ee5cd02dd7c4313c70c2",
+  "version": "1.2.5",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.5/patch.zip",
+  "sha256": "c3b7bdb98eb305b8262ab2d47269c7169bd02ce515883be8df12bf6e37eec871",
   "changelog": "1. Sửa lỗi bản quyền & định danh HWID: Bổ sung khóa Salt mặc định bảo mật, khắc phục triệt để lỗi tính sai HWID và lỗi chặn lưu bản quyền offline khi thiếu biến môi trường. 2. Tối ưu hóa nạp module & Chống xung đột Overlay: Tự động nhận diện môi trường Git Dev, bổ sung routes/security.py và đồng bộ toàn diện các tệp routes. 3. Bảo toàn API Keys người dùng: Tự động di chuyển cấu hình api_keys.txt sang USER_DATA_DIR, đảm bảo không bị thất lạc key AI sau khi cập nhật. 4. Đồng bộ Trial & VietQR an toàn: Gửi HWID đầy đủ lên Google Sheet và cố định thông tin thanh toán VietQR chính xác.",
   "is_mandatory": false,
-  "updated_at": "2026-08-29 00:05:03"
+  "updated_at": "2026-08-29 16:33:38"
 }

@@ -133,6 +133,39 @@ function parseDateValue(val) {
   return null;
 }
 
+function normalizeLicenseTier(value) {
+  const compact = String(value || 'pro')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/goi/g, '')
+    .replace(/[\s._-]+/g, '');
+
+  if (compact === 'pro') return 'pro';
+  if (compact === 'vip') return 'vip';
+  if (compact === 'trial' || compact === 'thu') return 'trial';
+  if (compact === 'admin') return 'admin';
+  if (compact === 'yearly' || compact === 'year' || compact === '1nam' || compact === 'nam' || compact === '12thang') return 'yearly';
+  return compact || 'pro';
+}
+
+function normalizeLicenseStatus(value) {
+  const compact = String(value || 'ACTIVE')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+
+  if (['ACTIVE', 'HOATDONG', 'KICHHOAT', 'BAT'].includes(compact)) return 'ACTIVE';
+  if (['BLOCKED', 'BIKHOA', 'KHOA'].includes(compact)) return 'BLOCKED';
+  if (['EXPIRED', 'HETHAN'].includes(compact)) return 'EXPIRED';
+  return compact || 'ACTIVE';
+}
+
 function normalizeHwid(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^AMS/, '');
 }
@@ -255,9 +288,9 @@ function doGet(e) {
       // có bất kỳ mơ hồ nào.
       const rowIndex = findLicenseRowIndex(data, hwid);
       if (rowIndex >= 0) {
-          const tier = String(data[rowIndex][3] || 'pro').toLowerCase();
+          const tier = normalizeLicenseTier(data[rowIndex][3] || 'pro');
           const expireDateVal = data[rowIndex][4];
-          const status = String(data[rowIndex][5] || 'ACTIVE').toUpperCase();
+          const status = normalizeLicenseStatus(data[rowIndex][5] || 'ACTIVE');
 
           const expireDate = parseDateValue(expireDateVal);
           const now = new Date();
