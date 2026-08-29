@@ -14,6 +14,10 @@
 - CHỈ phát hành bản cập nhật mới (chạy `publish_patch.py` hoặc tạo GitHub Release) KHI VÀ CHỈ KHI người dùng yêu cầu rõ ràng (ví dụ: "hãy phát hành bản mới", "đẩy lên bản cập nhật mới").
 - TUYỆT ĐỐI KHÔNG tự ý đóng gói patch.zip hay tạo Release mới khi chưa có chỉ thị từ người dùng.
 
+# GitHub Release & Developer Secrets Rule
+- GitHub Personal Access Token (PAT) dùng để đẩy code và phát hành bản cập nhật được lưu trữ bảo mật tại tệp cục bộ `.github_token` trên máy Dev (được bảo vệ bởi `.gitignore`). Các agent khi thực hiện phát hành sẽ tự động đọc token từ tệp này qua `scripts/publish_patch.py` hoặc `os.path.join(ROOT_DIR, '.github_token')`.
+- TUYỆT ĐỐI KHÔNG BAO GIỜ đưa `.github_token` hay bất kỳ token/key quản trị nào vào bản cập nhật máy khách (`patch.zip`). Tệp `scripts/publish_patch.py` bắt buộc duy trì `.github_token` trong danh sách loại trừ `PATCH_EXCLUDES`.
+
 # Bug Fix & Feature Tracking Rule (Changelog Staging)
 - Mỗi khi người dùng báo lỗi hoặc yêu cầu chỉnh sửa/thêm tính năng mới: Sau khi hoàn thành việc sửa mã nguồn, PHẢI ghi nhận và lưu lại chi tiết các thay đổi vào file `TODO.md` (mục "CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH").
 - Khi người dùng ra lệnh phát hành bản mới ("hãy cập nhật", "phát hành bản mới"), hãy đọc danh sách các mục đã ghi nhận này để tổng hợp changelog đầy đủ, chính xác nhất cho phiên bản tiếp theo.
