@@ -7,8 +7,87 @@
 
 ---
 
+## 📌 BÀN GIAO TIẾN ĐỘ & KẾ HOẠCH TIẾP TỤC (HANDOVER - NGÀY MAI 31/08/2026)
+
+### 🎯 Tiến độ thực tế đã đạt được hôm nay:
+- ✅ **Chuyển đổi OpenRouter API:** Đã thay thế hoàn toàn OpenAI bằng OpenRouter, tích hợp menu chọn mô hình AI (ưu tiên các model Miễn phí: `nvidia/nemotron-3-super-120b-a12b:free`, `openrouter/free`, `minimax/minimax-m3:free`...).
+- ✅ **Khắc phục lỗi phát video khác ổ đĩa Windows:** Sửa hàm `_is_within` trong `routes/security.py`, cho phép phát video mượt mà khi app ở ổ `D:\` và video ở ổ `C:\`.
+- ✅ **Bảo vệ API Key:** Khắc phục lỗi xóa nhầm key khi lưu Cài đặt trong `routes/core.py` và `web/app.js`.
+- ✅ **Bước 1 (Lên kịch bản Review Phim AI):** Chạy mượt mà 100% trên mô hình Free.
+- ✅ **Bước 2 (Tạo giọng đọc Voice-over Kokoro Offline):** Đã tạo xong trọn vẹn **331/331 câu** (100% miễn phí trên GPU/CPU, đã lưu cache tại `output/auto_edit_temp/voice_review.wav` & `voice_review_cleaned.srt`).
+- ✅ **Bước 3 (Khớp Timeline):** Đã phân tích thành công Mẻ 1 và Mẻ 2 (đã lưu cache `timeline_batch_0...json` và `timeline_batch_1...json`).
+- ✅ **Vừa cập nhật bản vá chống Timeout:** Đã gỡ bỏ hard timeout 300s, chuyển sang kiểm tra theo dõi luồng sống (`t.is_alive()` với polling 2s), nâng concurrency lên 2, hỗ trợ bóc tách JSON bọc dict (`{"clips": [...]}`).
+
+### 📝 Việc cần làm tiếp theo khi bắt đầu vào ngày mai:
+1. **Kiểm chứng Bước 3 hoàn thành toàn bộ 12 mẻ timeline:**
+   - Chạy lại app `python web_app.py` -> Bấm **Bắt đầu làm video (Auto-Edit)**.
+   - Khi bảng thông báo **"Tái sử dụng dữ liệu?"** hiện lên -> Chọn **"Đồng ý"** (Hệ thống sẽ bỏ qua ngay Bước 1 & Bước 2 trong 1 giây, nạp mẻ 1-2 từ cache và chạy tiếp từ mẻ 3).
+2. **Tối ưu hóa Prompt Step 3 (Nếu cần tăng tốc):**
+   - Thay vì nhét 40.000 ký tự phụ đề gốc vào tất cả các mẻ, cắt gọt theo cửa sổ trượt (sliding window) chỉ chứa các đoạn thoại khớp ngữ cảnh để mỗi mẻ AI trả về trong 2-3 giây thay vì 30-40 giây.
+3. **Kiểm tra xuất xưởng video thành phẩm:**
+   - Đảm bảo video xuất ra tại `output/video_review.mp4` khớp tiếng, khớp hình và phụ đề rõ đẹp.
+
+---
+
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-*(Hiện tại chưa có thay đổi nào đang chờ - toàn bộ 8 hạng mục đã được phát hành thành công vào bản v1.2.5).*
+1. **Sửa lỗi UnboundLocalError trong Bước 3 Phân tích Timeline (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
+   - Khắc phục lỗi `cannot access local variable 'max_concurrency'` khi khởi tạo Semaphore do biến bị giới hạn cục bộ trong vòng lặp Async, giúp quá trình phân tích cảnh bằng GPT (Bước 3) không bị crash khi sử dụng model khác "free".
+   
+1. **Sửa lỗi 409 và Cố định mô hình Review Phim (`routes/video_edit.py`, `patches/active/routes/video_edit.py`):**
+   - **Gỡ bỏ cơ chế khóa luồng `_review_lock`:** Khắc phục triệt để lỗi "Một tác vụ Review Phim khác đang chạy" (409) do deadlock khi tiến trình trước đó bị ngắt hoặc lỗi đột ngột mà không giải phóng cờ. Người dùng giờ đây không còn bị kẹt nút bấm.
+   - **Cố định OpenAI & GPT-5.6-Luna (GPT Luna):** Hardcode tham số đầu vào cho tiến trình tự động (`mode == 'api'`) bắt buộc định tuyến tới `https://api.openai.com/v1` và sử dụng mô hình `gpt-5.6-luna`, loại bỏ hoàn toàn khả năng ghi đè hoặc chỉnh sửa sai mô hình từ giao diện UI.
+
+1. **Nâng Cấp Toàn Diện Phân Hệ Xử Lý Hàng Loạt Hàng Đợi (Batch Queue Studio) (`batch_queue_manager.py`, `routes/batch_queue.py`, `asr_manager.py`, `auto_edit_pipeline.py`, `web/index.html`, `web/js/features/batch_queue.js`):**
+   - **Khắc phục lỗi P0 ASR & Dubbing:** Xây dựng hàm `ensure_video_srt` độc lập trong `batch_queue_manager.py`, tự động nhận diện phụ đề có sẵn hoặc chạy Whisper Native C++ / Python ASR; sửa lỗi gọi `asr_manager.get_or_create_srt` không tồn tại. Tự động trích xuất SRT và đồng bộ tham số `original_volume` cho Preset Lồng Tiếng (Dubbing).
+   - **Cô lập không gian làm việc tạm (Task Isolation):** Cập nhật `run_auto_edit_workflow` và `run_narration_workflow` trong `auto_edit_pipeline.py` nhận `temp_dir` theo từng task (`.batch_temp/<task_id>/`), triệt tiêu xung đột dữ liệu khi chạy song song hoặc nhiều video nối tiếp.
+   - **Sửa lỗi nhận diện Whisper Engine xuyên ổ đĩa Windows:** Sửa lỗi `ValueError: Paths don't have the same drive` trong `asr_manager.py` bằng hàm `_is_subpath`, tự động tìm thấy `whisper-cli.exe` và model `ggml-base.bin` có sẵn trong thư mục ứng dụng.
+   - **Cải tạo giao diện UI linh hoạt theo từng Preset:** Card cấu hình tự động co giãn / đổi các panel nhập liệu phù hợp khi người dùng chuyển đổi giữa *Review Phim*, *Lồng Tiếng* và *Chống Bản Quyền*.
+   - **Bổ sung các tham số quan trọng:** Thêm ô chọn thời lượng Review mục tiêu (3, 5, 8, 10, 15 phút kèm số từ ước tính theo định mức 3.5 từ/s), thanh chọn tốc độ đọc (0.95x - 1.15x), tùy chỉnh âm lượng BGM, âm lượng video gốc khi lồng tiếng, và thông số chống bản quyền (tua tốc, zoom tâm, lật gương).
+   - **Thanh kiểm định hệ thống Preflight Bar:** Bổ sung endpoint `/api/batch/preflight` và thanh trạng thái trực quan báo đèn xanh cho FFmpeg, Whisper ASR và AI Key trước khi bắt đầu hàng đợi.
+   - **Kích hoạt chọn nhiều file video (Multi-file Picker):** Bổ sung endpoint `/api/batch/select_files` gọi hộp thoại OpenFileDialog đa chọn tệp trên Windows, cho phép người dùng chọn cùng lúc nhiều file video trên máy.
+
+2. **Chuyển Đổi Sang OpenRouter API & Tích Hợp Mô Hình Miễn Phí (Free Models) (`auto_edit_pipeline.py`, `routes/core.py`, `routes/subtitles.py`, `web/index.html`, `web/app.js`):**
+   - **Thay thế trực tiếp endpoint GPT bằng OpenRouter:** Toàn bộ pipeline sinh kịch bản review, tóm tắt map/reduce, phân tích timeline và dịch phụ đề AI đã hỗ trợ định tuyến qua OpenRouter (`https://openrouter.ai/api/v1`) với headers định danh `HTTP-Referer` và `X-Title`.
+   - **Mở rộng danh sách Allowed Hosts:** Bổ sung `openrouter.ai` vào whitelist bảo mật `NOVACUT_ALLOWED_AI_HOSTS` trong `routes/core.py` và `routes/subtitles.py`.
+   - **Bộ chọn Mô hình AI (Model Selector) trong Cài đặt:** Cung cấp menu chọn model trực quan, ưu tiên các model Free đỉnh cao:
+     - `openrouter/free` (Router tự động chọn model Free tốt nhất)
+     - `z-ai/glm-5.2:free` (Z.ai: GLM 5.2 Free - suy luận kịch bản & tiếng Việt xuất sắc)
+     - `minimax/minimax-m3:free` (MiniMax: MiniMax M3 Free)
+     - `google/gemma-4-31b-it:free` (Google: Gemma 4 31B Free)
+     - `nvidia/nemotron-3-ultra-550b-a55b:free` (NVIDIA: Nemotron 3 Ultra Free)
+     - `nvidia/nemotron-3-super-120b-a12b:free` (NVIDIA: Nemotron 3 Super Free)
+     - Cùng các model trả phí giá rẻ như DeepSeek V3, GPT-4o Mini, Claude 3.5 Haiku và tùy chọn gõ Custom Model ID bất kỳ.
+   - **Tự động nhận diện Key:** Tự động phát hiện tiền tố `sk-or-` để chuyển hướng sang Base URL của OpenRouter và gán model mặc định `openrouter/free`. Nút [Test Key] kiểm tra kết nối thời gian thực trả về 200 OK ngay lập tức.
+
+3. **Khắc phục lỗi không thể phát video khi chọn file khác ổ đĩa trên Windows (`routes/security.py`, `routes/core.py`, `patches/active/*`):**
+   - **Nguyên nhân gốc rễ (Root Cause Analysis):** Khi ứng dụng chạy ở ổ `D:\` và người dùng chọn tệp video ở ổ `C:\` (ví dụ `C:\Users\...\OneDrive\Máy tính\review xe\video1tieng.mp4`), hàm `is_path_allowed` gọi `os.path.commonpath([root, resolved])`. Khi duyệt qua các root mặc định ở ổ `D:\`, `commonpath` tung ngoại lệ `ValueError: Paths don't have the same drive`. Khối `try/except` bao trùm toàn bộ `any()` bắt lỗi này và dừng sớm vòng lặp, khiến thư mục ổ `C:\` đã được cấp phép trong `_selected_roots` không bao giờ được đối soát, dẫn đến `/api/video` trả về 404 và trình phát video báo lỗi.
+   - **Giải pháp:** Tách biệt kiểm tra lồng nhau bằng hàm fail-closed `_is_within(root, candidate)` có kiểm tra so khớp ký tự ổ đĩa (`os.path.splitdrive`) trước khi so khớp đường dẫn, triệt tiêu hoàn toàn lỗi văng ngoại lệ khác ổ đĩa.
+4. **Khắc phục lỗi Rate Limit 429 khi chạy Mô hình Miễn Phí (Free Models) trên OpenRouter (`auto_edit_pipeline.py`, `patches/active/*`):**
+   - **Nguyên nhân:** Khi phân tích kịch bản review phim, hệ thống chạy Map/Reduce bắn đồng thời 3–5 đoạn SRT lên OpenRouter cùng lúc. Đối với các mô hình Free như `z-ai/glm-5.2:free`, nhà cung cấp upstream giới hạn tần suất nghiêm ngặt, dẫn đến lỗi `Error code: 429 - temporarily rate-limited upstream. retry_after_seconds: 5`.
+   - **Giải pháp:**
+     1. Điều phối Semaphore Concurrency: Giới hạn `concurrency = 1` đối với các mô hình Free và OpenRouter để xử lý tuần tự từng đoạn, tránh gây nghẽn burst rate limit.
+     2. Cơ chế Thử lại có độ trễ tăng dần (Exponential Backoff): Khi gặp lỗi 429 hoặc quá tải tạm thời, hệ thống tự động tạm dừng `5s * attempt` và thử lại tới 4 lần kèm thông báo trực quan trên log, thay vì dừng chương trình đột ngột.
+5. **Khắc phục lỗi Timeout 300s và cải tiến trích xuất Timeline Step 3 (`auto_edit_pipeline.py`, `patches/active/*`):**
+   - **Nguyên nhân:**
+     1. Ở Bước 3 (Phân tích timeline theo mẻ), hàm `q.get(timeout=300)` dùng bộ đếm cứng 300s. Khi xử lý video dài (12 mẻ), nếu mô hình AI cần thử lại (retry) hoặc OpenRouter phản hồi chậm, bộ đếm 300s bị kích hoạt làm sập luồng chính mặc dù tiến trình nền vẫn đang phân tích thành công.
+     2. Một số mô hình AI trả về JSON bọc trong dictionary dạng `{"clips": [...]}` hoặc `{"timeline": [...]}` thay vì mảng gốc, khiến kiểm tra `isinstance(parsed, list)` bị từ chối và kích hoạt retry lặp vô ích.
+   - **Giải pháp:**
+     1. Thay thế bộ đếm cứng `timeout=300` bằng cơ chế kiểm tra trạng thái luồng sống (`t.is_alive()` với polling 2s): Tuyệt đối không bao giờ ngắt ngang khi luồng AI nền vẫn đang tính toán.
+     2. Hỗ trợ tự động mở gói (unwrapping) đa dạng định dạng JSON: Tự động trích xuất từ `clips`, `timeline`, `data`, `result`, `segments` và regex fallback cứu cánh.
+     3. Nâng concurrency lên 2 và tận dụng Cache thông minh: Các mẻ 1 và mẻ 2 đã chạy xong sẽ tự động nạp từ cache trong 0.001s, tiếp tục các mẻ còn lại siêu tốc.
+     3. **Bắt lỗi an toàn HTTP 200 Error Payload:** Thêm cơ chế kiểm tra `if 'error' in res_json:` trong `call_openai_chat_resilient` để kích hoạt retry exponential backoff thay vì văng crash `KeyError`.
+     4. **Nâng Timeout an toàn:** Tăng timeout client OpenAI lên 180s cho phân hệ dịch và làm sạch phụ đề AI, đảm bảo mô hình 550B hoàn thành trọn vẹn suy luận.
+ 7. **Khắc phục triệt để lỗi không quét được vùng OCR do xung đột Zoom in/Zoom out, Tỷ lệ khung hình & Bounding Box CapCut (`web/app.js`, `web/index.html`, `web/style.css`, `web/js/features/video_studio_suite.js`, `patches/active/*`):**
+    - **Nguyên nhân gốc rễ (Root Cause Analysis):**
+      1. **Xung đột Khung biến đổi CapCut Studio (`CapCut Transform Box`):** Khung viền màu xanh cyan `.capcut-transform-box` (với thanh trạng thái `🔍 100% • (X: ...px, Y: ...px) • 🔄 0°`) trong `video_studio_suite.js` nằm đè lên khung canvas với `pointer-events: auto`. Khi người dùng rê chuột vào video hoặc click, khung này tự động kích hoạt và chặn đứng toàn bộ sự kiện click vẽ vùng OCR của `#videoOverlay`.
+      2. **Méo tọa độ khi phóng to/thu nhỏ:** Khung vẽ lớp phủ `#videoOverlay` và `#drawBox` nằm trong `#videoZoomWrapper` bị méo tọa độ khi người dùng phóng to/thu nhỏ (CSS `transform: scale() translate()`). Khi vẽ, sự kiện chuột lấy tọa độ màn hình trực tiếp khiến hình chữ nhật vẽ bị nhân đôi tỉ lệ thu phóng so với con trỏ chuột.
+      3. **Méo tỉ lệ phần trăm & lệch viền đen letterbox/pillarbox:** Thẻ `<video>` hiển thị ở chế độ `object-fit: contain` nên có các dải viền đen khi tỷ lệ video khác tỷ lệ khung phát. Tọa độ tính theo toàn bộ container khiến vùng OCR gửi về backend bị cắt trúng viền đen hoặc lệch phụ đề, dẫn đến OCR không quét được chữ.
+    - **Giải pháp xử lý:**
+      1. **Cô lập chế độ vẽ vùng OCR (`is-drawing-region`):** Khi bấm "Vẽ vùng mới", hệ thống tự động ẩn và vô hiệu hóa triệt để `CapCut Transform Box` (`.capcut-transform-box`) cùng toàn bộ các điểm neo 8 hướng, nâng `z-index: 999` cho `#videoOverlay` để con trỏ vẽ chuột hoạt động trơn tru 100% không bị bất kỳ khung nào đè lên.
+      2. **Tự động khôi phục & Hủy vẽ an toàn:** Tự động khôi phục lại thanh công cụ khi vẽ xong hoặc khi nhấn phím `Escape`.
+      3. **Hệ thống quy đổi tọa độ chuẩn xác theo Zoom (`getActiveZoomLevel`):** Toàn bộ thao tác vẽ, kéo thả di chuyển và co giãn 8 hướng của khung OCR tự động chia tỷ lệ cho mức zoom hiện tại trong thời gian thực, đảm bảo thao tác chuột khớp 100% với con trỏ.
+      4. **Tính toán tự động vùng hiển thị thực tế Video (`getVideoContentRect`):** Trừ bù chính xác các viền đen letterbox/pillarbox của video, chuẩn hóa `currentRegion` ($X, Y, W, H$ theo % video gốc từ 0–100%) giúp backend OCR cắt và nhận diện chuẩn xác 100% dòng phụ đề.
+      5. **Đồng bộ hóa khung OCR với Video Zoom Wrapper:** Khung vẽ OCR và hộp xem trước phụ đề được giữ nguyên bên trong `#videoZoomWrapper` theo tỷ lệ %, tự động co giãn và di chuyển mượt mà đồng bộ khi người dùng zoom in/out hoặc kéo pan video.
 
 ---
 

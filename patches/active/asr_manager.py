@@ -88,9 +88,17 @@ else:
     PYTHON_EXEC = os.path.join(VENV_DIR, "bin", "python")
     PIP_EXEC = os.path.join(VENV_DIR, "bin", "pip")
 
+def _is_subpath(path, parent):
+    try:
+        return os.path.commonpath([os.path.realpath(parent), os.path.realpath(path)]) == os.path.realpath(parent)
+    except (ValueError, OSError):
+        return False
+
 def get_whisper_cli():
     """Tìm tệp thực thi whisper-cli.exe hoặc main.exe native độc lập."""
     candidates = [
+        os.path.join(ROOT_DIR, "bin", "whisper-cli.exe"),
+        os.path.join(ROOT_DIR, "bin", "main.exe"),
         os.path.join(os.path.dirname(sys.executable), "bin", "whisper-cli.exe"),
         os.path.join(os.path.dirname(sys.executable), "bin", "main.exe"),
         os.path.join(getattr(sys, '_MEIPASS', ''), "bin", "whisper-cli.exe") if hasattr(sys, '_MEIPASS') else None,
@@ -100,7 +108,7 @@ def get_whisper_cli():
     expected = _expected_hash('NOVACUT_WHISPER_CLI_SHA256')
     for c in candidates:
         if c and os.path.exists(c) and os.path.getsize(c) > 50000:
-            if os.path.commonpath([os.path.realpath(BIN_DIR), os.path.realpath(c)]) == os.path.realpath(BIN_DIR) and not _verify_sha256(c, expected):
+            if _is_subpath(c, BIN_DIR) and not _verify_sha256(c, expected):
                 continue
             return os.path.normpath(c)
     cand = shutil.which("whisper-cli.exe") or shutil.which("whisper-cli") or shutil.which("main.exe")
@@ -117,6 +125,7 @@ def get_whisper_model_path(model_key="base"):
         normalized_key = "medium"
 
     candidates = [
+        os.path.join(ROOT_DIR, "models", "asr", f"ggml-{normalized_key}.bin"),
         os.path.join(os.path.dirname(sys.executable), "models", "asr", f"ggml-{normalized_key}.bin"),
         os.path.join(getattr(sys, '_MEIPASS', ''), "models", "asr", f"ggml-{normalized_key}.bin") if hasattr(sys, '_MEIPASS') else None,
         os.path.join(MODELS_DIR, f"ggml-{normalized_key}.bin"),
@@ -124,7 +133,7 @@ def get_whisper_model_path(model_key="base"):
     expected = _expected_hash(f'NOVACUT_WHISPER_{normalized_key.upper()}_SHA256')
     for target_file in candidates:
         if target_file and os.path.exists(target_file) and os.path.getsize(target_file) > 10000000:
-            if os.path.commonpath([os.path.realpath(MODELS_DIR), os.path.realpath(target_file)]) == os.path.realpath(MODELS_DIR) and not _verify_sha256(target_file, expected):
+            if _is_subpath(target_file, MODELS_DIR) and not _verify_sha256(target_file, expected):
                 continue
             return os.path.normpath(target_file)
     return None

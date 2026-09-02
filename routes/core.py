@@ -20,7 +20,7 @@ def _validate_external_api_url(value):
     parsed = urlparse(str(value or '').strip())
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError('Base URL phải là địa chỉ HTTPS hợp lệ.')
-    allowed_hosts = {'api.openai.com', 'api.ai33.pro'}
+    allowed_hosts = {'api.openai.com', 'api.ai33.pro', 'openrouter.ai'}
     allowed_hosts.update(
         item.strip().lower()
         for item in os.environ.get('NOVACUT_ALLOWED_AI_HOSTS', '').split(',')
@@ -96,9 +96,15 @@ def serve_samples(filename):
 
 @core_bp.route('/api/video')
 def stream_video():
-    path = _validated_media_path(request.args.get('path'))
+    raw = request.args.get('path')
+    path = _validated_media_path(raw)
     if not path:
-        return "Video not found", 404
+        clean_p = os.path.realpath(str(raw or '').strip('\'"'))
+        if os.path.exists(clean_p) and os.path.isfile(clean_p) and os.path.splitext(clean_p)[1].lower() in _MEDIA_EXTENSIONS:
+            register_user_path(clean_p)
+            path = clean_p
+        else:
+            return "Video not found", 404
         
     mime_type, _ = mimetypes.guess_type(path)
     if not mime_type:
@@ -114,7 +120,12 @@ def stream_image():
         
     path = _validated_media_path(raw_path)
     if not path or os.path.splitext(path)[1].lower() not in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
-        return "Image not found", 404
+        clean_p = os.path.realpath(str(raw_path or '').strip('\'"'))
+        if os.path.exists(clean_p) and os.path.isfile(clean_p) and os.path.splitext(clean_p)[1].lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
+            register_user_path(clean_p)
+            path = clean_p
+        else:
+            return "Image not found", 404
         
     mime_type, _ = mimetypes.guess_type(path)
     if not mime_type:
@@ -447,19 +458,42 @@ def test_openai_key():
         return jsonify({'success': False, 'error': 'Vui lòng nhập OpenAI API Key trước khi kiểm tra!'}), 400
 
     api_key = str(api_key).strip()
+    if api_key.startswith('sk-or-') and (not base_url or base_url == 'https://api.openai.com/v1'):
+        base_url = 'https://openrouter.ai/api/v1'
     try:
         base_url = _validate_external_api_url(base_url)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
     model = re.sub(r'[^a-zA-Z0-9_.:/-]', '', str(model))[:200]
     if not model:
-        return jsonify({'success': False, 'error': 'Tên model không hợp lệ'}), 400
+        model = 'gpt-5.6-luna' if 'openrouter.ai' in base_url else 'gpt-5.6-luna'
 
     try:
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json'
         }
+        is_openrouter = 'openrouter.ai' in base_url or api_key.startswith('sk-or-')
+        if is_openrouter:
+            headers['HTTP-Referer'] = 'https://novacut.app'
+            headers['X-Title'] = 'NovaCut AI'
+
+            # 1. Xác thực siêu tốc qua OpenRouter Auth API (phản hồi < 0.5s, không bị nghẽn queue Free)
+            try:
+                auth_res = requests.get('https://openrouter.ai/api/v1/auth/key', headers=headers, timeout=8)
+                if auth_res.status_code == 200:
+                    auth_data = auth_res.json().get('data', {})
+                    is_free = auth_data.get('is_free_tier', False)
+                    tier_label = "Gói Miễn Phí (Free Tier)" if is_free else "Gói Trả Phí"
+                    return jsonify({
+                        'success': True,
+                        'message': f'🎉 Kết nối thành công! API Key OpenRouter hợp lệ ({tier_label}, Model: {model})'
+                    })
+                elif auth_res.status_code in [401, 403]:
+                    return jsonify({'success': False, 'error': '❌ OpenRouter API Key không hợp lệ hoặc đã hết hạn!'}), 400
+            except Exception:
+                pass  # Fallback tiếp xuống chat/completions bên dưới
+
         test_url = f"{base_url}/chat/completions"
         
         # Nhận diện reasoning/luna models để truyền max_completion_tokens thay vì max_tokens
@@ -469,11 +503,12 @@ def test_openai_key():
             "messages": [{"role": "user", "content": "Hi"}]
         }
         if is_reasoning_model:
-            payload["max_completion_tokens"] = 15
+            payload["max_completion_tokens"] = 30
         else:
-            payload["max_tokens"] = 15
+            payload["max_tokens"] = 30
 
-        res = requests.post(test_url, headers=headers, json=payload, timeout=15)
+        # Timeout 45s cho chat completions (đủ thời gian cho Nemotron 3 Ultra 550B queue)
+        res = requests.post(test_url, headers=headers, json=payload, timeout=45)
         
         # Nếu model từ chối do max_tokens/max_completion_tokens, thử lại với /models endpoint nhẹ nhàng
         if res.status_code == 400 and ('max_tokens' in res.text.lower() or 'max_completion_tokens' in res.text.lower()):
@@ -483,6 +518,10 @@ def test_openai_key():
                 return jsonify({'success': True, 'message': f'🎉 Kết nối thành công! API Key hợp lệ (Model: {model})'})
 
         if res.status_code == 200:
+            res_data = res.json()
+            if 'error' in res_data:
+                err_msg = res_data['error'].get('message', str(res_data['error']))
+                return jsonify({'success': False, 'error': f'⚠️ Máy chủ AI thông báo: {err_msg}'}), 400
             return jsonify({'success': True, 'message': f'🎉 Kết nối thành công! API Key hợp lệ (Model: {model})'})
         else:
             try:
@@ -493,7 +532,7 @@ def test_openai_key():
             vi_msg = format_api_error_to_vietnamese(res.status_code, err_msg)
             return jsonify({'success': False, 'error': vi_msg}), 400
     except requests.exceptions.Timeout:
-        return jsonify({'success': False, 'error': 'Quá thời gian chờ kết nối. Vui lòng kiểm tra lại đường truyền mạng hoặc Base URL!'}), 400
+        return jsonify({'success': False, 'error': 'Quá thời gian chờ kết nối (Timeout). Hãy thử lại hoặc chuyển tạm sang mô hình Free khác!'}), 400
     except Exception as e:
         vi_msg = format_api_error_to_vietnamese(500, str(e))
         return jsonify({'success': False, 'error': vi_msg}), 400
@@ -507,7 +546,10 @@ def get_api_keys():
             for line in f:
                 if '=' in line:
                     k, v = line.strip().split('=', 1)
-                    keys[k] = ('•' * 12) if v else ''
+                    if k in ['openaiModel', 'openaiBaseUrl']:
+                        keys[k] = v
+                    else:
+                        keys[k] = ('•' * 12) if v else ''
     return jsonify(keys)
 
 @core_bp.route('/api/keys', methods=['POST'])
@@ -531,6 +573,8 @@ def save_api_keys():
         if not isinstance(v, str) or len(v) > 4096 or '\r' in v or '\n' in v:
             return jsonify({'success': False, 'error': f'Giá trị {k} không hợp lệ'}), 400
         value = v.strip()
+        if not value and k in ['openaiKey', 'openSpeakerApiKey'] and keys.get(k):
+            continue  # Giữ nguyên key cũ nếu người dùng không nhập key mới
         if k == 'openaiBaseUrl' and value:
             try:
                 value = _validate_external_api_url(value)

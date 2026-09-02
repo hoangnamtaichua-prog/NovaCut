@@ -36,7 +36,7 @@ def get_app_root_dir():
 
 ROOT_DIR = get_app_root_dir()
 STATE_FILE = os.path.join(user_data_dir('NovaCut', 'NovaCut', roaming=True), 'batch_queue_state.json')
-VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v'}
+VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.flv'}
 
 logger = logging.getLogger('batch_queue')
 logger.setLevel(logging.INFO)
@@ -562,40 +562,153 @@ class BatchQueueManager:
         task.progress = 100
         task.current_step_text = f"✅ Hoàn thành xuất sắc: {os.path.basename(final_output_path)}"
 
+    # =========================================================================
+    # MEDIA & SUBTITLE HELPERS
+    # =========================================================================
+    def ensure_video_srt(self, video_path, output_dir=None, language='auto', update_progress=None, check_stop=None):
+        """
+        Đảm bảo video có tệp phụ đề .srt tương ứng:
+        1. Kiểm tra nếu đã có file .srt cùng tên bên cạnh video hoặc trong srt_dir.
+        2. Nếu chưa có, tự động trích xuất âm thanh 16kHz mono WAV qua FFmpeg.
+        3. Tự động nhận dạng phụ đề bằng Whisper Native C++ Engine hoặc Python ASR.
+        4. Trả về đường dẫn tuyệt đối tới tệp .srt hợp lệ.
+        """
+        if not video_path or not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video không tồn tại: {video_path}")
+
+        base_no_ext = os.path.splitext(video_path)[0]
+        candidate_srt = f"{base_no_ext}.srt"
+        if os.path.exists(candidate_srt) and os.path.getsize(candidate_srt) > 20:
+            if update_progress:
+                update_progress(42, f"💚 Tái sử dụng phụ đề có sẵn: {os.path.basename(candidate_srt)}")
+            return candidate_srt
+
+        srt_dir = output_dir or os.path.join(ROOT_DIR, 'scripts', 'srt_files')
+        os.makedirs(srt_dir, exist_ok=True)
+        video_basename = os.path.splitext(os.path.basename(video_path))[0]
+        target_srt = os.path.join(srt_dir, f"{video_basename}.srt")
+
+        if os.path.exists(target_srt) and os.path.getsize(target_srt) > 20:
+            if update_progress:
+                update_progress(42, f"💚 Tái sử dụng phụ đề đã lưu: {os.path.basename(target_srt)}")
+            return target_srt
+
+        if check_stop and check_stop():
+            raise RuntimeError("Nhiệm vụ đã bị dừng bởi người dùng")
+
+        if update_progress:
+            update_progress(40, "Đang trích xuất luồng âm thanh 16kHz Mono từ video...")
+
+        import ffmpeg_installer
+        ff_bin = ffmpeg_installer.get_ffmpeg_path() or "ffmpeg"
+        temp_wav = os.path.join(srt_dir, f"temp_asr_{int(time.time()*1000)}.wav")
+
+        try:
+            conv_cmd = [
+                ff_bin, "-y", "-i", video_path,
+                "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                temp_wav
+            ]
+            res = subprocess.run(conv_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000 if os.name == 'nt' else 0)
+            if res.returncode != 0 or not os.path.exists(temp_wav) or os.path.getsize(temp_wav) < 500:
+                raise RuntimeError("Không thể trích xuất âm thanh từ video để nhận dạng phụ đề")
+
+            if check_stop and check_stop():
+                raise RuntimeError("Nhiệm vụ đã bị dừng bởi người dùng")
+
+            if update_progress:
+                update_progress(45, "Đang nhận dạng phụ đề tự động bằng Whisper ASR...")
+
+            import asr_manager
+            whisper_cli = asr_manager.get_whisper_cli()
+            model_path = asr_manager.get_whisper_model_path("base")
+
+            if whisper_cli and model_path:
+                base_out = os.path.splitext(target_srt)[0]
+                lang_arg = language if language and language != 'auto' else 'auto'
+                cmd = [
+                    whisper_cli,
+                    "-m", model_path,
+                    "-f", temp_wav,
+                    "-osrt",
+                    "-of", base_out,
+                    "-l", lang_arg,
+                    "-t", "8",
+                    "-pp"
+                ]
+                p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                generated_srt = f"{base_out}.srt"
+                if os.path.exists(generated_srt) and os.path.getsize(generated_srt) > 10:
+                    if generated_srt != target_srt:
+                        shutil.move(generated_srt, target_srt)
+                    return target_srt
+                else:
+                    logger.warning(f"Whisper C++ kết thúc ({p.returncode}), thử tiếp Python ASR...")
+
+            # Fallback to asr_inference.py if needed
+            python_exec = asr_manager.get_python_exec()
+            asr_script = os.path.join(ROOT_DIR, "asr_inference.py")
+            if python_exec and os.path.exists(asr_script):
+                cmd = [python_exec, "-u", asr_script, video_path, "whisper", target_srt, language or "auto"]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000 if os.name == 'nt' else 0)
+                if os.path.exists(target_srt) and os.path.getsize(target_srt) > 10:
+                    return target_srt
+
+            raise RuntimeError("Không thể tạo tệp phụ đề SRT bằng Whisper ASR. Vui lòng kiểm tra file video hoặc cung cấp sẵn file .srt cùng tên.")
+        finally:
+            if os.path.exists(temp_wav):
+                try:
+                    os.remove(temp_wav)
+                except Exception:
+                    pass
+
     # -------------------------------------------------------------------------
     # PRESET 1: AUTO MOVIE REVIEW / RECAP AI
     # -------------------------------------------------------------------------
     def _run_preset_movie_review(self, task, video_path, output_path, config, update_progress):
-        import asr_manager
-        import ffmpeg_installer
+        def check_stop():
+            return self.stop_requested or task.status == 'cancelled'
 
-        update_progress(40, "Đang chạy trích xuất phụ đề tự động (ASR Whisper)...")
-        srt_path = asr_manager.get_or_create_srt(video_path, None)
+        update_progress(38, "Đang kiểm tra / bóc tách phụ đề tự động (ASR Whisper)...")
+        job_temp_dir = os.path.join(os.path.dirname(output_path), '.batch_temp', task.id)
+        os.makedirs(job_temp_dir, exist_ok=True)
+
+        srt_path = self.ensure_video_srt(
+            video_path=video_path,
+            output_dir=job_temp_dir,
+            language=config.get('language', 'auto'),
+            update_progress=update_progress,
+            check_stop=check_stop
+        )
         if not srt_path or not os.path.exists(srt_path):
             raise RuntimeError("Trích xuất ASR phụ đề thất bại")
 
         update_progress(55, "Đang tạo kịch bản tóm tắt AI (LLM Recap)...")
         import auto_edit_pipeline
+        target_minutes = float(config.get('target_minutes') or 5.0)
+        voice_speed = float(config.get('voice_speed') or 1.0)
+        bgm_vol = int(config.get('bgm_volume') if config.get('bgm_volume') is not None else 12)
+
         payload = {
             'video_path': video_path,
             'srt_path': srt_path,
             'voice_id': config.get('voice_id', 'ngoc_huyen'),
-            'voice_speed': float(config.get('voice_speed', 1.0)),
+            'voice_speed': voice_speed,
+            'target_minutes': target_minutes,
             'orig_volume': float(config.get('orig_volume', 0.15)),
             'output_dir': os.path.dirname(output_path),
             'output_name': os.path.basename(output_path),
             'aspect_ratio': config.get('aspect_ratio', '9:16'),
             'auto_subtitles': bool(config.get('auto_subtitles', True)),
             'openai_model': config.get('openai_model', 'gpt-5.6-luna'),
-            'bgm': config.get('bgm', {'enabled': True, 'volume': 12}),
+            'bgm': config.get('bgm', {'enabled': bgm_vol > 0, 'volume': bgm_vol}),
             'review_style': config.get('review_style', 'dramatic'),
-            'custom_style_prompt': config.get('custom_style_prompt', '')
+            'custom_style_prompt': config.get('custom_style_prompt', ''),
+            'temp_dir': job_temp_dir
         }
 
-        def check_stop():
-            return self.stop_requested or task.status == 'cancelled'
-
         update_progress(65, "Đang tạo giọng đọc TTS & cắt ghép phân cảnh...")
+        last_error_msg = None
         gen = auto_edit_pipeline.run_auto_edit_workflow(payload, check_stop)
         for chunk in gen:
             if check_stop():
@@ -603,39 +716,63 @@ class BatchQueueManager:
                 raise RuntimeError("Nhiệm vụ đã bị dừng bởi người dùng")
             if chunk.startswith('data: '):
                 line = chunk[6:].strip()
+                if '🛑 Lỗi:' in line or '🛑' in line:
+                    last_error_msg = line
                 if '[PROGRESS]' in line:
                     try:
                         p_val = int(line.split('[PROGRESS]')[1].strip())
-                        scaled = int(65 + (p_val * 0.35))
+                        scaled = int(60 + (p_val * 0.40))
                         update_progress(scaled)
                     except Exception:
                         pass
-                elif 'Render' in line or 'FFmpeg' in line or 'TTS' in line:
+                elif any(k in line for k in ['Render', 'FFmpeg', 'TTS', 'Bước', 'kịch bản', 'timeline']):
                     update_progress(task.progress, line[:80])
+
+        if last_error_msg and not os.path.exists(output_path):
+            raise RuntimeError(last_error_msg)
 
     # -------------------------------------------------------------------------
     # PRESET 2: AUTO DUBBING & SUBTITLE TRANSLATION
     # -------------------------------------------------------------------------
     def _run_preset_dubbing(self, task, video_path, output_path, config, update_progress):
+        def check_stop():
+            return self.stop_requested or task.status == 'cancelled'
+
+        update_progress(38, "Đang kiểm tra / bóc tách phụ đề tự động cho Lồng Tiếng...")
+        job_temp_dir = os.path.join(os.path.dirname(output_path), '.batch_temp', task.id)
+        os.makedirs(job_temp_dir, exist_ok=True)
+
+        srt_path = self.ensure_video_srt(
+            video_path=video_path,
+            output_dir=job_temp_dir,
+            language=config.get('language', 'auto'),
+            update_progress=update_progress,
+            check_stop=check_stop
+        )
+        if not srt_path or not os.path.exists(srt_path):
+            raise RuntimeError("Trích xuất phụ đề ASR thất bại cho Lồng Tiếng")
+
         import auto_edit_pipeline
-        
+        voice_speed = float(config.get('voice_speed') or 1.0)
+        orig_vol = float(config.get('original_volume') if config.get('original_volume') is not None else 15)
+
         payload = {
             'video_path': video_path,
+            'srt_path': srt_path,
             'voice_id': config.get('voice_id', 'ngoc_huyen'),
-            'voice_speed': float(config.get('voice_speed', 1.0)),
-            'orig_volume': float(config.get('orig_volume', 0.05)),
+            'voice_speed': voice_speed,
+            'original_volume': orig_vol,
             'output_dir': os.path.dirname(output_path),
             'output_name': os.path.basename(output_path),
             'aspect_ratio': config.get('aspect_ratio', 'original'),
             'auto_subtitles': bool(config.get('auto_subtitles', True)),
             'remove_original_vocals': bool(config.get('remove_original_vocals', True)),
-            'bgm': config.get('bgm', {'enabled': False})
+            'bgm': config.get('bgm', {'enabled': False}),
+            'temp_dir': job_temp_dir
         }
 
-        def check_stop():
-            return self.stop_requested or task.status == 'cancelled'
-
-        update_progress(45, "Đang xử lý lồng tiếng AI Narration...")
+        update_progress(50, "Đang xử lý lồng tiếng AI Narration...")
+        last_error_msg = None
         gen = auto_edit_pipeline.run_narration_workflow(payload, check_stop)
         for chunk in gen:
             if check_stop():
@@ -643,13 +780,20 @@ class BatchQueueManager:
                 raise RuntimeError("Nhiệm vụ đã bị dừng bởi người dùng")
             if chunk.startswith('data: '):
                 line = chunk[6:].strip()
+                if '🛑 Lỗi:' in line or '🛑' in line:
+                    last_error_msg = line
                 if '[PROGRESS]' in line:
                     try:
                         p_val = int(line.split('[PROGRESS]')[1].strip())
-                        scaled = int(45 + (p_val * 0.55))
+                        scaled = int(50 + (p_val * 0.50))
                         update_progress(scaled)
                     except Exception:
                         pass
+                elif any(k in line for k in ['Lồng tiếng', 'Render', 'FFmpeg', 'TTS']):
+                    update_progress(task.progress, line[:80])
+
+        if last_error_msg and not os.path.exists(output_path):
+            raise RuntimeError(last_error_msg)
 
     # -------------------------------------------------------------------------
     # PRESET 3: AUTO CLEAN & RE-FORMAT 9:16 ANTI-COPYRIGHT
@@ -695,5 +839,17 @@ class BatchQueueManager:
         update_progress(60, "Đang render video thành phẩm...")
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
         if proc.returncode != 0:
-            raise RuntimeError(f"FFmpeg Render Anti-Copyright lỗi: {proc.stderr[:300]}")
+            # Fallback nếu video đầu vào không có audio stream
+            logger.warning(f"FFmpeg render kèm audio thất bại, thử lại chế độ video-only: {proc.stderr[:200]}")
+            cmd_no_audio = [
+                ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
+                '-i', video_path,
+                '-filter:v', v_filter_str,
+                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22',
+                '-an',
+                output_path
+            ]
+            proc2 = subprocess.run(cmd_no_audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
+            if proc2.returncode != 0:
+                raise RuntimeError(f"FFmpeg Render Anti-Copyright lỗi: {proc2.stderr[:300]}")
         update_progress(95, "Hoàn tất render!")

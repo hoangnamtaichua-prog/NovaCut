@@ -237,22 +237,34 @@ def call_openai_chat_resilient(url, headers, payload, max_retries=3, initial_tim
             res = session.post(url, headers=headers, json=payload, timeout=timeout)
             if res.status_code == 200:
                 res_json = res.json()
-                content = res_json['choices'][0]['message']['content']
-                usage = res_json.get('usage', {})
-                return {
-                    "content": content,
-                    "usage": usage,
-                    "raw": res_json
-                }, None
+                if 'error' in res_json:
+                    err_info = res_json['error']
+                    err_text = err_info.get('message', str(err_info)) if isinstance(err_info, dict) else str(err_info)
+                    last_error = f"Lỗi máy chủ AI (HTTP 200 Error): {err_text}"
+                    wait_sec = 4 * attempt
+                    if progress_logger:
+                        progress_logger(f"⚠️ Máy chủ AI thông báo quá tải hoặc lỗi: {err_text[:120]}, tự động thử lại sau {wait_sec}s...")
+                    time.sleep(wait_sec)
+                    continue
+                if 'choices' in res_json and len(res_json['choices']) > 0:
+                    content = res_json['choices'][0].get('message', {}).get('content', '')
+                    usage = res_json.get('usage', {})
+                    return {
+                        "content": content,
+                        "usage": usage,
+                        "raw": res_json
+                    }, None
+                else:
+                    last_error = f"Phản hồi từ AI không chứa dữ liệu choices: {str(res_json)[:200]}"
             elif res.status_code in [429, 500, 502, 503, 504]:
                 err_text = res.text[:200]
-                last_error = f"Lỗi máy chủ OpenAI (Mã {res.status_code}): {err_text}"
+                last_error = f"Lỗi máy chủ OpenAI/OpenRouter (Mã {res.status_code}): {err_text}"
                 wait_sec = 3 * attempt
                 if progress_logger:
-                    progress_logger(f"⚠️ Máy chủ OpenAI bận (Mã {res.status_code}), tự động chờ {wait_sec}s để thử lại...")
+                    progress_logger(f"⚠️ Máy chủ AI bận (Mã {res.status_code}), tự động chờ {wait_sec}s để thử lại...")
                 time.sleep(wait_sec)
             else:
-                return None, f"Lỗi API OpenAI (Mã {res.status_code}): {res.text}"
+                return None, f"Lỗi API OpenAI/OpenRouter (Mã {res.status_code}): {res.text}"
         except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
             last_error = f"Quá thời gian chờ phản hồi ({timeout}s) do mạng hoặc phản hồi dài: {str(e)}"
             timeout += 60
@@ -748,7 +760,7 @@ def resolve_openai_credentials(payload=None):
                                 openai_key = line.strip().split('=', 1)[1]
                             elif line.startswith('openaiBaseUrl=') and (not openai_base_url or openai_base_url == 'https://api.openai.com/v1'):
                                 openai_base_url = line.strip().split('=', 1)[1]
-                            elif line.startswith('openaiModel=') and (not openai_model or openai_model in ['gpt-4o-mini', 'gpt-5.6-luna']):
+                            elif line.startswith('openaiModel=') and (not openai_model or openai_model in ['gpt-5.6-luna', 'gpt-5.6-luna']):
                                 openai_model = line.strip().split('=', 1)[1]
                     if openai_key and not openai_key.startswith('•'):
                         break
@@ -768,6 +780,14 @@ def resolve_openai_credentials(payload=None):
         if not openai_key:
             openai_key = os.environ.get('OPENAI_API_KEY')
 
+    if openai_key:
+        openai_key = str(openai_key).strip()
+        if openai_key.startswith('sk-or-') and (not openai_base_url or openai_base_url == 'https://api.openai.com/v1'):
+            openai_base_url = 'https://openrouter.ai/api/v1'
+        if openai_key.startswith('sk-or-') or 'openrouter.ai' in str(openai_base_url):
+            if not openai_model or openai_model in ['gpt-5.6-luna', 'gpt-5.6-luna']:
+                openai_model = 'gpt-5.6-luna'
+
     return openai_key, openai_base_url, openai_model
 
 import threading
@@ -778,11 +798,28 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
     
     async def async_worker():
         try:
+            import httpx
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=openai_key, base_url=openai_base_url)
+            client_headers = {}
+            is_openrouter = 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-')
+            if is_openrouter:
+                client_headers = {"HTTP-Referer": "https://novacut.app", "X-Title": "NovaCut AI"}
             
-            q.put({"type": "log", "msg": f"🔄 Bắt đầu Map: Xử lý {len(chunks)} đoạn song song..."})
+            # Timeout 120s cho mỗi request — tránh treo vĩnh viễn trên Free models
+            http_client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0))
+            client = AsyncOpenAI(
+                api_key=openai_key, base_url=openai_base_url,
+                default_headers=client_headers if client_headers else None,
+                http_client=http_client
+            )
             
+            # Đối với model Free hoặc OpenRouter: giới hạn concurrency = 1 để tránh lỗi 429 upstream rate limit
+            concurrency = 1 if ('free' in str(openai_model).lower() or is_openrouter) else 2
+            sem = asyncio.Semaphore(concurrency)
+            is_free = 'free' in str(openai_model).lower() or is_openrouter
+            
+            q.put({"type": "log", "msg": f"🔄 Bắt đầu Map: Xử lý {len(chunks)} đoạn kịch bản (Tuần tự, timeout 120s)..."})
+
             async def process_chunk(idx, chunk_text):
                 prompt = prompt_map.replace("{SỐ_THỨ_TỰ_CHUNK}", str(idx+1))\
                                    .replace("{TỔNG_SỐ_CHUNK}", str(len(chunks)))\
@@ -805,28 +842,46 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                         q.put({"type": "token", "count": len(cached_text)})
                         return cached_text
                         
-                response = await client.chat.completions.create(
-                    model=openai_model,
-                    messages=[
-                        {"role": "system", "content": "Bạn là chuyên gia review phim hàng đầu."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    stream=True
-                )
-                
-                result = ""
-                async for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        result += content
-                        q.put({"type": "token", "count": len(content)})
-                        
-                with open(cache_file, 'w', encoding='utf-8') as f:
-                    f.write(result)
-                return result
+                async with sem:
+                    max_attempts = 5
+                    for attempt in range(1, max_attempts + 1):
+                        try:
+                            q.put({"type": "log", "msg": f"📝 Đoạn {idx+1}/{len(chunks)}: Đang gửi đến AI (lần {attempt})..."})
+                            # Dùng NON-streaming cho Map phase — ổn định hơn trên Free models
+                            response = await client.chat.completions.create(
+                                model=openai_model,
+                                messages=[
+                                    {"role": "system", "content": "Bạn là chuyên gia review phim hàng đầu."},
+                                    {"role": "user", "content": prompt}
+                                ]
+                            )
+                            
+                            result = ""
+                            if hasattr(response, 'choices') and response.choices and len(response.choices) > 0:
+                                result = response.choices[0].message.content or ""
+                            if result.strip():
+                                q.put({"type": "token", "count": len(result)})
+                                with open(cache_file, 'w', encoding='utf-8') as f:
+                                    f.write(result)
+                                q.put({"type": "log", "msg": f"✅ Đoạn {idx+1}/{len(chunks)}: Hoàn thành ({len(result)} ký tự)"})
+                                return result
+                            raise RuntimeError("Phản hồi kịch bản rỗng")
+                        except Exception as e:
+                            err_msg = str(e)[:120]
+                            if attempt < max_attempts:
+                                wait_s = 5 * attempt
+                                q.put({"type": "log", "msg": f"⏳ Đoạn {idx+1}: Lỗi ({err_msg}), đợi {wait_s}s thử lại ({attempt}/{max_attempts})..."})
+                                await asyncio.sleep(wait_s)
+                            else:
+                                raise RuntimeError(f"Đoạn {idx+1} thất bại sau {max_attempts} lần: {err_msg}")
 
-            map_tasks = [process_chunk(i, c) for i, c in enumerate(chunks)]
-            map_results = await asyncio.gather(*map_tasks)
+            # Xử lý tuần tự từng chunk để tránh rate limit
+            map_results = []
+            for i, c in enumerate(chunks):
+                result = await process_chunk(i, c)
+                map_results.append(result)
+                if i < len(chunks) - 1 and is_free:
+                    await asyncio.sleep(2)  # Nghỉ 2s giữa các chunk cho Free models
             
             q.put({"type": "log", "msg": "🔄 Bắt đầu Reduce: Gộp các kịch bản thành một kịch bản hoàn chỉnh..."})
             combined = "\n\n--- ĐOẠN TIẾP THEO ---\n\n".join(map_results)
@@ -838,24 +893,40 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
             if style_directive:
                 prompt_red = f"{style_directive}\n\n{prompt_red}"
 
-            response = await client.chat.completions.create(
-                model=openai_model,
-                messages=[
-                    {"role": "system", "content": "Bạn là biên tập viên kịch bản review phim chuyên nghiệp."},
-                    {"role": "user", "content": prompt_red}
-                ],
-                stream=True
-            )
-            
-            final_result = ""
-            async for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    final_result += content
-                    q.put({"type": "token", "count": len(content)})
+            max_attempts = 5
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    q.put({"type": "log", "msg": f"📝 Reduce: Đang gộp kịch bản hoàn chỉnh (lần {attempt})..."})
+                    response = await client.chat.completions.create(
+                        model=openai_model,
+                        messages=[
+                            {"role": "system", "content": "Bạn là biên tập viên kịch bản review phim chuyên nghiệp."},
+                            {"role": "user", "content": prompt_red}
+                        ],
+                        stream=True
+                    )
                     
-            q.put({"type": "done", "result": final_result})
+                    final_result = ""
+                    async for chunk in response:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            final_result += content
+                            q.put({"type": "token", "count": len(content)})
+                            
+                    if final_result.strip():
+                        q.put({"type": "done", "result": final_result})
+                        break
+                    raise RuntimeError("Phản hồi Reduce rỗng")
+                except Exception as e:
+                    err_msg = str(e)[:120]
+                    if attempt < max_attempts:
+                        wait_s = 5 * attempt
+                        q.put({"type": "log", "msg": f"⏳ Reduce: Lỗi ({err_msg}), đợi {wait_s}s thử lại ({attempt}/{max_attempts})..."})
+                        await asyncio.sleep(wait_s)
+                    else:
+                        raise RuntimeError(f"Reduce thất bại sau {max_attempts} lần: {err_msg}")
             
+            await http_client.aclose()
         except Exception as e:
             q.put({"type": "error", "msg": str(e)})
             
@@ -872,7 +943,7 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
     last_log = 0
     while True:
         try:
-            item = q.get(timeout=300)
+            item = q.get(timeout=2)
             if item["type"] == "log":
                 yield log_func(item["msg"])
             elif item["type"] == "token":
@@ -888,8 +959,9 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                 yield log_func(f"🛑 Lỗi API (Map/Reduce): {item['msg']}")
                 return None
         except queue.Empty:
-            yield log_func("🛑 Timeout chờ API OpenAI sau 300s không có phản hồi.")
-            return None
+            if not t.is_alive():
+                yield log_func("🛑 Luồng xử lý kịch bản kết thúc bất thường mà không có kết quả.")
+                return None
     return final_script
 
 def run_timeline_map_reduce_pipeline_sync(
@@ -935,12 +1007,25 @@ def run_timeline_map_reduce_pipeline_sync(
 
     async def async_worker():
         try:
+            import httpx
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=openai_key, base_url=openai_base_url)
-            sem = asyncio.Semaphore(max_concurrency)
+            client_headers = {}
+            is_openrouter = 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-')
+            if is_openrouter:
+                client_headers = {"HTTP-Referer": "https://novacut.app", "X-Title": "NovaCut AI"}
             
-            q.put({"type": "log", "msg": f"🎬 Bắt đầu phân tích timeline theo {total_batches} mẻ (mỗi mẻ ~{batch_size} câu)..."})
+            http_client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0))
+            client = AsyncOpenAI(
+                api_key=openai_key, base_url=openai_base_url,
+                default_headers=client_headers if client_headers else None,
+                http_client=http_client
+            )
+            is_free = 'free' in str(openai_model).lower() or is_openrouter
+            effective_concurrency = 2 if is_free else max_concurrency
+            sem = asyncio.Semaphore(effective_concurrency)
             
+            q.put({"type": "log", "msg": f"🎬 Bắt đầu phân tích timeline theo {total_batches} mẻ (mỗi mẻ ~{batch_size} câu, timeout 120s)..."})
+
             async def process_batch(batch):
                 b_idx = batch["batch_idx"]
                 s_ref = batch["start_ref"]
@@ -966,8 +1051,9 @@ def run_timeline_map_reduce_pipeline_sync(
                 prompt_user += instruction_addon
                 
                 async with sem:
-                    for attempt in range(1, 4):
+                    for attempt in range(1, 5):
                         try:
+                            q.put({"type": "log", "msg": f"📝 Mẻ {b_idx+1}/{total_batches} (câu {s_ref}→{e_ref}): Đang phân tích (lần {attempt})..."})
                             response = await client.chat.completions.create(
                                 model=openai_model,
                                 messages=[
@@ -988,8 +1074,21 @@ def run_timeline_map_reduce_pipeline_sync(
                                 parsed = json.loads(clean_json)
                             except Exception:
                                 clean_json = re.sub(r',\s*([\]}])', r'\1', clean_json)
-                                parsed = json.loads(clean_json)
+                                try:
+                                    parsed = json.loads(clean_json)
+                                except Exception:
+                                    json_match = re.search(r'\[\s*\{.*\}\s*\]', raw_content, re.DOTALL)
+                                    if json_match:
+                                        parsed = json.loads(json_match.group(0))
+                                    else:
+                                        raise ValueError("Không tìm thấy cấu trúc JSON hợp lệ trong phản hồi AI")
                                 
+                            if isinstance(parsed, dict):
+                                for k in ['clips', 'timeline', 'data', 'result', 'segments', 'cuts']:
+                                    if isinstance(parsed.get(k), list) and len(parsed[k]) > 0:
+                                        parsed = parsed[k]
+                                        break
+
                             if isinstance(parsed, list) and len(parsed) > 0:
                                 # Chuẩn hóa format từng item
                                 normalized_batch = []
@@ -1017,10 +1116,15 @@ def run_timeline_map_reduce_pipeline_sync(
                                         json.dump(normalized_batch, f, indent=2)
                                     q.put({"type": "log", "msg": f"✅ Mẻ {b_idx+1}/{total_batches} (câu {s_ref}→{e_ref}): Hoàn thành {len(normalized_batch)} phân đoạn."})
                                     return normalized_batch
+
+                            raise ValueError(f"Dữ liệu trả về không chứa danh sách clip hợp lệ: {raw_content[:80]}")
                         except Exception as e:
-                            if attempt == 3:
+                            if attempt == 4:
                                 q.put({"type": "log", "msg": f"⚠️ Mẻ {b_idx+1}/{total_batches} gặp lỗi ({str(e)[:80]}), áp dụng phân bổ dự phòng."})
-                            await asyncio.sleep(2 * attempt)
+                            else:
+                                wait_s = 5 * attempt
+                                q.put({"type": "log", "msg": f"⏳ Mẻ {b_idx+1}: Lỗi ({str(e)[:60]}), đợi {wait_s}s thử lại..."})
+                                await asyncio.sleep(wait_s)
                             
                 # Fallback nếu batch này không gọi được hoặc API trả về rỗng
                 fallback_items = []
@@ -1060,7 +1164,7 @@ def run_timeline_map_reduce_pipeline_sync(
     final_timeline = []
     while True:
         try:
-            item = q.get(timeout=300)
+            item = q.get(timeout=2)
             if item["type"] == "log":
                 yield log_func(item["msg"])
             elif item["type"] == "done":
@@ -1071,8 +1175,9 @@ def run_timeline_map_reduce_pipeline_sync(
                 yield log_func(f"🛑 Lỗi phân tích timeline: {item['msg']}")
                 return []
         except queue.Empty:
-            yield log_func("🛑 Timeout chờ API phân tích timeline sau 300s.")
-            return []
+            if not t.is_alive():
+                yield log_func("🛑 Luồng xử lý timeline kết thúc bất thường mà không có kết quả.")
+                return []
 
     return final_timeline
 
@@ -1132,10 +1237,25 @@ def run_auto_edit_workflow(payload, check_stop_func):
         return
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+    if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
+        headers["HTTP-Referer"] = "https://novacut.app"
+        headers["X-Title"] = "NovaCut AI"
     url = f"{openai_base_url.rstrip('/')}/chat/completions"
 
     os.makedirs(output_dir, exist_ok=True)
-    temp_dir = os.path.join(output_dir, 'auto_edit_temp')
+    custom_temp = payload.get('temp_dir')
+    if custom_temp:
+        try:
+            norm_custom = os.path.realpath(custom_temp)
+            norm_out = os.path.realpath(output_dir)
+            if norm_custom.startswith(norm_out):
+                temp_dir = custom_temp
+            else:
+                temp_dir = os.path.join(output_dir, 'auto_edit_temp')
+        except Exception:
+            temp_dir = os.path.join(output_dir, 'auto_edit_temp')
+    else:
+        temp_dir = os.path.join(output_dir, 'auto_edit_temp')
     os.makedirs(temp_dir, exist_ok=True)
     
     def log(msg, step=None):
@@ -1753,10 +1873,25 @@ def run_narration_workflow(payload, check_stop_func):
         return
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+    if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
+        headers["HTTP-Referer"] = "https://novacut.app"
+        headers["X-Title"] = "NovaCut AI"
     url = f"{openai_base_url.rstrip('/')}/chat/completions"
 
     os.makedirs(output_dir, exist_ok=True)
-    temp_dir = os.path.join(output_dir, 'narration_temp')
+    custom_temp = payload.get('temp_dir')
+    if custom_temp:
+        try:
+            norm_custom = os.path.realpath(custom_temp)
+            norm_out = os.path.realpath(output_dir)
+            if norm_custom.startswith(norm_out):
+                temp_dir = custom_temp
+            else:
+                temp_dir = os.path.join(output_dir, 'narration_temp')
+        except Exception:
+            temp_dir = os.path.join(output_dir, 'narration_temp')
+    else:
+        temp_dir = os.path.join(output_dir, 'narration_temp')
     os.makedirs(temp_dir, exist_ok=True)
 
     def log(msg, step=None):
@@ -1815,6 +1950,9 @@ def run_narration_workflow(payload, check_stop_func):
                 prompt_final = f"{style_directive}\n\n{prompt_final}"
 
             headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+            if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
+                headers["HTTP-Referer"] = "https://novacut.app"
+                headers["X-Title"] = "NovaCut AI"
             url = f"{openai_base_url.rstrip('/')}/chat/completions"
 
             payload_gpt = {

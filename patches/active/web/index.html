@@ -117,7 +117,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             <div id="videoZoomWrapper" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center; transform-origin: center center; transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1);">
                                 <video id="videoPlayer" src=""></video>
                                 <div id="dynamicBlurOverlay" style="position: absolute; z-index: 5; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); background: rgba(0,0,0,0.06); opacity: 0; visibility: hidden; pointer-events: auto; transition: opacity 0.06s ease, width 0.05s ease, left 0.05s ease; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); transform: translateZ(0); will-change: transform, opacity;"></div>
-                                <div id="videoOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; cursor: crosshair; display: none;"></div>
+                                <div id="videoOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 200; cursor: crosshair; display: none;"></div>
                                 <div id="videoLoadingSpinner" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;">
                                     <div class="loading-spinner"></div>
                                 </div>
@@ -2910,6 +2910,25 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                 <!-- LEFT COLUMN: Ingestion & Preset Configuration -->
                 <div style="display: flex; flex-direction: column; gap: 16px;">
                     
+                    <!-- Preflight System Readiness Bar -->
+                    <div id="batchPreflightBar" style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.9)); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11.5px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                        <div style="display: flex; align-items: center; gap: 6px; font-weight: 700; color: #38bdf8;">
+                            <span>🚀</span>
+                            <span>HỆ THỐNG:</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                            <span id="batchStatusFfmpeg" style="display: flex; align-items: center; gap: 4px; color: #10b981; font-weight: 600;">
+                                <span style="font-size: 8px;">●</span> FFmpeg: Sẵn sàng
+                            </span>
+                            <span id="batchStatusAsr" style="display: flex; align-items: center; gap: 4px; color: #10b981; font-weight: 600;">
+                                <span style="font-size: 8px;">●</span> Whisper ASR: Sẵn sàng
+                            </span>
+                            <span id="batchStatusAi" style="display: flex; align-items: center; gap: 4px; color: #a855f7; font-weight: 600;">
+                                <span style="font-size: 8px;">●</span> AI Key: Đã nạp
+                            </span>
+                        </div>
+                    </div>
+
                     <!-- Card 1: Ingestion Sources -->
                     <div class="card" style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; overflow: hidden;">
                         <div class="card-header" style="padding: 12px 18px; background: #0f172a; border-bottom: 1px solid #334155; display: flex; align-items: center; justify-content: space-between;">
@@ -2932,7 +2951,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <label style="font-size: 12px; font-weight: 600; color: #cbd5e1;">Dán danh sách liên kết (mỗi dòng 1 link):</label>
                                     <span id="batchUrlCountBadge" style="font-size: 11px; color: #38bdf8; font-weight: 700;">0 link</span>
                                 </div>
-                                <textarea id="batchInputUrls" rows="6" placeholder="https://www.douyin.com/video/...\nhttps://www.tiktok.com/@...\nhttps://www.youtube.com/watch?v=..." style="width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 12.5px; font-family: monospace; resize: vertical; line-height: 1.5;"></textarea>
+                                <textarea id="batchInputUrls" rows="5" placeholder="https://www.douyin.com/video/...\nhttps://www.tiktok.com/@...\nhttps://www.youtube.com/watch?v=..." style="width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 12.5px; font-family: monospace; resize: vertical; line-height: 1.5;"></textarea>
                                 <div style="font-size: 11px; color: #94a3b8;">Hỗ trợ: Douyin, TikTok, YouTube, Bilibili, Facebook Reels, link MP4 trực tiếp.</div>
                             </div>
 
@@ -2942,13 +2961,15 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <input type="text" id="batchFolderInputPath" readonly placeholder="Chọn thư mục chứa video trên máy..." style="flex: 1; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 12px;">
                                     <button type="button" id="btnSelectBatchFolder" class="btn secondary small" style="white-space: nowrap; font-weight: 600;">📂 Chọn Folder</button>
                                 </div>
-                                <div style="text-align: center; color: #64748b; font-size: 11px; margin: 4px 0;">— HOẶC —</div>
+                                <div style="text-align: center; color: #64748b; font-size: 11px; margin: 2px 0;">— HOẶC CHỌN TỪNG FILE —</div>
                                 <div style="display: flex; gap: 8px;">
-                                    <button type="button" id="btnSelectBatchFiles" class="btn secondary" style="width: 100%; padding: 8px; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                                        <span>🎬 Chọn Nhiều File Video (.mp4, .mkv)</span>
+                                    <button type="button" id="btnSelectBatchFiles" class="btn secondary" style="width: 100%; padding: 10px; font-size: 12.5px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px dashed #38bdf8; background: rgba(56, 189, 248, 0.06); color: #38bdf8; font-weight: 700; cursor: pointer; border-radius: 8px;">
+                                        <span>🎬</span>
+                                        <span>Chọn Nhiều File Video (.mp4, .mkv, .mov)</span>
                                     </button>
+                                    <input type="file" id="batchHiddenFileInput" multiple accept="video/*,.mp4,.mkv,.mov,.avi,.webm" style="display: none;">
                                 </div>
-                                <div id="batchLocalFilesSummary" style="font-size: 11.5px; color: #38bdf8; display: none;"></div>
+                                <div id="batchLocalFilesSummary" style="font-size: 11.5px; color: #38bdf8; background: rgba(56, 189, 248, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.2); display: none;"></div>
                             </div>
 
                         </div>
@@ -2959,69 +2980,189 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                         <div class="card-header" style="padding: 12px 18px; background: #0f172a; border-bottom: 1px solid #334155; display: flex; align-items: center; justify-content: space-between;">
                             <div style="display: flex; align-items: center; gap: 8px;">
                                 <span style="color: #c084fc;">⚙️</span>
-                                <span style="font-weight: 700; font-size: 13.5px; color: #f8fafc;">2. CẤU HÌNH PIPELINE TỰ ĐỘNG</span>
+                                <span style="font-weight: 700; font-size: 13.5px; color: #f8fafc;">2. CẤU HÌNH PIPELINE THEO PRESET</span>
                             </div>
                         </div>
                         <div class="card-body" style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
                             
                             <!-- Preset Selector -->
                             <div>
-                                <label style="font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 6px; display: block;">Mẫu xử lý (Preset Workflow):</label>
-                                <select id="batchSelectPreset" class="text-input" style="width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; color: #fff; font-size: 13px; font-weight: 700;">
-                                    <option value="review" selected>🍿 Preset 1: Auto Review Phim AI (Script + TTS + Cắt 9:16)</option>
-                                    <option value="dubbing">🎙️ Preset 2: Auto Biên Tập & Lồng Tiếng Phim (Tách SFX + TTS)</option>
+                                <label style="font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; display: block;">Chọn Mẫu Xử Lý (Preset):</label>
+                                <select id="batchSelectPreset" class="text-input" style="width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; color: #38bdf8; font-size: 13px; font-weight: 800;">
+                                    <option value="review" selected>🍿 Preset 1: Auto Review Phim AI (Script + TTS + Cắt Phim)</option>
+                                    <option value="dubbing">🎙️ Preset 2: Auto Lồng Tiếng Phim (Tách Giọng Gốc + TTS)</option>
                                     <option value="anti_copyright">🛡️ Preset 3: Auto Clean 9:16 Chống Bản Quyền (Flip + Zoom + Speed)</option>
                                 </select>
                             </div>
 
-                            <!-- Review Style Selector (Only for Preset 1) -->
-                            <div id="batchReviewStyleRow">
-                                <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">🎭 Phong cách Review:</label>
-                                <select id="batchSelectReviewStyle" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600;">
-                                    <option value="dramatic" selected>🎭 Kịch Tính & Hồi Hộp (Căng thẳng, lôi cuốn)</option>
-                                    <option value="humorous">😂 Hài Hước & Cà Khịa (Dí dỏm, châm biếm)</option>
-                                    <option value="deep_analysis">🧠 Phân Tích & Triết Lý (Tâm lý sâu sắc)</option>
-                                    <option value="fast_paced">⚡ Tóm Tắt Nhanh / Mì Ăn Liền (Siêu tốc, dồn dập)</option>
-                                    <option value="horror">👻 Kinh Dị & Rùng Rợn (U ám, giật gân)</option>
-                                    <option value="emotional">💖 Tình Cảm & Lắng Đọng (Xúc động, tha thiết)</option>
-                                </select>
-                            </div>
-
-                            <!-- Preset Details Configuration -->
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <!-- ======================================================== -->
+                            <!-- PANEL PRESET 1: REVIEW PHIM AI                           -->
+                            <!-- ======================================================== -->
+                            <div id="batchPanelPresetReview" style="display: flex; flex-direction: column; gap: 12px;">
+                                
+                                <!-- Target Duration -->
                                 <div>
-                                    <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Giọng đọc TTS:</label>
-                                    <select id="batchSelectVoice" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
-                                        <option value="ngoc_huyen" selected>👩 Ngọc Huyền (Nữ Bắc)</option>
-                                        <option value="nam_khoa">👨 Nam Khoa (Nam Bắc)</option>
-                                        <option value="mai_linh">👩 Mai Linh (Nữ Nam)</option>
-                                        <option value="minh_duc">👨 Minh Đức (Nam Nam)</option>
-                                        <option value="edge_vi-VN-HoaiMyNeural">👩 Edge Hoài My</option>
-                                        <option value="edge_vi-VN-NamMinhNeural">👨 Edge Nam Minh</option>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                        <label style="font-size: 11.5px; font-weight: 700; color: #38bdf8;">⏱️ Thời lượng Review mục tiêu:</label>
+                                        <span id="batchWordsEstimateHint" style="font-size: 11px; color: #94a3b8;">~1,050 từ (3.5 từ/s)</span>
+                                    </div>
+                                    <select id="batchTargetMinutes" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600;">
+                                        <option value="3">⚡ 3 Phút (~630 từ) - TikTok / Shorts</option>
+                                        <option value="5" selected>⏱️ 5 Phút (~1,050 từ) - Chuẩn Review</option>
+                                        <option value="8">🎬 8 Phút (~1,680 từ) - Chi tiết</option>
+                                        <option value="10">🍿 10 Phút (~2,100 từ) - YouTube dài</option>
+                                        <option value="15">🌟 15 Phút (~3,150 từ) - Toàn cảnh</option>
                                     </select>
                                 </div>
+
+                                <!-- Review Style -->
                                 <div>
-                                    <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Tỷ lệ khung hình:</label>
-                                    <select id="batchSelectAspect" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
-                                        <option value="9:16" selected>📱 9:16 (Shorts / TikTok / Reels)</option>
-                                        <option value="16:9">🖥️ 16:9 (Ngang YouTube chuẩn)</option>
-                                        <option value="original">🔄 Giữ nguyên tỷ lệ gốc</option>
+                                    <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">🎭 Phong cách Review:</label>
+                                    <select id="batchSelectReviewStyle" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600;">
+                                        <option value="dramatic" selected>🎭 Kịch Tính & Hồi Hộp (Căng thẳng, lôi cuốn)</option>
+                                        <option value="humorous">😂 Hài Hước & Cà Khịa (Dí dỏm, châm biếm)</option>
+                                        <option value="deep_analysis">🧠 Phân Tích & Triết Lý (Tâm lý sâu sắc)</option>
+                                        <option value="fast_paced">⚡ Tóm Tắt Nhanh / Mì Ăn Liền (Dồn dập)</option>
+                                        <option value="horror">👻 Kinh Dị & Rùng Rợn (U ám, giật gân)</option>
+                                        <option value="emotional">💖 Tình Cảm & Lắng Đọng (Xúc động)</option>
                                     </select>
+                                </div>
+
+                                <!-- Voice & Speed -->
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Giọng đọc TTS:</label>
+                                        <select id="batchSelectVoice" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="ngoc_huyen" selected>👩 Ngọc Huyền (Nữ Bắc)</option>
+                                            <option value="nam_khoa">👨 Nam Khoa (Nam Bắc)</option>
+                                            <option value="mai_linh">👩 Mai Linh (Nữ Nam)</option>
+                                            <option value="minh_duc">👨 Minh Đức (Nam Nam)</option>
+                                            <option value="edge_vi-VN-HoaiMyNeural">👩 Edge Hoài My</option>
+                                            <option value="edge_vi-VN-NamMinhNeural">👨 Edge Nam Minh</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Tốc độ đọc:</label>
+                                        <select id="batchVoiceSpeed" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="0.95">0.95x (Chậm rãi)</option>
+                                            <option value="1.0" selected>1.0x (Chuẩn tự nhiên)</option>
+                                            <option value="1.05">1.05x (Hơi nhanh)</option>
+                                            <option value="1.1">1.10x (Nhanh vừa)</option>
+                                            <option value="1.15">1.15x (Dồn dập)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Aspect & BGM -->
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Khung hình:</label>
+                                        <select id="batchSelectAspect" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="9:16" selected>📱 9:16 (TikTok/Shorts)</option>
+                                            <option value="16:9">🖥️ 16:9 (YouTube)</option>
+                                            <option value="original">🔄 Tỷ lệ gốc</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Nhạc nền BGM:</label>
+                                        <select id="batchBgmVolume" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="12" selected>🎵 Bật (Âm lượng 12%)</option>
+                                            <option value="8">🎵 Bật (Nhỏ 8%)</option>
+                                            <option value="18">🎵 Bật (Lớn 18%)</option>
+                                            <option value="0">🔇 Tắt nhạc nền</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Subtitle Checkbox -->
+                                <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 8px 12px; border-radius: 6px; border: 1px solid #334155;">
+                                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; cursor: pointer;">
+                                        <input type="checkbox" id="batchChkAutoSubtitles" checked style="accent-color: #38bdf8; width: 15px; height: 15px;">
+                                        <span>Tự động chèn phụ đề chữ (Subtitles)</span>
+                                    </label>
+                                    <span style="font-size: 11px; color: #a855f7; font-weight: 700;">Whisper + LLM</span>
                                 </div>
                             </div>
 
-                            <!-- AI Model & Subtitle Checkbox -->
-                            <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px 12px; border-radius: 8px; border: 1px solid #334155;">
-                                <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; cursor: pointer;">
-                                    <input type="checkbox" id="batchChkAutoSubtitles" checked style="accent-color: #38bdf8; width: 15px; height: 15px;">
-                                    <span>Tự động chèn phụ đề chữ (Subtitles)</span>
-                                </label>
-                                <span style="font-size: 11px; color: #a855f7; font-weight: 700;">GPT-5.6-Luna</span>
+                            <!-- ======================================================== -->
+                            <!-- PANEL PRESET 2: LỒNG TIẾNG DUBBING                       -->
+                            <!-- ======================================================== -->
+                            <div id="batchPanelPresetDubbing" style="display: none; flex-direction: column; gap: 12px;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Giọng lồng tiếng:</label>
+                                        <select id="batchDubbingVoice" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="ngoc_huyen" selected>👩 Ngọc Huyền (Nữ Bắc)</option>
+                                            <option value="nam_khoa">👨 Nam Khoa (Nam Bắc)</option>
+                                            <option value="mai_linh">👩 Mai Linh (Nữ Nam)</option>
+                                            <option value="minh_duc">👨 Minh Đức (Nam Nam)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Âm lượng thoại gốc:</label>
+                                        <select id="batchOriginalVolume" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="5" selected>5% (Giảm tối đa - khuyên dùng)</option>
+                                            <option value="10">10% (Thoang thoảng)</option>
+                                            <option value="15">15% (Vừa phải)</option>
+                                            <option value="0">0% (Tắt hẳn thoại gốc)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 8px; background: #0f172a; padding: 10px 12px; border-radius: 6px; border: 1px solid #334155;">
+                                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; cursor: pointer;">
+                                        <input type="checkbox" id="batchChkRemoveVocals" checked style="accent-color: #38bdf8; width: 15px; height: 15px;">
+                                        <span>Tách âm UVR5 (Giữ 100% SFX & BGM gốc, bỏ voice cũ)</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; cursor: pointer;">
+                                        <input type="checkbox" id="batchChkDubbingSubs" checked style="accent-color: #38bdf8; width: 15px; height: 15px;">
+                                        <span>Tự động đè phụ đề tiếng Việt</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- ======================================================== -->
+                            <!-- PANEL PRESET 3: CHỐNG BẢN QUYỀN ANTI-COPYRIGHT          -->
+                            <!-- ======================================================== -->
+                            <div id="batchPanelPresetAnti" style="display: none; flex-direction: column; gap: 12px;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Tốc độ tua:</label>
+                                        <select id="batchAntiSpeed" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600;">
+                                            <option value="1.02">1.02x (Tua nhẹ)</option>
+                                            <option value="1.05" selected>1.05x (Chuẩn né quét)</option>
+                                            <option value="1.08">1.08x (Nhanh hơn)</option>
+                                            <option value="1.10">1.10x (Tốc độ cao)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Mức Zoom tâm:</label>
+                                        <select id="batchAntiZoom" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600;">
+                                            <option value="1.02">1.02x (Zoom viền nhẹ)</option>
+                                            <option value="1.05" selected>1.05x (Cắt viền an toàn)</option>
+                                            <option value="1.08">1.08x (Zoom sâu)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Định dạng khung hình:</label>
+                                        <select id="batchAntiAspect" class="text-input" style="width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                            <option value="9:16" selected>📱 9:16 (TikTok / Reels)</option>
+                                            <option value="16:9">🖥️ 16:9 (Ngang YouTube)</option>
+                                        </select>
+                                    </div>
+                                    <div style="display: flex; align-items: flex-end;">
+                                        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; cursor: pointer; padding: 8px; background: #0f172a; border-radius: 6px; border: 1px solid #334155; width: 100%;">
+                                            <input type="checkbox" id="batchChkMirror" checked style="accent-color: #38bdf8; width: 15px; height: 15px;">
+                                            <span>Lật gương video (Flip)</span>
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- Output Directory Picker -->
                             <div>
-                                <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Thư mục xuất thành phẩm:</label>
+                                <label style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; display: block;">Thư mục xuất video thành phẩm:</label>
                                 <div style="display: flex; gap: 8px;">
                                     <input type="text" id="batchOutputDirPath" class="text-input" readonly placeholder="output/batch" style="flex: 1; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
                                     <button type="button" id="btnSelectBatchOutputDir" class="btn secondary small" style="white-space: nowrap;">📂 Chọn</button>
@@ -3158,15 +3299,45 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     </div>
                     
                     <div class="form-group" style="margin-bottom: 12px;">
-                        <label id="openaiKeyLabel" style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">OpenAI API Key (GPT / ChatGPT)</label>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <label id="openaiKeyLabel" style="font-size: 12px; color: #94a3b8; margin: 0; font-weight: 600;">OpenRouter / OpenAI API Key</label>
+                            <span style="font-size: 11px; color: #10b981; font-weight: 700;">🟢 Hỗ trợ OpenRouter (Free)</span>
+                        </div>
                         <div style="display: flex; gap: 8px;">
-                            <input type="password" id="openaiKey" class="text-input" placeholder="sk-proj-... (hoặc bấm [Lấy API Cấp Sẵn] nếu có)" style="flex: 1; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                            <input type="password" id="openaiKey" class="text-input" placeholder="sk-or-v1-... hoặc sk-proj-... (Khuyên dùng OpenRouter để miễn phí)" style="flex: 1; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
                             <button id="btnTestApiKey" class="btn secondary small" style="padding: 0 14px; font-size: 12px; white-space: nowrap;">Test Key</button>
                         </div>
-                        <div id="openaiKeyHelpText" style="font-size: 11px; color: #64748b; margin-top: 3px;">Dùng để tự động sinh kịch bản và dịch phụ đề AI. Bạn có thể tự điền key riêng hoặc dùng key cấp sẵn.</div>
+                        <div id="openaiKeyHelpText" style="font-size: 11px; color: #64748b; margin-top: 3px;">Dùng để tự động sinh kịch bản và dịch phụ đề AI. Bạn có thể sử dụng OpenRouter để chọn các mô hình Miễn Phí (Free).</div>
                     </div>
 
-                    <!-- Hidden: Cố định mặc định Base URL và Model Luna (gpt-5.6-luna) -->
+                    <!-- AI Model Selector -->
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px; font-weight: 600;">Mô hình AI (Model) — Khuyên dùng GPT:</label>
+                        <select id="openaiModelSelect" class="text-input" style="width: 100%; padding: 8px 12px; background: #0f172a; border: 1px solid #38bdf8; border-radius: 6px; color: #38bdf8; font-size: 12.5px; font-weight: 700; cursor: pointer;">
+                            <optgroup label="🚀 MÔ HÌNH CAO CẤP (Ổn định, Đề xuất):">
+                                <option value="gpt-5.6-luna" selected>✨ OpenAI: GPT-5.6 Luna (Khuyên dùng - Rất nhanh & Siêu Ổn định)</option>
+                                <option value="gpt-4o-mini">✨ OpenAI: GPT-4o Mini</option>
+                                <option value="deepseek/deepseek-chat">🔥 DeepSeek V3 (Siêu rẻ ~0.001$/video & kịch bản xuất sắc)</option>
+                                <option value="anthropic/claude-3.5-haiku">⚡ Anthropic: Claude 3.5 Haiku</option>
+                            </optgroup>
+                            <optgroup label="🌟 MÔ HÌNH MIỄN PHÍ (Free Models) - 0đ API:">
+                                <option value="nvidia/nemotron-3-ultra-550b-a55b:free">👑 NVIDIA: Nemotron 3 Ultra (Free - 550B Siêu Thông Minh)</option>
+                                <option value="openrouter/free">⚡ Free Models Router (Tự động chọn model Free tốt nhất)</option>
+                                <option value="z-ai/glm-5.2:free">🎁 Z.ai: GLM 5.2 (Free - Đỉnh cao suy luận & tiếng Việt)</option>
+                                <option value="minimax/minimax-m3:free">🎁 MiniMax: MiniMax M3 (Free - Hành văn mượt mà)</option>
+                                <option value="google/gemma-4-31b-it:free">🎁 Google: Gemma 4 31B (Free - Thông minh)</option>
+                                <option value="nvidia/nemotron-3-super-120b-a12b:free">🎁 NVIDIA: Nemotron 3 Super (Free)</option>
+                            </optgroup>
+                            <optgroup label="⚙️ TÙY CHỈNH:">
+                                <option value="custom">✏️ Nhập Model ID khác trên OpenRouter...</option>
+                            </optgroup>
+                        </select>
+                        <div id="openaiModelCustomRow" style="display: none; margin-top: 6px;">
+                            <input type="text" id="openaiModelCustomInput" class="text-input" placeholder="Ví dụ: meta-llama/llama-3.3-70b-instruct:free" style="width: 100%; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                        </div>
+                    </div>
+
+                    <!-- Base URL & Active Model -->
                     <input type="hidden" id="openaiBaseUrl" value="https://api.openai.com/v1">
                     <input type="hidden" id="openaiModel" value="gpt-5.6-luna">
 

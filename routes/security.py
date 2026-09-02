@@ -28,6 +28,17 @@ def register_user_path(path):
         _selected_roots.add(root)
 
 
+def _is_within(root, candidate):
+    try:
+        p_drive, _ = os.path.splitdrive(root)
+        c_drive, _ = os.path.splitdrive(candidate)
+        if p_drive.lower() != c_drive.lower():
+            return False
+        return os.path.commonpath((root, candidate)) == root
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def is_path_allowed(path, *, must_exist=False, extensions=None):
     if not path:
         return False
@@ -42,7 +53,7 @@ def is_path_allowed(path, *, must_exist=False, extensions=None):
         roots.extend((_real(os.path.join(ROOT_DIR, 'web', 'samples')),))
         with _selection_lock:
             roots.extend(_selected_roots)
-        return any(os.path.commonpath([root, resolved]) == root for root in roots)
+        return any(_is_within(root, resolved) for root in roots)
     except (OSError, ValueError, TypeError):
         return False
 
@@ -50,7 +61,7 @@ def is_path_allowed(path, *, must_exist=False, extensions=None):
 def safe_join(root, name, *, extensions=None):
     root_real = _real(root)
     candidate = _real(os.path.join(root_real, str(name or '')))
-    if os.path.commonpath([root_real, candidate]) != root_real:
+    if not _is_within(root_real, candidate):
         raise ValueError('Đường dẫn nằm ngoài thư mục được phép.')
     if extensions and os.path.splitext(candidate)[1].lower() not in {e.lower() for e in extensions}:
         raise ValueError('Định dạng file không được phép.')

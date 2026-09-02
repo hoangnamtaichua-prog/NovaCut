@@ -24,7 +24,7 @@ def _validate_api_base_url(value):
     parsed = urlparse(str(value or '').strip())
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError('OpenAI Base URL phải là HTTPS hợp lệ và không chứa thông tin đăng nhập.')
-    allowed_hosts = {'api.openai.com', 'api.ai33.pro'}
+    allowed_hosts = {'api.openai.com', 'api.ai33.pro', 'openrouter.ai'}
     allowed_hosts.update(
         item.strip().lower()
         for item in os.environ.get('NOVACUT_ALLOWED_AI_HOSTS', '').split(',')
@@ -264,7 +264,7 @@ def _resolve_openai_credentials(data=None):
                                 openai_key = line.strip().split('=', 1)[1]
                             elif line.startswith('openaiBaseUrl=') and (not openai_base_url or openai_base_url == 'https://api.openai.com/v1'):
                                 openai_base_url = line.strip().split('=', 1)[1]
-                            elif line.startswith('openaiModel=') and (not openai_model or openai_model in ['gpt-4o-mini', 'gpt-5.6-luna']):
+                            elif line.startswith('openaiModel=') and (not openai_model or openai_model in ['gpt-5.6-luna', 'gpt-5.6-luna']):
                                 openai_model = line.strip().split('=', 1)[1]
                     if openai_key and not openai_key.startswith('•'):
                         break
@@ -275,10 +275,15 @@ def _resolve_openai_credentials(data=None):
             openai_key = os.environ.get('OPENAI_API_KEY')
 
     openai_key = str(openai_key or '').strip()
+    if openai_key.startswith('sk-or-') and (not openai_base_url or openai_base_url == 'https://api.openai.com/v1'):
+        openai_base_url = 'https://openrouter.ai/api/v1'
+    if openai_key.startswith('sk-or-') or 'openrouter.ai' in str(openai_base_url):
+        if not openai_model or openai_model in ['gpt-5.6-luna', 'gpt-5.6-luna']:
+            openai_model = 'gpt-5.6-luna'
     openai_base_url = _validate_api_base_url(openai_base_url)
     openai_model = re.sub(r'[^a-zA-Z0-9_.:/-]', '', str(openai_model))[:200]
     if not openai_model:
-        raise ValueError('Tên model OpenAI không hợp lệ.')
+        raise ValueError('Tên model OpenAI / OpenRouter không hợp lệ.')
     return openai_key, openai_base_url, openai_model
 
 @subtitles_bp.route('/api/translate_subtitles', methods=['POST'])
@@ -352,10 +357,14 @@ def translate_subtitles():
                 
             import openai
             import prompt_vault
+            client_headers = {}
+            if 'openrouter.ai' in openai_base_url or openai_key.startswith('sk-or-'):
+                client_headers = {"HTTP-Referer": "https://novacut.app", "X-Title": "NovaCut AI"}
             client = openai.OpenAI(
                 api_key=openai_key,
                 base_url=openai_base_url,
-                timeout=60.0,
+                default_headers=client_headers if client_headers else None,
+                timeout=180.0,
                 max_retries=1
             )
             
@@ -541,10 +550,14 @@ def clean_subtitles_ai():
             return jsonify({'error': quota_msg}), 403
 
         import openai
+        client_headers = {}
+        if 'openrouter.ai' in openai_base_url or openai_key.startswith('sk-or-'):
+            client_headers = {"HTTP-Referer": "https://novacut.app", "X-Title": "NovaCut AI"}
         client = openai.OpenAI(
             api_key=openai_key,
             base_url=openai_base_url,
-            timeout=90.0,
+            default_headers=client_headers if client_headers else None,
+            timeout=180.0,
             max_retries=1
         )
         

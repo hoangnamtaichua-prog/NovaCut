@@ -7,6 +7,9 @@ from batch_queue_manager import BatchQueueManager
 import license_manager
 from routes.security import is_path_allowed, parse_bool
 
+def _ps_literal(value):
+    return "'" + str(value or '').replace("'", "''") + "'"
+
 batch_queue_bp = Blueprint('batch_queue', __name__)
 
 def _require_batch_permission():
@@ -222,3 +225,99 @@ def api_batch_stream():
             mgr.unsubscribe(q)
 
     return Response(event_stream(), mimetype='text/event-stream')
+
+@batch_queue_bp.route('/api/batch/preflight', methods=['GET'])
+def api_batch_preflight():
+    denied = _require_batch_permission()
+    if denied:
+        return denied
+
+    import ffmpeg_installer
+    import asr_manager
+    import auto_edit_pipeline
+
+    ff_path = ffmpeg_installer.get_ffmpeg_path()
+    has_ffmpeg = bool(ff_path and os.path.exists(ff_path))
+
+    whisper_cli = asr_manager.get_whisper_cli()
+    whisper_model = asr_manager.get_whisper_model_path("base")
+    has_asr = bool(whisper_cli and whisper_model)
+
+    openai_key, _, _ = auto_edit_pipeline.resolve_openai_credentials({})
+    has_openai = bool(openai_key)
+
+    return jsonify({
+        'success': True,
+        'ffmpeg': {
+            'ready': has_ffmpeg,
+            'path': ff_path or ''
+        },
+        'asr': {
+            'ready': has_asr,
+            'cli': whisper_cli or '',
+            'model': whisper_model or ''
+        },
+        'ai_key': {
+            'ready': has_openai
+        }
+    })
+
+@batch_queue_bp.route('/api/batch/select_files', methods=['POST'])
+def api_batch_select_files():
+    denied = _require_batch_permission()
+    if denied:
+        return denied
+
+    from routes.security import register_user_path
+    data = request.json or {}
+    title = data.get('title', 'Chọn các file video để xử lý hàng loạt')
+    file_paths = []
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        res = filedialog.askopenfilenames(
+            title=title,
+            filetypes=[
+                ('Video Files', '*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v'),
+                ('All Files', '*.*')
+            ]
+        )
+        root.destroy()
+        if res:
+            file_paths = list(res)
+    except Exception:
+        file_paths = []
+
+        try:
+            ps_cmd = f"""
+            Add-Type -AssemblyName System.Windows.Forms
+            $f = New-Object System.Windows.Forms.OpenFileDialog
+            $f.Title = {_ps_literal(title)}
+            $f.Filter = 'Video Files (*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v)|*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v|All Files (*.*)|*.*'
+            $f.Multiselect = $true
+            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+                $f.FileNames
+            }}
+            """
+            proc = subprocess.run(
+                ['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
+                capture_output=True, text=True, timeout=60,
+                creationflags=0x08000000
+            )
+            file_paths = [p.strip() for p in proc.stdout.splitlines() if p.strip()]
+        except Exception:
+            pass
+
+    valid_paths = [os.path.normpath(p) for p in file_paths if os.path.exists(p)]
+    for p in valid_paths:
+        register_user_path(p)
+
+    return jsonify({
+        'success': True,
+        'files': valid_paths,
+        'count': len(valid_paths)
+    })

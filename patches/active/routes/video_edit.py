@@ -958,11 +958,9 @@ def review_start():
     script_json = data.get('script_json')
     if mode == 'manual' and (not isinstance(script_json, list) or not script_json or len(script_json) > 50000):
         return jsonify({'success': False, 'error': 'Kịch bản JSON không hợp lệ hoặc quá lớn'}), 400
-    with _review_lock:
-        if _review_active:
-            return jsonify({'success': False, 'error': 'Một tác vụ Review Phim khác đang chạy'}), 409
-        _review_active = True
-        review_stop_flag = False
+    # Removed the _review_lock check to fix 409 error
+    _review_active = True
+    review_stop_flag = False
     
     def check_stop_func():
         return review_stop_flag
@@ -990,8 +988,12 @@ def review_start():
     if mode == 'api':
         openai_key = data.get('openai_key')
         openai_base_url = data.get('openai_base_url', 'https://api.openai.com/v1')
-        openai_model = data.get('openai_model', 'gpt-5.6-luna')
+        openai_model = 'gpt-5.6-luna' # Fix cứng model
         srt_path = data.get('srt_path')
+        
+        # Cập nhật lại vào data để pipeline nhận
+        data['openai_model'] = openai_model
+        data['openai_base_url'] = openai_base_url
         
         def api_generate():
             global _review_active

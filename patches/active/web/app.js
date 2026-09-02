@@ -1080,13 +1080,19 @@ function updateDynamicBlurOverlayVisibility() {
         aiBorder: hasAiBorder
     };
 
-    // 4. Cập nhật style cho dynamicBlurOverlay (Zero-Reflow GPU composite)
+    // 4. Cập nhật style cho dynamicBlurOverlay (Zero-Reflow GPU composite, Video-AR-aware)
+    const vRect = (typeof getVideoContentRect === 'function') ? getVideoContentRect() : null;
+    const finalLeft = vRect ? ((vRect.videoX + (leftPct / 100) * vRect.videoW) / vRect.wrapperW * 100) : leftPct;
+    const finalTop = vRect ? ((vRect.videoY + (ocrY / 100) * vRect.videoH) / vRect.wrapperH * 100) : ocrY;
+    const finalWidth = vRect ? (((widthPct / 100) * vRect.videoW) / vRect.wrapperW * 100) : widthPct;
+    const finalHeight = vRect ? (((ocrH / 100) * vRect.videoH) / vRect.wrapperH * 100) : ocrH;
+
     dynamicBlurOverlay.style.backdropFilter = `blur(${blurVal}px)`;
     dynamicBlurOverlay.style.webkitBackdropFilter = `blur(${blurVal}px)`;
-    dynamicBlurOverlay.style.top = `${ocrY}%`;
-    dynamicBlurOverlay.style.height = `${ocrH}%`;
-    dynamicBlurOverlay.style.left = `${leftPct}%`;
-    dynamicBlurOverlay.style.width = `${widthPct}%`;
+    dynamicBlurOverlay.style.top = `${finalTop}%`;
+    dynamicBlurOverlay.style.height = `${finalHeight}%`;
+    dynamicBlurOverlay.style.left = `${finalLeft}%`;
+    dynamicBlurOverlay.style.width = `${finalWidth}%`;
     dynamicBlurOverlay.style.bottom = 'auto';
     dynamicBlurOverlay.style.borderRadius = '6px';
     dynamicBlurOverlay.style.opacity = '1';
@@ -2342,22 +2348,37 @@ async function loadApiKeys() {
             if (openaiKeyEl) {
                 if (isVipTier) {
                     openaiKeyEl.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
-                } else if (data.openaiKey && !data.openaiKey.startsWith('•')) {
+                } else if (data.openaiKey) {
                     openaiKeyEl.value = data.openaiKey;
                 }
             }
             if (openSpeakerApiKeyEl) {
                 if (isVipTier) {
                     openSpeakerApiKeyEl.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
-                } else if (data.openSpeakerApiKey && !data.openSpeakerApiKey.startsWith('•')) {
+                } else if (data.openSpeakerApiKey) {
                     openSpeakerApiKeyEl.value = data.openSpeakerApiKey;
                 }
             }
             if (openaiBaseUrlEl && data.openaiBaseUrl) {
                 openaiBaseUrlEl.value = data.openaiBaseUrl;
             }
-            if (openaiModelEl && data.openaiModel) {
-                openaiModelEl.value = data.openaiModel;
+            if (openaiModelEl) {
+                const currentModel = data.openaiModel || 'gpt-5.6-luna';
+                openaiModelEl.value = currentModel;
+                const modelSelect = document.getElementById('openaiModelSelect');
+                const customRow = document.getElementById('openaiModelCustomRow');
+                const customInput = document.getElementById('openaiModelCustomInput');
+                if (modelSelect) {
+                    const hasOption = Array.from(modelSelect.options).some(o => o.value === currentModel);
+                    if (hasOption) {
+                        modelSelect.value = currentModel;
+                        if (customRow) customRow.style.display = 'none';
+                    } else {
+                        modelSelect.value = 'custom';
+                        if (customRow) customRow.style.display = 'block';
+                        if (customInput) customInput.value = currentModel;
+                    }
+                }
             }
         }
     } catch (e) {
@@ -2694,12 +2715,20 @@ const btnTestApiKey = document.getElementById('btnTestApiKey');
 if (btnTestApiKey) {
     btnTestApiKey.addEventListener('click', async () => {
         const openaiKey = document.getElementById('openaiKey')?.value?.trim() || '';
-        const openaiBaseUrl = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://api.openai.com/v1';
-        const openaiModel = document.getElementById('openaiModel')?.value?.trim() || 'gpt-5.6-luna';
+        const modelSelect = document.getElementById('openaiModelSelect');
+        const customInput = document.getElementById('openaiModelCustomInput');
+        let openaiModel = modelSelect?.value || 'gpt-5.6-luna';
+        if (openaiModel === 'custom') {
+            openaiModel = customInput?.value?.trim() || 'gpt-5.6-luna';
+        }
+        let openaiBaseUrl = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://openrouter.ai/api/v1';
+        if (openaiKey.startsWith('sk-or-')) {
+            openaiBaseUrl = 'https://openrouter.ai/api/v1';
+        }
 
         const isVip = (currentLicenseState && (currentLicenseState.tier === 'vip' || currentLicenseState.tier === 'yearly'));
         if (!openaiKey && !isVip) {
-            showToast('⚠️ Vui lòng nhập OpenAI API Key trước khi test!', 'warning');
+            showToast('⚠️ Vui lòng nhập API Key (OpenRouter hoặc OpenAI) trước khi test!', 'warning');
             return;
         }
 
@@ -2718,7 +2747,7 @@ if (btnTestApiKey) {
             });
             const data = await res.json();
             if (data.success) {
-                showToast(data.message || '🎉 API Key OpenAI hợp lệ!', 'success');
+                showToast(data.message || '🎉 API Key hợp lệ!', 'success');
             } else {
                 showToast(data.error || '❌ API Key không hợp lệ!', 'error');
             }
@@ -2731,14 +2760,60 @@ if (btnTestApiKey) {
     });
 }
 
+// Model Selector and Custom Input Event Listeners
+const modelSelect = document.getElementById('openaiModelSelect');
+const customRow = document.getElementById('openaiModelCustomRow');
+const customInput = document.getElementById('openaiModelCustomInput');
+const openaiModelEl = document.getElementById('openaiModel');
+if (modelSelect) {
+    modelSelect.addEventListener('change', () => {
+        if (modelSelect.value === 'custom') {
+            if (customRow) customRow.style.display = 'block';
+            if (openaiModelEl && customInput) openaiModelEl.value = customInput.value.trim() || 'gpt-5.6-luna';
+        } else {
+            if (customRow) customRow.style.display = 'none';
+            if (openaiModelEl) openaiModelEl.value = modelSelect.value;
+        }
+    });
+}
+if (customInput) {
+    customInput.addEventListener('input', () => {
+        if (openaiModelEl) openaiModelEl.value = customInput.value.trim() || 'gpt-5.6-luna';
+    });
+}
+
+const openaiKeyInput = document.getElementById('openaiKey');
+const openaiBaseUrlInput = document.getElementById('openaiBaseUrl');
+if (openaiKeyInput && openaiBaseUrlInput) {
+    openaiKeyInput.addEventListener('input', () => {
+        const val = openaiKeyInput.value.trim();
+        if (val.startsWith('sk-or-')) {
+            openaiBaseUrlInput.value = 'https://openrouter.ai/api/v1';
+        } else if (val.startsWith('sk-proj-') || val.startsWith('sk-')) {
+            openaiBaseUrlInput.value = 'https://api.openai.com/v1';
+        }
+    });
+}
+
 if (saveSettingsBtn) {
     saveSettingsBtn.addEventListener('click', async () => {
         saveSettingsBtn.disabled = true;
         try {
+            const mSelect = document.getElementById('openaiModelSelect');
+            const cInput = document.getElementById('openaiModelCustomInput');
+            let chosenModel = mSelect?.value || 'openrouter/free';
+            if (chosenModel === 'custom') {
+                chosenModel = cInput?.value?.trim() || 'openrouter/free';
+            }
+            let keyVal = document.getElementById('openaiKey')?.value?.trim() || '';
+            let baseUrlVal = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://openrouter.ai/api/v1';
+            if (keyVal.startsWith('sk-or-') || !baseUrlVal || baseUrlVal === 'https://api.openai.com/v1') {
+                baseUrlVal = 'https://openrouter.ai/api/v1';
+            }
             const payload = {
-                openaiKey: document.getElementById('openaiKey')?.value?.trim() || '',
-                openaiBaseUrl: document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://api.openai.com/v1',
-                openaiModel: document.getElementById('openaiModel')?.value?.trim() || 'gpt-5.6-luna',
+                openaiKey: keyVal,
+                openaiBaseUrl: baseUrlVal,
+                openaiModel: chosenModel,
                 openSpeakerApiKey: document.getElementById('openSpeakerApiKey')?.value?.trim() || ''
             };
             await fetch('/api/keys', {
@@ -2813,7 +2888,9 @@ if (btnSelectSrtExt) {
 });
 }
 
-// Generic Drawing Logic
+// ═════════════════════════════════════════════════════════════
+// GENERIC DRAWING & OCR / SUBTITLE REGION LOGIC (ZOOM-AWARE)
+// ═════════════════════════════════════════════════════════════
 const btnDrawRegion = document.getElementById('btnDrawRegion');
 const btnDrawSubRegion = document.getElementById('btnDrawSubRegion');
 const videoOverlay = document.getElementById('videoOverlay');
@@ -2822,16 +2899,113 @@ const ocrRegionCoords = document.getElementById('ocrRegionCoords');
 let isDrawing = false;
 let startX, startY;
 let drawBox = null;
-let currentRegion = { x: 20, y: 81.5, w: 60, h: 9.5 }; // for OCR & Dynamic Blur reference
+let currentRegion = { x: 20, y: 81.5, w: 60, h: 9.5 }; // for OCR & Dynamic Blur reference (in % of video frame)
 let currentSubRegion = null; // for Subtitle
 let drawMode = 'ocr'; // 'ocr' or 'sub'
-
 let subPreviewBox = null; // persistent box for subtitle preview
+
+/**
+ * Tính toán hình chữ nhật thực sự được hiển thị của Video bên trong videoZoomWrapper (loại trừ letterbox do object-fit: contain)
+ */
+function getVideoContentRect() {
+    const vp = document.getElementById('videoPlayer');
+    const wrapper = document.getElementById('videoZoomWrapper');
+    if (!wrapper) return { videoX: 0, videoY: 0, videoW: 100, videoH: 100, wrapperW: 100, wrapperH: 100 };
+    
+    const wrapperW = wrapper.clientWidth || (videoContainer ? videoContainer.clientWidth : 800);
+    const wrapperH = wrapper.clientHeight || (videoContainer ? videoContainer.clientHeight : 450);
+    const vW = (vp && vp.videoWidth) ? vp.videoWidth : 0;
+    const vH = (vp && vp.videoHeight) ? vp.videoHeight : 0;
+    
+    if (!vW || !vH || wrapperW <= 0 || wrapperH <= 0) {
+        return { videoX: 0, videoY: 0, videoW: wrapperW, videoH: wrapperH, wrapperW, wrapperH };
+    }
+    
+    const videoAR = vW / vH;
+    const wrapperAR = wrapperW / wrapperH;
+    
+    let renderW, renderH, renderX, renderY;
+    if (videoAR > wrapperAR) {
+        renderW = wrapperW;
+        renderH = wrapperW / videoAR;
+        renderX = 0;
+        renderY = (wrapperH - renderH) / 2;
+    } else {
+        renderH = wrapperH;
+        renderW = wrapperH * videoAR;
+        renderX = (wrapperW - renderW) / 2;
+        renderY = 0;
+    }
+    
+    return {
+        videoX: renderX,
+        videoY: renderY,
+        videoW: renderW,
+        videoH: renderH,
+        wrapperW,
+        wrapperH
+    };
+}
+
+/**
+ * Đặt vị trí cho Box theo % video zoom wrapper dựa trên % thực của khung hình video
+ */
+function applyBoxPercentToWrapper(box, pX, pY, pW, pH, vRect) {
+    if (!box) return;
+    if (!vRect) vRect = getVideoContentRect();
+    const boxX = vRect.videoX + (pX / 100) * vRect.videoW;
+    const boxY = vRect.videoY + (pY / 100) * vRect.videoH;
+    const boxW = (pW / 100) * vRect.videoW;
+    const boxH = (pH / 100) * vRect.videoH;
+    
+    box.style.position = 'absolute';
+    box.style.left = `${(boxX / vRect.wrapperW) * 100}%`;
+    box.style.top = `${(boxY / vRect.wrapperH) * 100}%`;
+    box.style.width = `${(boxW / vRect.wrapperW) * 100}%`;
+    box.style.height = `${(boxH / vRect.wrapperH) * 100}%`;
+    box.style.bottom = 'auto';
+    box.style.right = 'auto';
+}
+
+function getActiveZoomLevel() {
+    if (typeof videoStudioInstances !== 'undefined' && videoStudioInstances.editor && videoStudioInstances.editor.state) {
+        return videoStudioInstances.editor.state.zoom || 1.0;
+    }
+    return currentVideoZoom || 1.0;
+}
 
 function startDrawMode(mode) {
     drawMode = mode;
-    videoOverlay.style.display = 'block';
-    if(drawBox) {
+    window.isDrawingRegion = true;
+    
+    const container = document.getElementById('videoContainer') || videoContainer;
+    if (container) container.classList.add('is-drawing-region');
+    const canvasFrame = document.getElementById('videoCanvasFrame');
+    if (canvasFrame) canvasFrame.classList.add('is-drawing-region');
+    
+    // Tắt và ẩn hoàn toàn CapCut Transform Box & 8-point zoom box
+    document.querySelectorAll('.capcut-transform-box').forEach(el => {
+        el.classList.remove('active');
+        el.style.display = 'none';
+    });
+    if (typeof videoStudioInstances !== 'undefined') {
+        if (videoStudioInstances.editor && typeof videoStudioInstances.editor.hideTransformBox === 'function') {
+            videoStudioInstances.editor.hideTransformBox(true);
+        }
+        if (videoStudioInstances.review && typeof videoStudioInstances.review.hideTransformBox === 'function') {
+            videoStudioInstances.review.hideTransformBox(true);
+        }
+    }
+    if (typeof isZoomBoxVisible !== 'undefined' && isZoomBoxVisible && typeof toggleZoomBox === 'function') {
+        toggleZoomBox(false);
+    }
+    
+    if (videoOverlay) {
+        videoOverlay.style.zIndex = '999';
+        videoOverlay.style.pointerEvents = 'auto';
+        videoOverlay.style.display = 'block';
+    }
+    if (drawBox) {
         drawBox.remove();
         drawBox = null;
     }
@@ -2840,116 +3014,189 @@ function startDrawMode(mode) {
 if (btnDrawRegion) btnDrawRegion.addEventListener('click', () => startDrawMode('ocr'));
 if (btnDrawSubRegion) btnDrawSubRegion.addEventListener('click', () => startDrawMode('sub'));
 
-videoOverlay.addEventListener('mousedown', (e) => {
-    isDrawing = true;
-    const rect = videoOverlay.getBoundingClientRect();
-    startX = e.clientX - rect.left;
-    startY = e.clientY - rect.top;
-    
-    drawBox = document.createElement('div');
-    if (drawMode === 'ocr') {
-        drawBox.className = 'ocr-draw-box';
-    } else {
-        // Remove existing sub preview if drawing a new one
-        if (subPreviewBox) {
-            subPreviewBox.remove();
-            subPreviewBox = null;
+// Hủy vẽ vùng khi nhấn phím Escape
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && window.isDrawingRegion) {
+        isDrawing = false;
+        window.isDrawingRegion = false;
+        if (videoOverlay) videoOverlay.style.display = 'none';
+        
+        const container = document.getElementById('videoContainer') || videoContainer;
+        if (container) container.classList.remove('is-drawing-region');
+        const canvasFrame = document.getElementById('videoCanvasFrame');
+        if (canvasFrame) canvasFrame.classList.remove('is-drawing-region');
+        
+        document.querySelectorAll('.capcut-transform-box').forEach(el => {
+            el.style.display = '';
+        });
+        if (drawBox && !drawBox.parentElement?.classList.contains('video-zoom-wrapper')) {
+            drawBox.remove();
+            drawBox = null;
         }
-        drawBox.className = 'sub-preview-box';
-        // Apply current subtitle styles for immediate preview
-        applySubStylesToElement(drawBox);
-        drawBox.innerHTML = '<span class="sub-text-inner">Phụ đề mẫu</span>';
     }
-    
-    drawBox.style.left = startX + 'px';
-    drawBox.style.top = startY + 'px';
-    drawBox.style.width = '0px';
-    drawBox.style.height = '0px';
-    videoOverlay.appendChild(drawBox);
 });
 
-videoOverlay.addEventListener('mousemove', (e) => {
-    if (!isDrawing) return;
-    const rect = videoOverlay.getBoundingClientRect();
-    let currentX = e.clientX - rect.left;
-    let currentY = e.clientY - rect.top;
-    
-    currentX = Math.max(0, Math.min(currentX, rect.width));
-    currentY = Math.max(0, Math.min(currentY, rect.height));
-    
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-    const left = Math.min(startX, currentX);
-    const top = Math.min(startY, currentY);
-    
-    drawBox.style.width = width + 'px';
-    drawBox.style.height = height + 'px';
-    drawBox.style.left = left + 'px';
-    drawBox.style.top = top + 'px';
-});
+// Xử lý nút xóa / reset vùng OCR
+const btnTrashOcrRegion = document.querySelector('.region-item .trash-btn');
+if (btnTrashOcrRegion) {
+    btnTrashOcrRegion.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (drawBox) {
+            drawBox.remove();
+            drawBox = null;
+        }
+        const existingBoxes = document.querySelectorAll('.ocr-draw-box');
+        existingBoxes.forEach(b => b.remove());
+        
+        currentRegion = { x: 20, y: 81.5, w: 60, h: 9.5 };
+        if (ocrRegionCoords) ocrRegionCoords.textContent = 'Chưa chọn vùng';
+        showToast('Đã xóa vùng quét OCR. Bạn có thể bấm "Vẽ vùng mới" để vẽ lại.', 'info');
+    });
+}
 
-videoOverlay.addEventListener('mouseup', () => {
-    isDrawing = false;
-    videoOverlay.style.display = 'none'; 
-    
-    if (drawBox) {
-        videoContainer.appendChild(drawBox);
-        const rect = videoContainer.getBoundingClientRect();
-        const left = parseFloat(drawBox.style.left);
-        const top = parseFloat(drawBox.style.top);
-        const width = parseFloat(drawBox.style.width);
-        const height = parseFloat(drawBox.style.height);
+if (videoOverlay) {
+    videoOverlay.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        isDrawing = true;
+        const rect = videoOverlay.getBoundingClientRect();
+        const zoom = getActiveZoomLevel();
         
-        const pX = Math.round((left / rect.width) * 100);
-        const pY = Math.round((top / rect.height) * 100);
-        const pW = Math.round((width / rect.width) * 100);
-        const pH = Math.round((height / rect.height) * 100);
+        // Chuyển tọa độ chuột trên màn hình thành tọa độ unscaled bên trong videoZoomWrapper
+        startX = (e.clientX - rect.left) / zoom;
+        startY = (e.clientY - rect.top) / zoom;
         
+        drawBox = document.createElement('div');
         if (drawMode === 'ocr') {
-            currentRegion = {x: pX, y: pY, w: pW, h: pH};
-            if(ocrRegionCoords) ocrRegionCoords.textContent = `X: ${pX}% • Y: ${pY}% • W: ${pW}% • H: ${pH}%`;
-            
-            const editorInputVideoPath = document.getElementById('editorInputVideoPath');
-            const filename = (editorInputVideoPath && editorInputVideoPath.value) ? (editorInputVideoPath.value.split('\\\\').pop().split('/').pop()) : 'Chưa chọn video...';
-            const ocrRegionFilename = document.getElementById('ocrRegionFilename');
-            if(ocrRegionFilename) ocrRegionFilename.textContent = filename;
-
-            // Kích hoạt kéo thả và co giãn 8 hướng cho OCR draw box
-            setupResizableAndDraggableBox(drawBox, (newPx, newPy, newPw, newPh) => {
-                currentRegion = { x: newPx, y: newPy, w: newPw, h: newPh };
-                if (ocrRegionCoords) ocrRegionCoords.textContent = `X: ${newPx}% • Y: ${newPy}% • W: ${newPw}% • H: ${newPh}%`;
-                
-                // Đồng bộ sang thanh kéo vị trí Y ở tab Review nếu có
-                const sliderY = document.getElementById('blurYPos');
-                const labelY = document.getElementById('blurYPosVal');
-                if (sliderY) sliderY.value = newPy;
-                if (labelY) labelY.textContent = `${newPy}%`;
-                updateDynamicBlurOverlayVisibility();
-            });
-        } else if (drawMode === 'sub') {
-            currentSubRegion = {x: pX, y: pY, w: pW, h: pH, customPos: true};
-            subPreviewBox = drawBox; // Keep it persistent on the video container
-            
-            subPreviewBox.style.position = 'absolute';
-            subPreviewBox.style.left = `${pX}%`;
-            subPreviewBox.style.top = `${pY}%`;
-            subPreviewBox.style.width = `${pW}%`;
-            subPreviewBox.style.height = `${pH}%`;
-            subPreviewBox.style.bottom = 'auto';
-            
-            // Cập nhật thanh trượt kích thước & vị trí
-            syncSubRegionInputs(pX, pY, pW, pH);
-
-            // Kích hoạt kéo thả và co giãn 8 hướng cho subPreviewBox
-            setupResizableAndDraggableBox(subPreviewBox, (newPx, newPy, newPw, newPh) => {
-                currentSubRegion = { x: newPx, y: newPy, w: newPw, h: newPh, customPos: true };
-                syncSubRegionInputs(newPx, newPy, newPw, newPh);
-            });
-            
-            applySubStylesToElement(subPreviewBox);
+            drawBox.className = 'ocr-draw-box';
+        } else {
+            if (subPreviewBox) {
+                subPreviewBox.remove();
+                subPreviewBox = null;
+            }
+            drawBox.className = 'sub-preview-box';
+            applySubStylesToElement(drawBox);
+            drawBox.innerHTML = '<span class="sub-text-inner">Phụ đề mẫu</span>';
         }
-    }
-});
+        
+        drawBox.style.position = 'absolute';
+        drawBox.style.left = startX + 'px';
+        drawBox.style.top = startY + 'px';
+        drawBox.style.width = '0px';
+        drawBox.style.height = '0px';
+        drawBox.style.pointerEvents = 'none';
+        videoOverlay.appendChild(drawBox);
+    });
+
+    videoOverlay.addEventListener('mousemove', (e) => {
+        if (!isDrawing || !drawBox) return;
+        const rect = videoOverlay.getBoundingClientRect();
+        const zoom = getActiveZoomLevel();
+        
+        const wrapper = videoZoomWrapper || videoOverlay;
+        const maxW = wrapper.clientWidth || (rect.width / zoom);
+        const maxH = wrapper.clientHeight || (rect.height / zoom);
+        
+        let currentX = (e.clientX - rect.left) / zoom;
+        let currentY = (e.clientY - rect.top) / zoom;
+        
+        currentX = Math.max(0, Math.min(currentX, maxW));
+        currentY = Math.max(0, Math.min(currentY, maxH));
+        
+        const width = Math.abs(currentX - startX);
+        const height = Math.abs(currentY - startY);
+        const left = Math.min(startX, currentX);
+        const top = Math.min(startY, currentY);
+        
+        drawBox.style.width = width + 'px';
+        drawBox.style.height = height + 'px';
+        drawBox.style.left = left + 'px';
+        drawBox.style.top = top + 'px';
+    });
+
+    videoOverlay.addEventListener('mouseup', () => {
+        if (!isDrawing) return;
+        isDrawing = false;
+        videoOverlay.style.display = 'none'; 
+        window.isDrawingRegion = false;
+        
+        const container = document.getElementById('videoContainer') || videoContainer;
+        if (container) container.classList.remove('is-drawing-region');
+        const canvasFrame = document.getElementById('videoCanvasFrame');
+        if (canvasFrame) canvasFrame.classList.remove('is-drawing-region');
+        
+        document.querySelectorAll('.capcut-transform-box').forEach(el => {
+            el.style.display = '';
+        });
+        
+        if (drawBox) {
+            const wrapper = videoZoomWrapper || videoContainer;
+            wrapper.appendChild(drawBox);
+            
+            const vRect = getVideoContentRect();
+            const unscaledLeft = parseFloat(drawBox.style.left) || 0;
+            const unscaledTop = parseFloat(drawBox.style.top) || 0;
+            const unscaledWidth = parseFloat(drawBox.style.width) || 0;
+            const unscaledHeight = parseFloat(drawBox.style.height) || 0;
+            
+            // Tránh click chuột vô tình tạo box cực nhỏ (< 6px)
+            if (unscaledWidth < 6 || unscaledHeight < 6) {
+                drawBox.remove();
+                drawBox = null;
+                return;
+            }
+            
+            // Quy đổi sang % thực tế của khung hình Video (0..100)
+            let pX = ((unscaledLeft - vRect.videoX) / vRect.videoW) * 100;
+            let pY = ((unscaledTop - vRect.videoY) / vRect.videoH) * 100;
+            let pW = (unscaledWidth / vRect.videoW) * 100;
+            let pH = (unscaledHeight / vRect.videoH) * 100;
+            
+            pX = Math.max(0, Math.min(100, Math.round(pX * 10) / 10));
+            pY = Math.max(0, Math.min(100, Math.round(pY * 10) / 10));
+            pW = Math.max(1, Math.min(100 - pX, Math.round(pW * 10) / 10));
+            pH = Math.max(1, Math.min(100 - pY, Math.round(pH * 10) / 10));
+            
+            // Định vị lại Box theo % Wrapper để phóng to thu nhỏ Zoom tự động co dãn theo video
+            applyBoxPercentToWrapper(drawBox, pX, pY, pW, pH, vRect);
+            
+            if (drawMode === 'ocr') {
+                currentRegion = { x: pX, y: pY, w: pW, h: pH };
+                if (ocrRegionCoords) ocrRegionCoords.textContent = `X: ${pX}% • Y: ${pY}% • W: ${pW}% • H: ${pH}%`;
+                
+                const editorInputVideoPath = document.getElementById('editorInputVideoPath');
+                const filename = (editorInputVideoPath && editorInputVideoPath.value) ? (editorInputVideoPath.value.split('\\').pop().split('/').pop()) : 'Chưa chọn video...';
+                const ocrRegionFilename = document.getElementById('ocrRegionFilename');
+                if (ocrRegionFilename) ocrRegionFilename.textContent = filename;
+
+                // Kích hoạt kéo thả và co giãn 8 hướng độc lập cho OCR draw box
+                setupResizableAndDraggableBox(drawBox, (newPx, newPy, newPw, newPh) => {
+                    currentRegion = { x: newPx, y: newPy, w: newPw, h: newPh };
+                    if (ocrRegionCoords) ocrRegionCoords.textContent = `X: ${newPx}% • Y: ${newPy}% • W: ${newPw}% • H: ${newPh}%`;
+                    
+                    // Đồng bộ sang thanh kéo vị trí Y ở tab Review nếu có
+                    const sliderY = document.getElementById('blurYPos');
+                    const labelY = document.getElementById('blurYPosVal');
+                    if (sliderY) sliderY.value = newPy;
+                    if (labelY) labelY.textContent = `${newPy}%`;
+                    updateDynamicBlurOverlayVisibility();
+                });
+            } else if (drawMode === 'sub') {
+                currentSubRegion = { x: pX, y: pY, w: pW, h: pH, customPos: true };
+                subPreviewBox = drawBox;
+                
+                syncSubRegionInputs(pX, pY, pW, pH);
+
+                // Kích hoạt kéo thả và co giãn 8 hướng cho subPreviewBox
+                setupResizableAndDraggableBox(subPreviewBox, (newPx, newPy, newPw, newPh) => {
+                    currentSubRegion = { x: newPx, y: newPy, w: newPw, h: newPh, customPos: true };
+                    syncSubRegionInputs(newPx, newPy, newPw, newPh);
+                });
+                
+                applySubStylesToElement(subPreviewBox);
+            }
+        }
+    });
+}
 
 function syncSubRegionInputs(pX, pY, pW, pH) {
     const elW = document.getElementById('subBoxWidth');
@@ -2983,12 +3230,13 @@ function setupResizableAndDraggableBox(box, onUpdate) {
         box.appendChild(handle);
     });
 
-    let activeAction = null; // null | 'move' | 'nw' | 'n' | 'ne' | ...
+    let activeAction = null;
     let startMouseX = 0, startMouseY = 0;
     let initialBox = { left: 0, top: 0, width: 0, height: 0 };
-    let containerRect = null;
+    let initialVRect = null;
 
     function onMouseDown(e) {
+        if (e.button !== 0) return;
         const handle = e.target.closest('.box-resize-handle');
         if (handle) {
             activeAction = handle.dataset.handle;
@@ -2998,17 +3246,19 @@ function setupResizableAndDraggableBox(box, onUpdate) {
             return;
         }
 
-        const vContainer = document.querySelector('.video-container') || videoContainer;
-        if (!vContainer) return;
+        const wrapper = videoZoomWrapper || document.getElementById('videoZoomWrapper');
+        if (!wrapper) return;
         
-        containerRect = vContainer.getBoundingClientRect();
+        initialVRect = getVideoContentRect();
+        const zoom = getActiveZoomLevel();
+        const wrapperRect = wrapper.getBoundingClientRect();
         const boxRect = box.getBoundingClientRect();
 
         initialBox = {
-            left: boxRect.left - containerRect.left,
-            top: boxRect.top - containerRect.top,
-            width: boxRect.width,
-            height: boxRect.height
+            left: (boxRect.left - wrapperRect.left) / zoom,
+            top: (boxRect.top - wrapperRect.top) / zoom,
+            width: boxRect.width / zoom,
+            height: boxRect.height / zoom
         };
 
         startMouseX = e.clientX;
@@ -3018,56 +3268,65 @@ function setupResizableAndDraggableBox(box, onUpdate) {
         e.preventDefault();
 
         function onMouseMove(moveEvent) {
-            if (!activeAction || !containerRect) return;
+            if (!activeAction || !initialVRect) return;
 
-            const dx = moveEvent.clientX - startMouseX;
-            const dy = moveEvent.clientY - startMouseY;
+            const zoom = getActiveZoomLevel();
+            const unscaledDx = (moveEvent.clientX - startMouseX) / zoom;
+            const unscaledDy = (moveEvent.clientY - startMouseY) / zoom;
 
             let newLeft = initialBox.left;
             let newTop = initialBox.top;
             let newWidth = initialBox.width;
             let newHeight = initialBox.height;
 
-            const minW = 24; // Tối thiểu 24px
-            const minH = 16; // Tối thiểu 16px
+            const minW = 16;
+            const minH = 10;
+
+            const boundLeft = initialVRect.videoX;
+            const boundTop = initialVRect.videoY;
+            const boundRight = initialVRect.videoX + initialVRect.videoW;
+            const boundBottom = initialVRect.videoY + initialVRect.videoH;
 
             if (activeAction === 'move') {
-                newLeft = Math.max(0, Math.min(initialBox.left + dx, containerRect.width - newWidth));
-                newTop = Math.max(0, Math.min(initialBox.top + dy, containerRect.height - newHeight));
+                newLeft = Math.max(boundLeft, Math.min(initialBox.left + unscaledDx, boundRight - newWidth));
+                newTop = Math.max(boundTop, Math.min(initialBox.top + unscaledDy, boundBottom - newHeight));
             } else {
-                // Co giãn theo các cạnh và góc
                 if (activeAction.includes('e')) {
-                    newWidth = Math.max(minW, Math.min(initialBox.width + dx, containerRect.width - initialBox.left));
+                    newWidth = Math.max(minW, Math.min(initialBox.width + unscaledDx, boundRight - initialBox.left));
                 }
                 if (activeAction.includes('s')) {
-                    newHeight = Math.max(minH, Math.min(initialBox.height + dy, containerRect.height - initialBox.top));
+                    newHeight = Math.max(minH, Math.min(initialBox.height + unscaledDy, boundBottom - initialBox.top));
                 }
                 if (activeAction.includes('w')) {
-                    const maxDx = initialBox.left;
-                    const clampedDx = Math.max(-maxDx, Math.min(dx, initialBox.width - minW));
+                    const maxDx = initialBox.left - boundLeft;
+                    const clampedDx = Math.max(-maxDx, Math.min(unscaledDx, initialBox.width - minW));
                     newLeft = initialBox.left + clampedDx;
                     newWidth = initialBox.width - clampedDx;
                 }
                 if (activeAction.includes('n')) {
-                    const maxDy = initialBox.top;
-                    const clampedDy = Math.max(-maxDy, Math.min(dy, initialBox.height - minH));
+                    const maxDy = initialBox.top - boundTop;
+                    const clampedDy = Math.max(-maxDy, Math.min(unscaledDy, initialBox.height - minH));
                     newTop = initialBox.top + clampedDy;
                     newHeight = initialBox.height - clampedDy;
                 }
             }
 
-            // Gán pixel tạm thời khi đang rê chuột
             box.style.bottom = 'auto';
-            box.style.left = `${newLeft}px`;
-            box.style.top = `${newTop}px`;
-            box.style.width = `${newWidth}px`;
-            box.style.height = `${newHeight}px`;
+            box.style.right = 'auto';
+            box.style.left = `${(newLeft / initialVRect.wrapperW) * 100}%`;
+            box.style.top = `${(newTop / initialVRect.wrapperH) * 100}%`;
+            box.style.width = `${(newWidth / initialVRect.wrapperW) * 100}%`;
+            box.style.height = `${(newHeight / initialVRect.wrapperH) * 100}%`;
 
-            // Tính tỷ lệ %
-            const pX = Math.round((newLeft / containerRect.width) * 1000) / 10;
-            const pY = Math.round((newTop / containerRect.height) * 1000) / 10;
-            const pW = Math.round((newWidth / containerRect.width) * 1000) / 10;
-            const pH = Math.round((newHeight / containerRect.height) * 1000) / 10;
+            let pX = ((newLeft - initialVRect.videoX) / initialVRect.videoW) * 100;
+            let pY = ((newTop - initialVRect.videoY) / initialVRect.videoH) * 100;
+            let pW = (newWidth / initialVRect.videoW) * 100;
+            let pH = (newHeight / initialVRect.videoH) * 100;
+
+            pX = Math.max(0, Math.min(100, Math.round(pX * 10) / 10));
+            pY = Math.max(0, Math.min(100, Math.round(pY * 10) / 10));
+            pW = Math.max(1, Math.min(100 - pX, Math.round(pW * 10) / 10));
+            pH = Math.max(1, Math.min(100 - pY, Math.round(pH * 10) / 10));
 
             if (onUpdate) {
                 onUpdate(pX, pY, pW, pH, false);
@@ -3076,30 +3335,6 @@ function setupResizableAndDraggableBox(box, onUpdate) {
 
         function onMouseUp() {
             if (!activeAction) return;
-
-            if (containerRect) {
-                const boxRect = box.getBoundingClientRect();
-                const curLeft = boxRect.left - containerRect.left;
-                const curTop = boxRect.top - containerRect.top;
-                const curW = boxRect.width;
-                const curH = boxRect.height;
-
-                const pX = Math.round((curLeft / containerRect.width) * 1000) / 10;
-                const pY = Math.round((curTop / containerRect.height) * 1000) / 10;
-                const pW = Math.round((curW / containerRect.width) * 1000) / 10;
-                const pH = Math.round((curH / containerRect.height) * 1000) / 10;
-
-                box.style.bottom = 'auto';
-                box.style.left = `${pX}%`;
-                box.style.top = `${pY}%`;
-                box.style.width = `${pW}%`;
-                box.style.height = `${pH}%`;
-
-                if (onUpdate) {
-                    onUpdate(pX, pY, pW, pH, true);
-                }
-            }
-
             activeAction = null;
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
@@ -3129,11 +3364,7 @@ function setupResizableAndDraggableBox(box, onUpdate) {
         currentSubRegion = { x, y, w, h, customPos: true };
         
         if (subPreviewBox) {
-            subPreviewBox.style.left = `${x}%`;
-            subPreviewBox.style.top = `${y}%`;
-            subPreviewBox.style.width = `${w}%`;
-            subPreviewBox.style.height = `${h}%`;
-            subPreviewBox.style.bottom = 'auto';
+            applyBoxPercentToWrapper(subPreviewBox, x, y, w, h);
             applySubStylesToElement(subPreviewBox);
         }
     });
@@ -4708,7 +4939,7 @@ async function handleTranslateSubtitles(mode) {
             }
             
             if (data.usage && mode === 'ai') {
-                tokenTracker.record(`Dịch nhóm câu ${chunkFrom}-${chunkTo}`, data.usage, openai_model || 'gpt-4o-mini');
+                tokenTracker.record(`Dịch nhóm câu ${chunkFrom}-${chunkTo}`, data.usage, openai_model || 'gpt-5.6-luna');
                 totalTokensAccum += (data.usage.total_tokens || 0);
             }
             
@@ -4992,7 +5223,7 @@ if (btnCleanSrtAI) {
                 }
 
                 if (data.usage) {
-                    tokenTracker.record(`Làm sạch nhóm câu ${chunkFrom}-${chunkTo}`, data.usage, openaiModel || 'gpt-4o-mini');
+                    tokenTracker.record(`Làm sạch nhóm câu ${chunkFrom}-${chunkTo}`, data.usage, openaiModel || 'gpt-5.6-luna');
                     totalCleanTokens += (data.usage.total_tokens || 0);
                 }
 
