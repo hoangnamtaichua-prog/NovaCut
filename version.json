@@ -1,8 +1,8 @@
 {
-  "version": "1.2.5",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.5/patch.zip",
-  "sha256": "8d21bc6bf6b12015bfc65aa0e7ffcd6e4ab49d2d188fce8b36df2b3bf3f472c6",
+  "version": "1.2.6",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.6/patch.zip",
+  "sha256": "fcff53bd5c217515e0f22d35d4bb41a09d135d4392f78a0d78e9af09d48363b5",
   "changelog": "âœ¨ CÃ¡c cáº­p nháº­t chÃ­nh:\n- Sá»­a lá»—i UnboundLocalError trong BÆ°á»›c 3 PhÃ¢n tÃ­ch Timeline, giÃºp GPT phÃ¢n tÃ­ch cáº£nh á»•n Ä‘á»‹nh khi dÃ¹ng model khÃ¡c free.\n- Kháº¯c phá»¥c lá»—i 409 (Má»™t tÃ¡c vá»¥ Review Phim khÃ¡c Ä‘ang cháº¡y): Gá»¡ bá» cÆ¡ cháº¿ khÃ³a luá»“ng _review_lock giÃºp khÃ´ng bá»‹ káº¹t tiáº¿n trÃ¬nh.\n- Cá»‘ Ä‘á»‹nh OpenAI & GPT-5.6-Luna (GPT Luna) cho tiáº¿n trÃ¬nh táº¡o Review Phim tá»± Ä‘á»™ng.\n- NÃ¢ng Cáº¥p ToÃ n Diá»‡n PhÃ¢n Há»‡ Xá»­ LÃ½ HÃ ng Loáº¡t HÃ ng Äá»£i (Batch Queue Studio), cÃ´ láº­p tiáº¿n trÃ¬nh táº¡m (Task Isolation), vÃ  sá»­a lá»—i nháº­n diá»‡n Whisper Engine khÃ¡c á»• Ä‘Ä©a.\n- Cáº£i táº¡o giao diá»‡n UI linh hoáº¡t theo Preset, cho phÃ©p tuá»³ chá»‰nh: Thá»i lÆ°á»£ng video má»¥c tiÃªu, tá»‘c Ä‘á»™ Ä‘á»c, Ã¢m lÆ°á»£ng BGM, thÃ´ng sá»‘ chá»‘ng báº£n quyá»n (tua tá»‘c, zoom tÃ¢m, láº­t gÆ°Æ¡ng).\n- TÃ­ch há»£p thanh Preflight Bar kiá»ƒm Ä‘á»‹nh trÆ°á»›c FFmpeg/Whisper/AI vÃ  há»— trá»£ chá»n nhiá»u file video (Multi-file Picker).\n- Chuyá»ƒn Ä‘á»•i sang OpenRouter API, bá»• sung Model Selector Æ°u tiÃªn cÃ¡c model Miá»…n phÃ­ (Z.ai, MiniMax, Gemma, Nemotron). Tá»± Ä‘á»™ng náº¡p cáº¥u hÃ¬nh OpenRouter náº¿u dÃ¹ng key sk-or-.\n- Kháº¯c phá»¥c triá»‡t Ä‘á»ƒ lá»—i quÃ©t vÃ¹ng OCR do xung Ä‘á»™t Zoom, tá»· lá»‡ khung hÃ¬nh vÃ  Bounding Box CapCut. Trá»« bÃ¹ chÃ­nh xÃ¡c cÃ¡c viá»n Ä‘en letterbox/pillarbox.\n- Sá»­a lá»—i Rate Limit 429 trÃªn mÃ´ hÃ¬nh Free (Ä‘iá»u phá»‘i Semaphore) vÃ  chá»‘ng Timeout 300s cá»©ng nháº¯c. Tá»± Ä‘á»™ng tÆ°Æ¡ng thÃ­ch vá»›i cÃ¡c Ä‘á»‹nh dáº¡ng JSON lá»—i cá»§a AI.\n- Sá»­a lá»—i chÃºc má»«ng kÃ­ch hoáº¡t báº£n quyá»n & phÃ¡o hoa giáº£ máº¡o lÃºc má»Ÿ app. Tá»‘i Æ°u hoÃ¡ Cloud Sync Startup.\n",
   "is_mandatory": false,
-  "updated_at": "2026-09-02 16:14:50"
+  "updated_at": "2026-09-02 17:23:49"
 }
