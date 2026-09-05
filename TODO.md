@@ -30,7 +30,12 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-1. **Khắc Phục Lỗi Lặp Cảnh & Đảm Bảo Cảnh Cắt Tuyệt Đối Tuân Theo Thứ Tự Tuyến Tính (Chronological Order):**
+*(Hiện tại chưa có thay đổi nào đang chờ phát hành. Mọi tính năng và bản sửa lỗi mới nhất đã được đóng gói và phát hành thành công trong bản v1.2.8)*
+
+---
+
+## 🚀 ĐÃ PHÁT HÀNH TRONG BẢN v1.2.8 (05/09/2026)
+1. **Khắc Phục Triệt Để Lỗi Lặp Cảnh & Đảm Bảo Cảnh Cắt Tuyệt Đối Tuân Theo Thứ Tự Tuyến Tính (Chronological Order):**
    - **Tối ưu Prompt Đạo Diễn Bước 3 (`prompt_json.txt` & `.prompt_vault.dat`):**
      - Bổ sung quy tắc bắt buộc: Các cảnh cắt phải tịnh tiến theo chiều thời gian tăng dần từ đầu phim đến cuối phim (`start[i] >= end[i-1]`). Tuyệt đối không nhảy lùi thời gian về các cảnh trước đó trong phim.
      - Bổ sung quy tắc chống lặp: Mỗi cảnh cắt chỉ được xuất hiện DUY NHẤT 1 LẦN trong toàn bộ video review; cấm chọn lại hoặc chồng lấn các đoạn thời gian đã sử dụng.
