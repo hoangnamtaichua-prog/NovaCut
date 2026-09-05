@@ -3365,7 +3365,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             <span style="font-size: 11px; color: #10b981; font-weight: 700;">🟢 Hỗ trợ OpenRouter (Free)</span>
                         </div>
                         <div style="display: flex; gap: 8px;">
-                            <input type="password" id="openaiKey" class="text-input" placeholder="sk-or-v1-... hoặc sk-proj-... (Khuyên dùng OpenRouter để miễn phí)" style="flex: 1; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                            <div style="position: relative; flex: 1; display: flex; align-items: center;">
+                                <input type="password" id="openaiKey" class="text-input" placeholder="sk-or-v1-... hoặc sk-proj-... (Khuyên dùng OpenRouter để miễn phí)" style="width: 100%; padding: 8px 36px 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                <button type="button" id="btnToggleOpenaiKey" title="Hiện/Ẩn API Key" style="position: absolute; right: 8px; background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px; display: flex; align-items: center; font-size: 14px;">👁️</button>
+                            </div>
                             <button id="btnTestApiKey" class="btn secondary small" style="padding: 0 14px; font-size: 12px; white-space: nowrap;">Test Key</button>
                         </div>
                         <div id="openaiKeyHelpText" style="font-size: 11px; color: #64748b; margin-top: 3px;">Dùng để tự động sinh kịch bản và dịch phụ đề AI. Bạn có thể sử dụng OpenRouter để chọn các mô hình Miễn Phí (Free).</div>
@@ -3405,7 +3408,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <div class="form-group" style="margin-bottom: 16px;">
                         <label id="openSpeakerKeyLabel" style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">OpenSpeaker API Key (Giọng Đọc Online)</label>
                         <div style="display: flex; gap: 8px;">
-                            <input type="password" id="openSpeakerApiKey" class="text-input" placeholder="Nhập API Key OpenSpeaker..." style="flex: 1; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                            <div style="position: relative; flex: 1; display: flex; align-items: center;">
+                                <input type="password" id="openSpeakerApiKey" class="text-input" placeholder="Nhập API Key OpenSpeaker..." style="width: 100%; padding: 8px 36px 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;">
+                                <button type="button" id="btnToggleOpenSpeakerKey" title="Hiện/Ẩn API Key" style="position: absolute; right: 8px; background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px; display: flex; align-items: center; font-size: 14px;">👁️</button>
+                            </div>
                         </div>
                     </div>
 

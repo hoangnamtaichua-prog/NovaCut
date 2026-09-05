@@ -719,7 +719,7 @@ def api_clone_voice_upload():
 
     import local_voice_engine
     clean_sample_path = safe_join(temp_dir, f"clean_{upload_id}.wav", extensions={'.wav'})
-    ok, res = local_voice_engine.validate_and_convert_audio_sample(raw_path, clean_sample_path)
+    ok, res = local_voice_engine.validate_and_convert_audio_sample(raw_path, clean_sample_path, return_meta=True)
     
     # Dọn dẹp file raw nếu khác file clean
     if raw_path != clean_sample_path and os.path.exists(raw_path):
@@ -729,9 +729,12 @@ def api_clone_voice_upload():
     if not ok:
         return jsonify({'success': False, 'error': res}), 400
 
-    import wave
-    with wave.open(clean_sample_path, 'r') as wf:
-        duration = wf.getnframes() / float(wf.getframerate())
+    meta = res if isinstance(res, dict) else {'path': clean_sample_path, 'duration': 0, 'original_duration': 0, 'is_trimmed': False}
+    duration = meta.get('duration', 0)
+    if not duration:
+        import wave
+        with wave.open(clean_sample_path, 'r') as wf:
+            duration = round(wf.getnframes() / float(wf.getframerate()), 2)
 
     quality_score = 90 if 2.0 <= duration <= 12.0 else 75
     quality_desc = "Rất tốt (24kHz Mono chuẩn)" if quality_score >= 80 else "Ổn định"
@@ -742,6 +745,8 @@ def api_clone_voice_upload():
         'audio_path': clean_sample_path,
         'relative_path': os.path.relpath(clean_sample_path, ROOT_DIR).replace("\\", "/"),
         'duration': round(duration, 2),
+        'original_duration': round(meta.get('original_duration', duration), 2),
+        'is_trimmed': meta.get('is_trimmed', False),
         'quality_score': quality_score,
         'quality_desc': quality_desc,
         'preview_url': f'/api/file?path={urllib.parse.quote(clean_sample_path)}'

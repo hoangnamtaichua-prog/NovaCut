@@ -2346,14 +2346,28 @@ async function loadApiKeys() {
             const isVipTier = currentLicenseState && (currentLicenseState.tier === 'vip' || currentLicenseState.tier === 'yearly');
             
             if (openaiKeyEl) {
-                if (isVipTier) {
+                if (data.openaiKey && !data.openaiKey.startsWith('•')) {
+                    openaiKeyEl.value = data.openaiKey;
+                    openaiKeyEl.readOnly = false;
+                    openaiKeyEl.style.cursor = 'text';
+                    openaiKeyEl.style.color = '#fff';
+                    openaiKeyEl.style.background = '#0f172a';
+                    openaiKeyEl.style.borderColor = '#334155';
+                } else if (isVipTier && (!data.openaiKey || data.openaiKey.startsWith('•'))) {
                     openaiKeyEl.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
                 } else if (data.openaiKey) {
                     openaiKeyEl.value = data.openaiKey;
                 }
             }
             if (openSpeakerApiKeyEl) {
-                if (isVipTier) {
+                if (data.openSpeakerApiKey && !data.openSpeakerApiKey.startsWith('•')) {
+                    openSpeakerApiKeyEl.value = data.openSpeakerApiKey;
+                    openSpeakerApiKeyEl.readOnly = false;
+                    openSpeakerApiKeyEl.style.cursor = 'text';
+                    openSpeakerApiKeyEl.style.color = '#fff';
+                    openSpeakerApiKeyEl.style.background = '#0f172a';
+                    openSpeakerApiKeyEl.style.borderColor = '#334155';
+                } else if (isVipTier && (!data.openSpeakerApiKey || data.openSpeakerApiKey.startsWith('•'))) {
                     openSpeakerApiKeyEl.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
                 } else if (data.openSpeakerApiKey) {
                     openSpeakerApiKeyEl.value = data.openSpeakerApiKey;
@@ -2398,7 +2412,7 @@ function updateSettingsModalPermissions(lic) {
     if (settingsProApiContainer) settingsProApiContainer.style.display = 'block';
 
     if (tier === 'vip' || tier === 'yearly') {
-        // Gói VIP / 1 Năm: Hiển thị banner VIP + Hiện đầy đủ các ô API nhưng MASK và BẢO VỆ CHỐNG COPY
+        // Gói VIP / 1 Năm: Hiển thị banner VIP
         if (settingsTrialServerNotice) settingsTrialServerNotice.style.display = 'none';
         if (settingsVipServerNotice) {
             settingsVipServerNotice.style.display = 'block';
@@ -2420,39 +2434,45 @@ function updateSettingsModalPermissions(lic) {
             openaiKeyHelpText.innerHTML = '✨ Gói VIP của bạn được bảo vệ bản quyền. Bấm nút <strong>[Test Key]</strong> bên cạnh để kiểm tra kết nối API.';
         }
 
-        // Mask and protect OpenAI Key
+        // Mask và bảo vệ OpenAI Key - chỉ mask nếu người dùng KHÔNG có key riêng hợp lệ
         if (openaiKey) {
-            openaiKey.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
-            openaiKey.readOnly = true;
-            openaiKey.type = 'password';
-            openaiKey.style.background = 'rgba(168, 85, 247, 0.08)';
-            openaiKey.style.borderColor = 'rgba(168, 85, 247, 0.4)';
-            openaiKey.style.color = '#c084fc';
-            openaiKey.style.cursor = 'not-allowed';
-            openaiKey.style.userSelect = 'none';
-            openaiKey.style.webkitUserSelect = 'none';
-            if (typeof openaiKey.setAttribute === 'function') {
-                openaiKey.setAttribute('oncopy', 'return false;');
-                openaiKey.setAttribute('oncut', 'return false;');
-                openaiKey.setAttribute('oncontextmenu', 'return false;');
+            const hasCustomKey = openaiKey.value && !openaiKey.value.startsWith('•') && !openaiKey.value.includes('[Bản Quyền VIP');
+            if (!hasCustomKey) {
+                openaiKey.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
+                openaiKey.readOnly = true;
+                openaiKey.type = 'password';
+                openaiKey.style.background = 'rgba(168, 85, 247, 0.08)';
+                openaiKey.style.borderColor = 'rgba(168, 85, 247, 0.4)';
+                openaiKey.style.color = '#c084fc';
+                openaiKey.style.cursor = 'not-allowed';
+                openaiKey.style.userSelect = 'none';
+                openaiKey.style.webkitUserSelect = 'none';
+                if (typeof openaiKey.setAttribute === 'function') {
+                    openaiKey.setAttribute('oncopy', 'return false;');
+                    openaiKey.setAttribute('oncut', 'return false;');
+                    openaiKey.setAttribute('oncontextmenu', 'return false;');
+                }
             }
         }
 
-        // Mask and protect OpenSpeaker Key
+        // Mask và bảo vệ OpenSpeaker Key
         if (openSpeakerApiKey) {
-            openSpeakerApiKey.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
-            openSpeakerApiKey.readOnly = true;
-            openSpeakerApiKey.type = 'password';
-            openSpeakerApiKey.style.background = 'rgba(168, 85, 247, 0.08)';
-            openSpeakerApiKey.style.borderColor = 'rgba(168, 85, 247, 0.4)';
-            openSpeakerApiKey.style.color = '#c084fc';
-            openSpeakerApiKey.style.cursor = 'not-allowed';
-            openSpeakerApiKey.style.userSelect = 'none';
-            openSpeakerApiKey.style.webkitUserSelect = 'none';
-            if (typeof openSpeakerApiKey.setAttribute === 'function') {
-                openSpeakerApiKey.setAttribute('oncopy', 'return false;');
-                openSpeakerApiKey.setAttribute('oncut', 'return false;');
-                openSpeakerApiKey.setAttribute('oncontextmenu', 'return false;');
+            const hasCustomSpeaker = openSpeakerApiKey.value && !openSpeakerApiKey.value.startsWith('•') && !openSpeakerApiKey.value.includes('[Bản Quyền VIP');
+            if (!hasCustomSpeaker) {
+                openSpeakerApiKey.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
+                openSpeakerApiKey.readOnly = true;
+                openSpeakerApiKey.type = 'password';
+                openSpeakerApiKey.style.background = 'rgba(168, 85, 247, 0.08)';
+                openSpeakerApiKey.style.borderColor = 'rgba(168, 85, 247, 0.4)';
+                openSpeakerApiKey.style.color = '#c084fc';
+                openSpeakerApiKey.style.cursor = 'not-allowed';
+                openSpeakerApiKey.style.userSelect = 'none';
+                openSpeakerApiKey.style.webkitUserSelect = 'none';
+                if (typeof openSpeakerApiKey.setAttribute === 'function') {
+                    openSpeakerApiKey.setAttribute('oncopy', 'return false;');
+                    openSpeakerApiKey.setAttribute('oncut', 'return false;');
+                    openSpeakerApiKey.setAttribute('oncontextmenu', 'return false;');
+                }
             }
         }
 
@@ -2478,9 +2498,8 @@ function updateSettingsModalPermissions(lic) {
         }
 
         if (openaiKey) {
-            if (openaiKey.value.startsWith('•')) openaiKey.value = '';
+            if (openaiKey.value.includes('[Bản Quyền VIP')) openaiKey.value = '';
             openaiKey.readOnly = false;
-            openaiKey.type = 'password';
             openaiKey.style.background = '#0f172a';
             openaiKey.style.borderColor = '#334155';
             openaiKey.style.color = '#fff';
@@ -2495,9 +2514,8 @@ function updateSettingsModalPermissions(lic) {
         }
 
         if (openSpeakerApiKey) {
-            if (openSpeakerApiKey.value.startsWith('•')) openSpeakerApiKey.value = '';
+            if (openSpeakerApiKey.value.includes('[Bản Quyền VIP')) openSpeakerApiKey.value = '';
             openSpeakerApiKey.readOnly = false;
-            openSpeakerApiKey.type = 'password';
             openSpeakerApiKey.style.background = '#0f172a';
             openSpeakerApiKey.style.borderColor = '#334155';
             openSpeakerApiKey.style.color = '#fff';
@@ -2529,9 +2547,8 @@ function updateSettingsModalPermissions(lic) {
         }
 
         if (openaiKey) {
-            if (openaiKey.value.startsWith('•')) openaiKey.value = '';
+            if (openaiKey.value.includes('[Bản Quyền VIP')) openaiKey.value = '';
             openaiKey.readOnly = false;
-            openaiKey.type = 'password';
             openaiKey.style.background = '#0f172a';
             openaiKey.style.borderColor = '#334155';
             openaiKey.style.color = '#fff';
@@ -2544,9 +2561,8 @@ function updateSettingsModalPermissions(lic) {
         }
 
         if (openSpeakerApiKey) {
-            if (openSpeakerApiKey.value.startsWith('•')) openSpeakerApiKey.value = '';
+            if (openSpeakerApiKey.value.includes('[Bản Quyền VIP')) openSpeakerApiKey.value = '';
             openSpeakerApiKey.readOnly = false;
-            openSpeakerApiKey.type = 'password';
             openSpeakerApiKey.style.background = '#0f172a';
             openSpeakerApiKey.style.borderColor = '#334155';
             openSpeakerApiKey.style.color = '#fff';
@@ -2670,7 +2686,7 @@ if (btnUseCustomApi) {
         const openSpeakerApiKey = document.getElementById('openSpeakerApiKey');
 
         if (openaiKey) {
-            if (openaiKey.value.startsWith('•')) openaiKey.value = '';
+            if (openaiKey.value.includes('[Bản Quyền VIP') || openaiKey.value.startsWith('•')) openaiKey.value = '';
             openaiKey.readOnly = false;
             openaiKey.type = 'password';
             openaiKey.style.background = '#0f172a';
@@ -2686,7 +2702,7 @@ if (btnUseCustomApi) {
         }
 
         if (openSpeakerApiKey) {
-            if (openSpeakerApiKey.value.startsWith('•')) openSpeakerApiKey.value = '';
+            if (openSpeakerApiKey.value.includes('[Bản Quyền VIP') || openSpeakerApiKey.value.startsWith('•')) openSpeakerApiKey.value = '';
             openSpeakerApiKey.readOnly = false;
             openSpeakerApiKey.type = 'password';
             openSpeakerApiKey.style.background = '#0f172a';
@@ -2708,6 +2724,31 @@ if (btnUseCustomApi) {
         }
 
         showToast('✏️ Đã mở khóa ô nhập để bạn tự điền API Key cá nhân của mình!', 'info');
+    });
+}
+
+// Toggle Visibility cho các ô API Key
+const btnToggleOpenaiKey = document.getElementById('btnToggleOpenaiKey');
+if (btnToggleOpenaiKey) {
+    btnToggleOpenaiKey.addEventListener('click', (e) => {
+        e.preventDefault();
+        const input = document.getElementById('openaiKey');
+        if (input) {
+            input.type = input.type === 'password' ? 'text' : 'password';
+            btnToggleOpenaiKey.textContent = input.type === 'password' ? '👁️' : '🙈';
+        }
+    });
+}
+
+const btnToggleOpenSpeakerKey = document.getElementById('btnToggleOpenSpeakerKey');
+if (btnToggleOpenSpeakerKey) {
+    btnToggleOpenSpeakerKey.addEventListener('click', (e) => {
+        e.preventDefault();
+        const input = document.getElementById('openSpeakerApiKey');
+        if (input) {
+            input.type = input.type === 'password' ? 'text' : 'password';
+            btnToggleOpenSpeakerKey.textContent = input.type === 'password' ? '👁️' : '🙈';
+        }
     });
 }
 
@@ -11138,29 +11179,32 @@ function updateLicenseUI(info) {
         inputIds.forEach(id => {
             const el = document.getElementById(id);
             if (el) {
-                el.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
-                el.readOnly = true;
-                el.type = 'password';
-                el.style.background = 'rgba(168, 85, 247, 0.08)';
-                el.style.borderColor = 'rgba(168, 85, 247, 0.4)';
-                el.style.color = '#c084fc';
-                el.style.cursor = 'not-allowed';
-                el.style.userSelect = 'none';
-                el.style.webkitUserSelect = 'none';
-                if (typeof el.setAttribute === 'function') {
-                    el.setAttribute('oncopy', 'return false;');
-                    el.setAttribute('oncut', 'return false;');
-                    el.setAttribute('oncontextmenu', 'return false;');
-                }
+                const hasCustomKey = el.value && !el.value.startsWith('•') && !el.value.includes('[Bản Quyền VIP');
+                if (!hasCustomKey) {
+                    el.value = '•••••••••••••••••••••••• [Bản Quyền VIP - Kích Hoạt Sẵn]';
+                    el.readOnly = true;
+                    el.type = 'password';
+                    el.style.background = 'rgba(168, 85, 247, 0.08)';
+                    el.style.borderColor = 'rgba(168, 85, 247, 0.4)';
+                    el.style.color = '#c084fc';
+                    el.style.cursor = 'not-allowed';
+                    el.style.userSelect = 'none';
+                    el.style.webkitUserSelect = 'none';
+                    if (typeof el.setAttribute === 'function') {
+                        el.setAttribute('oncopy', 'return false;');
+                        el.setAttribute('oncut', 'return false;');
+                        el.setAttribute('oncontextmenu', 'return false;');
+                    }
 
-                const parent = (typeof el.closest === 'function') ? el.closest('div') : el.parentElement;
-                const label = parent && typeof parent.querySelector === 'function' ? parent.querySelector('label') : null;
-                if (label && typeof label.querySelector === 'function' && !label.querySelector('.badge-vip-key') && typeof document.createElement === 'function') {
-                    const badge = document.createElement('span');
-                    badge.className = 'badge-vip-key';
-                    badge.innerHTML = '👑 Đã Kích Hoạt VIP';
-                    badge.style.cssText = 'font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.25); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.5); margin-left: 6px; font-weight: 600;';
-                    label.appendChild(badge);
+                    const parent = (typeof el.closest === 'function') ? el.closest('div') : el.parentElement;
+                    const label = parent && typeof parent.querySelector === 'function' ? parent.querySelector('label') : null;
+                    if (label && typeof label.querySelector === 'function' && !label.querySelector('.badge-vip-key') && typeof document.createElement === 'function') {
+                        const badge = document.createElement('span');
+                        badge.className = 'badge-vip-key';
+                        badge.innerHTML = '👑 Đã Kích Hoạt VIP';
+                        badge.style.cssText = 'font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.25); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.5); margin-left: 6px; font-weight: 600;';
+                        label.appendChild(badge);
+                    }
                 }
             }
         });
@@ -11168,10 +11212,11 @@ function updateLicenseUI(info) {
     } else {
         inputIds.forEach(id => {
             const el = document.getElementById(id);
-            if (el && el.value && el.value.startsWith('•')) {
-                el.value = '';
+            if (el) {
+                if (el.value && el.value.includes('[Bản Quyền VIP')) {
+                    el.value = '';
+                }
                 el.readOnly = false;
-                el.type = 'password';
                 el.style.background = '';
                 el.style.borderColor = '';
                 el.style.color = '';
@@ -11189,6 +11234,8 @@ function updateLicenseUI(info) {
             const badge = label && typeof label.querySelector === 'function' ? label.querySelector('.badge-vip-key') : null;
             if (badge && typeof badge.remove === 'function') badge.remove();
         });
+        // Nạp lại API keys cá nhân nếu ô chưa có
+        loadApiKeys();
     }
 }
 

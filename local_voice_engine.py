@@ -435,9 +435,11 @@ def _get_ffmpeg_exe():
             return b
     return shutil.which('ffmpeg.exe') or shutil.which('ffmpeg') or 'ffmpeg'
 
-def validate_and_convert_audio_sample(input_audio_path, output_wav_path=None):
+def validate_and_convert_audio_sample(input_audio_path, output_wav_path=None, return_meta=False, max_duration=10.0):
     """
-    Kiểm tra và chuẩn hóa file âm thanh mẫu (thời lượng 1s-60s, chuyển về 24kHz Mono WAV).
+    Kiểm tra và chuẩn hóa file âm thanh mẫu (thời lượng >= 1.0s, chuyển về 24kHz Mono WAV).
+    Nếu file vượt quá max_duration (hoặc chứa khoảng lặng dài / timestamp lệch),
+    hệ thống sẽ tự động tối ưu và cắt gọn (auto-trim) lấy đoạn âm thanh vàng 5-8s thay vì báo lỗi chặn người dùng.
     """
     if not os.path.exists(input_audio_path):
         return False, "Tệp âm thanh mẫu không tồn tại."
@@ -448,11 +450,15 @@ def validate_and_convert_audio_sample(input_audio_path, output_wav_path=None):
         
     ffmpeg_exe = _get_ffmpeg_exe()
 
-    # 1. Chuyển đổi an toàn qua ffmpeg
+    # 1. Chuyển đổi an toàn qua ffmpeg với đồng bộ PTS và resample 24kHz mono
     try:
         cmd = [
-            ffmpeg_exe, "-y", "-i", input_audio_path,
-            "-vn", "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+            ffmpeg_exe, "-y",
+            "-avoid_negative_ts", "make_zero",
+            "-i", input_audio_path,
+            "-vn", "-sn", "-dn",
+            "-af", "aresample=async=1,asetpts=PTS-STARTPTS",
+            "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
             output_wav_path
         ]
         res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', creationflags=0x08000000 if os.name == 'nt' else 0)
@@ -479,10 +485,71 @@ def validate_and_convert_audio_sample(input_audio_path, output_wav_path=None):
             duration = frames / float(rate)
             
         if duration < 1.0:
-            return False, f"Đoạn âm thanh mẫu quá ngắn ({duration:.1f}s). Vui lòng chọn hoặc thu âm mẫu từ 2-5 giây."
-        if duration > 60.0:
-            return False, f"Đoạn âm thanh mẫu quá dài ({duration:.1f}s). Vui lòng chọn mẫu dưới 30 giây (tốt nhất 3-6s)."
+            return False, f"Đoạn âm thanh mẫu quá ngắn ({duration:.1f}s). Vui lòng chọn hoặc thu âm mẫu từ 2-10 giây."
             
+        is_trimmed = False
+        original_duration = duration
+
+        # 2. Tự động tối ưu và cắt gọn (Auto-trim) nếu file dài hơn max_duration (tránh lỗi file quá dài)
+        if duration > max_duration:
+            target_trim_sec = 8.0 # Đoạn mẫu lý tưởng cho mô hình clone voice
+            trimmed_wav_path = output_wav_path + f".trim_{int(time.time()*1000)}.wav"
+            
+            # Thử cắt bỏ silence ở đầu rồi lấy 8 giây
+            trim_cmd = [
+                ffmpeg_exe, "-y", "-i", output_wav_path,
+                "-af", "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-35dB",
+                "-t", str(target_trim_sec),
+                "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                trimmed_wav_path
+            ]
+            subprocess.run(trim_cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', creationflags=0x08000000 if os.name == 'nt' else 0)
+            
+            valid_trim = False
+            if os.path.exists(trimmed_wav_path) and os.path.getsize(trimmed_wav_path) > 100:
+                try:
+                    with wave.open(trimmed_wav_path, 'r') as twf:
+                        t_dur = twf.getnframes() / float(twf.getframerate())
+                        if t_dur >= 2.0:
+                            valid_trim = True
+                except Exception:
+                    valid_trim = False
+                    
+            if not valid_trim:
+                # Fallback cắt trực tiếp target_trim_sec giây từ đầu file
+                fallback_trim_cmd = [
+                    ffmpeg_exe, "-y", "-i", output_wav_path,
+                    "-t", str(target_trim_sec),
+                    "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                    trimmed_wav_path
+                ]
+                subprocess.run(fallback_trim_cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', creationflags=0x08000000 if os.name == 'nt' else 0)
+                
+            if os.path.exists(trimmed_wav_path) and os.path.getsize(trimmed_wav_path) > 100:
+                try:
+                    if os.path.exists(output_wav_path):
+                        os.remove(output_wav_path)
+                    os.replace(trimmed_wav_path, output_wav_path)
+                except Exception:
+                    shutil.copy2(trimmed_wav_path, output_wav_path)
+                    try: os.remove(trimmed_wav_path)
+                    except: pass
+                    
+                is_trimmed = True
+                try:
+                    with wave.open(output_wav_path, 'r') as wf:
+                        duration = wf.getnframes() / float(wf.getframerate())
+                except Exception:
+                    duration = target_trim_sec
+
+        if return_meta:
+            return True, {
+                'path': output_wav_path,
+                'duration': round(duration, 2),
+                'original_duration': round(original_duration, 2),
+                'is_trimmed': is_trimmed
+            }
+
         return True, output_wav_path
     except Exception as e:
         return False, f"Lỗi xử lý file âm thanh mẫu: {str(e)}"

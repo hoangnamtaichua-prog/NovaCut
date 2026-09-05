@@ -1302,7 +1302,13 @@ def run_auto_edit_workflow(payload, check_stop_func):
 
     if not api_key_openspeaker:
         root_dir = os.path.dirname(os.path.abspath(__file__))
-        for p in [os.path.join(root_dir, 'api_keys.txt'), 'api_keys.txt']:
+        candidate_p = [os.path.join(root_dir, 'api_keys.txt'), 'api_keys.txt']
+        try:
+            import license_manager
+            candidate_p.append(os.path.join(license_manager.get_user_data_dir(), 'api_keys.txt'))
+        except Exception:
+            pass
+        for p in candidate_p:
             if os.path.exists(p):
                 with open(p, 'r', encoding='utf-8') as f:
                     for line in f:
@@ -2033,7 +2039,13 @@ def run_narration_workflow(payload, check_stop_func):
 
     if not api_key_openspeaker:
         root_dir = os.path.dirname(os.path.abspath(__file__))
-        for p in [os.path.join(root_dir, 'api_keys.txt'), 'api_keys.txt']:
+        candidate_p = [os.path.join(root_dir, 'api_keys.txt'), 'api_keys.txt']
+        try:
+            import license_manager
+            candidate_p.append(os.path.join(license_manager.get_user_data_dir(), 'api_keys.txt'))
+        except Exception:
+            pass
+        for p in candidate_p:
             if os.path.exists(p):
                 with open(p, 'r', encoding='utf-8') as f:
                     for line in f:

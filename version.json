@@ -1,8 +1,8 @@
 {
-  "version": "1.2.8",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.8/patch.zip",
-  "sha256": "c17430873147dce443a170121d1b98e7bb9e47f470257749307417a4d96fcc5b",
-  "changelog": "✨ Bản cập nhật v1.2.8:\n- Khắc phục triệt để hiện tượng lặp lại cảnh cắt trong video review phim.\n- Đảm bảo 100% cảnh cắt luôn tuân theo thứ tự thời gian tuyến tính tăng dần từ đầu đến cuối phim (start[i] >= end[i-1]), tuyệt đối không đưa cảnh ở thời gian sau lên trước cảnh trước.\n- Mỗi cảnh cắt chỉ xuất hiện DUY NHẤT 1 LẦN trong toàn bộ video review, cấm chồng lấn hoặc chọn lại đoạn phim cũ.\n- Tối ưu hóa thuật toán gộp clip ngắn (timeline_sanitizer) và bổ sung bộ bảo vệ trật tự thời gian 2 tầng (Order Guard).",
+  "version": "1.2.9",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.9/patch.zip",
+  "sha256": "a2836bab2508d8ba8d3a373ae63cc9e12904c1eb50e74aa84225933aa91cc6ff",
+  "changelog": "✨ Bản cập nhật v1.2.9:\n- Khắc phục triệt để lỗi không lưu API Key khi tắt app mở lại: Nạp và hiển thị nguyên vẹn API key cá nhân của người dùng, không còn bị xóa trắng ô input hay tự động mask thành dấu chấm.\n- Bổ sung nút con mắt (👁️) bật/tắt hiển thị mật khẩu ngay tại các ô nhập API Key trong Cài đặt giúp người dùng kiểm tra key thuận tiện.\n- Đồng bộ API Key 2 chiều giữa User Data Directory và thư mục cài đặt, đảm bảo pipeline Auto-Edit luôn đọc được key chính xác.\n- Khắc phục lỗi âm thanh mẫu Clone Voice báo quá dài (152.3s): Tích hợp tính năng Smart Voice Auto-Trim tự động cắt lấy 8s giọng mẫu chuẩn phòng thu từ tệp âm thanh bất kỳ mà không bao giờ chặn/báo lỗi từ chối.\n- Đồng bộ PTS timestamp âm thanh mẫu nhằm triệt tiêu khoảng lặng giả do non-zero start timestamp gây ra.\n- Tự động reset input file để luôn nhận diện khi người dùng chọn lại cùng một file âm thanh mẫu.",
   "is_mandatory": false,
-  "updated_at": "2026-09-05 22:04:03"
+  "updated_at": "2026-09-06 00:18:50"
 }

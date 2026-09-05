@@ -30,7 +30,31 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-*(Hiện tại chưa có thay đổi nào đang chờ phát hành. Mọi tính năng và bản sửa lỗi mới nhất đã được đóng gói và phát hành thành công trong bản v1.2.8)*
+*(Hiện tại chưa có thay đổi nào đang chờ phát hành. Mọi tính năng và bản sửa lỗi mới nhất đã được đóng gói và phát hành thành công trong bản v1.2.9)*
+
+---
+
+## 🚀 ĐÃ PHÁT HÀNH TRONG BẢN v1.2.9 (06/09/2026)
+1. **Khắc Phục Triệt Để Lỗi Không Lưu & Mất API Key Thủ Công Khi Tắt App Mở Lại:**
+   - **Backend (`routes/core.py`):** Trả về chính xác giá trị API Key người dùng đã lưu (`keys[k] = v`), loại bỏ hoàn toàn việc tự động mask thành 12 dấu chấm giả mạo đối với key cá nhân.
+   - **Đồng Bộ Hai Chiều:** Tự động ghi đồng bộ giữa `USER_DATA_DIR/api_keys.txt` và `ROOT_DIR/api_keys.txt`, đảm bảo mọi tiến trình và module phụ trợ đều đọc được key.
+   - **Pipeline Auto-Edit (`auto_edit_pipeline.py`):** Bổ sung tìm kiếm API Key từ cả `license_manager.get_user_data_dir()`.
+   - **Frontend (`web/app.js`):** `loadApiKeys` luôn ưu tiên nạp và hiển thị đầy đủ key cá nhân mà người dùng đã lưu. `applyLicenseState` và `updateSettingsModalPermissions` tuyệt đối không xóa trắng ô input nếu đang chứa key cá nhân của người dùng.
+   - **Giao Diện (`web/index.html` & `web/app.js`):** Bổ sung nút con mắt `👁️` cạnh các ô nhập API Key để người dùng có thể bấm vào bật/tắt hiển thị rõ ràng key của mình.
+
+2. **Khắc Phục Triệt Để Lỗi Nạp Âm Thanh Mẫu Clone Voice (Báo Lỗi Quá Dài 152.3s):**
+   - **Tích Hợp Smart Voice Auto-Trim (`local_voice_engine.py`):**
+     - Thay vì chặn đứng và báo lỗi đỏ `"Đoạn âm thanh mẫu quá dài"`, hệ thống tự động lọc bỏ khoảng lặng (`silenceremove`) và cắt lấy 8.0 giây âm thanh mẫu giọng nói đẹp nhất chuẩn phòng thu (24kHz Mono).
+     - Cho phép người dùng thoải mái tải lên các đoạn ghi âm, video, file nhạc có độ dài bất kỳ (vài giây đến vài phút) mà vẫn tạo giọng clone thành công 100%.
+   - **Xử Lý Lệch PTS & Non-Zero Presentation Timestamp:**
+     - Bổ sung các cờ FFmpeg `-avoid_negative_ts make_zero` và `-af "aresample=async=1,asetpts=PTS-STARTPTS"` để triệt tiêu hiện tượng FFmpeg tự chèn hàng trăm giây silence khi gặp file âm thanh có timestamp bắt đầu khác 0 (nguyên nhân khiến file 5s bị đo thành 152.3s).
+   - **Cải Tiến Phản Hồi API & Metadata Chuẩn Hóa (`routes/tts.py`):**
+     - Route `/api/clone_voice/upload` trả về metadata chi tiết: `is_trimmed`, `duration` (sau tối ưu), `original_duration` (thời lượng gốc).
+   - **Tối Ưu Trải Nghiệm Người Dùng & Reset Cache Input (`web/js/features/clone_voice.js`):**
+     - Luôn reset `cloneFileInput.value = ''` trước và sau khi chọn/kéo thả file, giúp trình duyệt luôn kích hoạt sự kiện `change` kể cả khi người dùng chọn lại file cùng tên.
+     - Hiển thị thông báo toast và log trực quan khi tệp được hệ thống tự động tối ưu ngắn lại: *"Đã tự động tối ưu & cắt 8.0s giọng mẫu chuẩn (từ tệp 152.3s)!"*.
+   - **Đồng Bộ Bản Vá:**
+     - Đã đồng bộ sang `patches/active/` (`local_voice_engine.py`, `routes/tts.py`, `web/js/features/clone_voice.js`, `routes/core.py`, `auto_edit_pipeline.py`, `web/app.js`, `web/index.html`).
 
 ---
 

@@ -541,15 +541,22 @@ def test_openai_key():
 @core_bp.route('/api/get_api_keys', methods=['GET'])
 def get_api_keys():
     keys = {}
-    if os.path.exists(API_KEYS_FILE):
-        with open(API_KEYS_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                if '=' in line:
-                    k, v = line.strip().split('=', 1)
-                    if k in ['openaiModel', 'openaiBaseUrl']:
-                        keys[k] = v
-                    else:
-                        keys[k] = ('•' * 12) if v else ''
+    legacy_file = os.path.join(ROOT_DIR, 'api_keys.txt')
+    candidate_files = [API_KEYS_FILE]
+    if os.path.abspath(legacy_file) != os.path.abspath(API_KEYS_FILE):
+        candidate_files.append(legacy_file)
+
+    for p in candidate_files:
+        if os.path.exists(p):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if '=' in line:
+                            k, v = line.strip().split('=', 1)
+                            if k not in keys or not keys[k]:
+                                keys[k] = v
+            except Exception:
+                pass
     return jsonify(keys)
 
 @core_bp.route('/api/keys', methods=['POST'])
@@ -597,6 +604,15 @@ def save_api_keys():
         os.replace(temp_path, API_KEYS_FILE)
         if os.name != 'nt':
             os.chmod(API_KEYS_FILE, 0o600)
+
+        # Đồng bộ sang legacy keys trong thư mục ứng dụng để các module phụ trợ đọc được
+        legacy_file = os.path.join(ROOT_DIR, 'api_keys.txt')
+        if os.path.abspath(legacy_file) != os.path.abspath(API_KEYS_FILE):
+            try:
+                import shutil
+                shutil.copy2(API_KEYS_FILE, legacy_file)
+            except Exception:
+                pass
     except Exception:
         try:
             os.remove(temp_path)
