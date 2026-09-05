@@ -307,10 +307,14 @@ def sanitize_timeline(
                 # Liền kề trong phim: Nối liền từ curr['start'] đến nxt['end']
                 merged_start = curr['start']
                 merged_end = nxt['end']
+            elif nxt['start'] >= curr['end']:
+                # Không liền kề nhưng nxt ở sau curr: Mở rộng curr theo chiều tới
+                merged_start = curr['start']
+                merged_end = curr['start'] + merged_orig_dur
             else:
-                # Không liền kề trong phim: Lấy cảnh của nxt và mở rộng độ dài để phủ cả 2
-                merged_start = nxt['start']
-                merged_end = nxt['start'] + merged_orig_dur
+                # nxt ở trước curr (nghịch đảo thời gian) hoặc đè nhau: giữ start của curr, kéo dài đủ thời lượng
+                merged_start = curr['start']
+                merged_end = curr['start'] + merged_orig_dur
                 
             merged_dur = max(0.1, merged_end - merged_start)
             merged_ratio = merged_dur / merged_orig_dur if merged_orig_dur > 0 else 1.0
@@ -380,5 +384,91 @@ def sanitize_timeline(
                     f"da mo rong nhe bien: {clip['start']}s -> {clip['end']}s"
                 )
 
-    logs.append(f"[SANITIZE] Hoan tat toi uu timeline: {len(timeline)} clips goc -> {len(merged_clips)} clips da lam sach.")
-    return merged_clips, logs
+    # Bước 4: ĐẢM BẢO TUYỆT ĐỐI KHÔNG LẶP CẢNH VÀ THỜI GIAN LUÔN TIẾN DẦN (Chronological & Non-overlapping)
+    enforced_clips, order_logs = enforce_chronological_and_unique_timeline(merged_clips)
+    logs.extend(order_logs)
+
+    logs.append(f"[SANITIZE] Hoan tat toi uu timeline: {len(timeline)} clips goc -> {len(enforced_clips)} clips da lam sach (tuan thu thu tu thoi gian & khong trung canh).")
+    return enforced_clips, logs
+
+
+def enforce_chronological_and_unique_timeline(
+    timeline: List[Dict[str, Any]],
+    scene_cuts: List[float] = None,
+    min_step_gap: float = 0.0
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    Bảo đảm quy tắc dựng phim Movie Review cốt lõi:
+    1. Cảnh cắt luôn tuân theo trình tự thời gian tiến dần (Chronological Order):
+       start[i] >= end[i-1] + min_step_gap. Tuyệt đối không cho cảnh ở thời gian sau nhảy lên trước.
+    2. Một cảnh cắt chỉ xuất hiện DUY NHẤT 1 LẦN trong toàn bộ video review:
+       Tuyệt đối không lặp lại đoạn thời gian hoặc chồng lấn (overlap) lên cảnh đã dùng trước đó.
+    """
+    logs = []
+    if not timeline:
+        return [], logs
+
+    sorted_timeline = sorted(timeline, key=lambda x: int(x.get('voice_ref', 0)))
+    result = []
+    
+    # Con trỏ thời gian video gốc đã sử dụng đến đâu
+    current_movie_time = 0.0
+    adjusted_count = 0
+    rewind_prevented_count = 0
+
+    for idx, item in enumerate(sorted_timeline):
+        clip = dict(item)
+        target_dur = float(clip.get('duration') or (clip.get('end', 0.0) - clip.get('start', 0.0)))
+        if target_dur <= 0:
+            target_dur = max(0.5, float(clip.get('original_duration', 2.0)))
+
+        orig_start = float(clip.get('start', 0.0))
+        orig_end = float(clip.get('end', orig_start + target_dur))
+
+        # 1. Kiểm tra lùi thời gian (Chronological violation: start < current_movie_time)
+        if orig_start < current_movie_time:
+            rewind_prevented_count += 1
+            # AI chọn cảnh ở quá khứ (nhảy lùi): Đẩy start tiến lên ít nhất bằng current_movie_time
+            new_start = current_movie_time + min_step_gap
+            
+            # Nếu có danh sách scene_cuts, tìm scene cut hợp lệ đầu tiên ở phía sau new_start
+            if scene_cuts:
+                next_cuts = [c for c in scene_cuts if c >= new_start]
+                if next_cuts and (next_cuts[0] - new_start) <= 2.0:
+                    new_start = next_cuts[0]
+            
+            new_end = new_start + target_dur
+            adjusted_count += 1
+            logs.append(
+                f"[ORDER-GUARD] Clip #{idx+1} (voice_ref={clip.get('voice_ref')}): Phat hien nhay lui thoi gian "
+                f"({orig_start:.2f}s < moc hien tai {current_movie_time:.2f}s). "
+                f"Da day tien moc cat: [{new_start:.2f}s -> {new_end:.2f}s]"
+            )
+        else:
+            # AI chọn cảnh ở tương lai (tiến dần hợp lệ)
+            new_start = orig_start
+            new_end = orig_start + target_dur
+            
+            # Đảm bảo không đè lên current_movie_time
+            if new_start < current_movie_time:
+                new_start = current_movie_time
+                new_end = new_start + target_dur
+                adjusted_count += 1
+
+        clip['start'] = round(new_start, 3)
+        clip['end'] = round(new_end, 3)
+        clip['duration'] = round(target_dur, 3)
+        orig_dur = float(clip.get('original_duration', target_dur))
+        clip['speed_ratio'] = round(target_dur / orig_dur if orig_dur > 0 else 1.0, 3)
+
+        # Cập nhật mốc thời gian phim đã sử dụng (đảm bảo cảnh tiếp theo luôn ở sau new_end)
+        current_movie_time = new_end
+        result.append(clip)
+
+    if adjusted_count > 0:
+        logs.append(
+            f"[ORDER-GUARD] Hoan tat chuan hoa thu tu tuyen tinh: Da ngan chan {rewind_prevented_count} lan nhay lui canh, "
+            f"dieu chinh {adjusted_count}/{len(timeline)} clips de dam bao 100% khong trung lap va luon tien dan."
+        )
+
+    return result, logs

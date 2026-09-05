@@ -1238,6 +1238,16 @@ def run_timeline_map_reduce_pipeline_sync(
                     
             # Sắp xếp theo voice_ref
             all_clips.sort(key=lambda x: int(x.get("voice_ref", 0)))
+            
+            # Chuẩn hóa thứ tự thời gian tuyến tính và chống trùng lặp cảnh ngay từ bước tổng hợp mẻ
+            try:
+                import timeline_sanitizer
+                all_clips, order_logs = timeline_sanitizer.enforce_chronological_and_unique_timeline(all_clips)
+                for log_msg in order_logs:
+                    q.put({"type": "log", "msg": log_msg})
+            except Exception as e:
+                q.put({"type": "log", "msg": f"⚠️ Cảnh báo chuẩn hóa thứ tự timeline: {e}"})
+
             q.put({"type": "done", "result": all_clips})
         except Exception as e:
             q.put({"type": "error", "msg": str(e)})

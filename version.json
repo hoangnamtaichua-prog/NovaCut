@@ -1,8 +1,8 @@
 {
-  "version": "1.2.7",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.7/patch.zip",
-  "sha256": "bee97533eb560c5235688ea2d2044f8f4694e95d7d8c28ed78be31bdb9a93ff3",
-  "changelog": "✨ Bản cập nhật v1.2.7:\n- Loại bỏ triệt để phần thống kê số từ/thời lượng ở cuối kịch bản ChatGPT, tái mã hóa Prompt Vault và tự động lọc câu thừa trước khi đọc TTS.\n- Sửa triệt để lỗi ép dùng lại cache khi chọn Hủy (use_cache=False), tự động dọn sạch tài liệu cũ trong thư mục tạm.\n- Thiết lập mặc định tắt cho Phụ đề giọng Review (Burn-in Subtitles) và Nhạc nền (BGM).\n- Nâng cấp bộ công cụ Nhạc nền (BGM Suite): 10 bản nhạc có sẵn + tải lên file nhạc riêng (.mp3/.wav/.m4a), nghe thử trực tiếp, lặp vô hạn và né tiếng ducking.\n- Mặc định tắt Tách lọc âm thanh gốc AI (Stem Separator).\n- Nâng số luồng tạo giọng đọc TTS mặc định lên 8 luồng tối ưu tốc độ.",
+  "version": "1.2.8",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.2.8/patch.zip",
+  "sha256": "c17430873147dce443a170121d1b98e7bb9e47f470257749307417a4d96fcc5b",
+  "changelog": "✨ Bản cập nhật v1.2.8:\n- Khắc phục triệt để hiện tượng lặp lại cảnh cắt trong video review phim.\n- Đảm bảo 100% cảnh cắt luôn tuân theo thứ tự thời gian tuyến tính tăng dần từ đầu đến cuối phim (start[i] >= end[i-1]), tuyệt đối không đưa cảnh ở thời gian sau lên trước cảnh trước.\n- Mỗi cảnh cắt chỉ xuất hiện DUY NHẤT 1 LẦN trong toàn bộ video review, cấm chồng lấn hoặc chọn lại đoạn phim cũ.\n- Tối ưu hóa thuật toán gộp clip ngắn (timeline_sanitizer) và bổ sung bộ bảo vệ trật tự thời gian 2 tầng (Order Guard).",
   "is_mandatory": false,
-  "updated_at": "2026-09-05 12:53:48"
+  "updated_at": "2026-09-05 22:04:03"
 }

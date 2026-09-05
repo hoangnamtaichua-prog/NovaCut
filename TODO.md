@@ -30,7 +30,19 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-*(Hiện tại chưa có thay đổi nào đang chờ phát hành. Mọi tính năng và bản sửa lỗi mới nhất đã được đóng gói và phát hành thành công trong bản v1.2.7)*
+1. **Khắc Phục Lỗi Lặp Cảnh & Đảm Bảo Cảnh Cắt Tuyệt Đối Tuân Theo Thứ Tự Tuyến Tính (Chronological Order):**
+   - **Tối ưu Prompt Đạo Diễn Bước 3 (`prompt_json.txt` & `.prompt_vault.dat`):**
+     - Bổ sung quy tắc bắt buộc: Các cảnh cắt phải tịnh tiến theo chiều thời gian tăng dần từ đầu phim đến cuối phim (`start[i] >= end[i-1]`). Tuyệt đối không nhảy lùi thời gian về các cảnh trước đó trong phim.
+     - Bổ sung quy tắc chống lặp: Mỗi cảnh cắt chỉ được xuất hiện DUY NHẤT 1 LẦN trong toàn bộ video review; cấm chọn lại hoặc chồng lấn các đoạn thời gian đã sử dụng.
+   - **Sửa Lỗi Ghép Nối Trong Sanitizer (`timeline_sanitizer.py`):**
+     - Sửa lỗi logic khi gộp các clip ngắn (< 1.2s): Trước đây khi gộp clip ngắn với clip tiếp theo không liền kề, hệ thống copy đè khoảng thời gian `nxt['start']`, vô tình gây lặp cảnh hoặc biến dạng thứ tự cảnh. Nay đã sửa thành mở rộng clip theo chiều tới giữ đúng trật tự.
+   - **Thêm Bộ Bảo Vệ Trật Tự Tuyến Tính (`enforce_chronological_and_unique_timeline`):**
+     - Tự động phát hiện và chặn đứng mọi hành vi nhảy lùi thời gian (`orig_start < current_movie_time`), tự động đẩy tiến mốc cắt về phía trước theo đúng thứ tự thời gian gốc của phim.
+     - Đảm bảo 100% cảnh cắt trong video thành phẩm chỉ xuất hiện đúng 1 lần và không bao giờ cảnh sau bị đưa lên trước cảnh trước.
+   - **Tích Hợp Bảo Vệ 2 Lớp Trong Pipeline (`auto_edit_pipeline.py`):**
+     - Chuẩn hóa ngay sau khi tổng hợp các mẻ JSON từ AI và sau bước Snap Scene Cuts.
+   - **Đồng Bộ Bản Vá:**
+     - Đã đồng bộ toàn bộ file sửa đổi sang `patches/active/` (`timeline_sanitizer.py`, `auto_edit_pipeline.py`, `prompt_json.txt`, `.prompt_vault.dat`).
 
 ---
 
