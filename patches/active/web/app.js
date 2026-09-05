@@ -6808,16 +6808,246 @@ const reviewBgmEnabled = document.getElementById('reviewBgmEnabled');
 const reviewBgmConfig = document.getElementById('reviewBgmConfig');
 const reviewBgmVol = document.getElementById('reviewBgmVol');
 const reviewBgmVolVal = document.getElementById('reviewBgmVolVal');
+const btnBgmSourcePreset = document.getElementById('btnBgmSourcePreset');
+const btnBgmSourceCustom = document.getElementById('btnBgmSourceCustom');
+const panelBgmPreset = document.getElementById('panelBgmPreset');
+const panelBgmCustom = document.getElementById('panelBgmCustom');
+const reviewBgmPresetSelect = document.getElementById('reviewBgmPresetSelect');
+const btnPreviewBgm = document.getElementById('btnPreviewBgm');
+const btnUploadBgm = document.getElementById('btnUploadBgm');
+const reviewBgmFileInput = document.getElementById('reviewBgmFileInput');
+const reviewBgmCustomFileName = document.getElementById('reviewBgmCustomFileName');
+const btnPreviewCustomBgm = document.getElementById('btnPreviewCustomBgm');
+const btnRemoveCustomBgm = document.getElementById('btnRemoveCustomBgm');
+const reviewBgmPreviewAudio = document.getElementById('reviewBgmPreviewAudio');
+
+window.currentBgmSourceMode = 'preset';
+window.currentCustomBgmPath = '';
+window.currentCustomBgmFilename = '';
 
 if (reviewBgmEnabled && reviewBgmConfig) {
     reviewBgmEnabled.addEventListener('change', (e) => {
         reviewBgmConfig.style.opacity = e.target.checked ? '1' : '0.4';
         reviewBgmConfig.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+        if (!e.target.checked && reviewBgmPreviewAudio) {
+            reviewBgmPreviewAudio.pause();
+            if (btnPreviewBgm) btnPreviewBgm.textContent = '▶️';
+            if (btnPreviewCustomBgm) btnPreviewCustomBgm.textContent = '▶️';
+        }
     });
 }
 if (reviewBgmVol && reviewBgmVolVal) {
     reviewBgmVol.addEventListener('input', (e) => {
         reviewBgmVolVal.textContent = e.target.value + '%';
+    });
+}
+
+// BGM Source Tabs Switcher
+if (btnBgmSourcePreset && btnBgmSourceCustom && panelBgmPreset && panelBgmCustom) {
+    btnBgmSourcePreset.addEventListener('click', () => {
+        window.currentBgmSourceMode = 'preset';
+        btnBgmSourcePreset.classList.add('active');
+        btnBgmSourcePreset.style.borderColor = '#38bdf8';
+        btnBgmSourcePreset.style.color = '#38bdf8';
+        btnBgmSourcePreset.style.background = 'rgba(56, 189, 248, 0.1)';
+        
+        btnBgmSourceCustom.classList.remove('active');
+        btnBgmSourceCustom.style.borderColor = '';
+        btnBgmSourceCustom.style.color = '#94a3b8';
+        btnBgmSourceCustom.style.background = '';
+        
+        panelBgmPreset.style.display = 'flex';
+        panelBgmCustom.style.display = 'none';
+        
+        if (reviewBgmPreviewAudio) {
+            reviewBgmPreviewAudio.pause();
+            if (btnPreviewCustomBgm) btnPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+
+    btnBgmSourceCustom.addEventListener('click', () => {
+        window.currentBgmSourceMode = 'custom';
+        btnBgmSourceCustom.classList.add('active');
+        btnBgmSourceCustom.style.borderColor = '#38bdf8';
+        btnBgmSourceCustom.style.color = '#38bdf8';
+        btnBgmSourceCustom.style.background = 'rgba(56, 189, 248, 0.1)';
+        
+        btnBgmSourcePreset.classList.remove('active');
+        btnBgmSourcePreset.style.borderColor = '';
+        btnBgmSourcePreset.style.color = '#94a3b8';
+        btnBgmSourcePreset.style.background = '';
+        
+        panelBgmPreset.style.display = 'none';
+        panelBgmCustom.style.display = 'flex';
+        
+        if (reviewBgmPreviewAudio) {
+            reviewBgmPreviewAudio.pause();
+            if (btnPreviewBgm) btnPreviewBgm.textContent = '▶️';
+        }
+    });
+}
+
+// Load Preset BGM List from Server
+async function loadBgmPresetList() {
+    if (!reviewBgmPresetSelect) return;
+    try {
+        const res = await fetch('/api/bgm/list');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === 'success' && Array.isArray(data.files) && data.files.length > 0) {
+            const currentVal = reviewBgmPresetSelect.value || 'random';
+            reviewBgmPresetSelect.innerHTML = '<option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>';
+            data.files.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.filename;
+                opt.textContent = `${f.title} (${f.genre})`;
+                reviewBgmPresetSelect.appendChild(opt);
+            });
+            if (data.files.some(f => f.filename === currentVal)) {
+                reviewBgmPresetSelect.value = currentVal;
+            }
+        }
+    } catch (err) {
+        console.error('Failed to load BGM list:', err);
+    }
+}
+loadBgmPresetList();
+
+// Preset BGM Preview Player
+if (btnPreviewBgm && reviewBgmPreviewAudio && reviewBgmPresetSelect) {
+    btnPreviewBgm.addEventListener('click', () => {
+        if (!reviewBgmPreviewAudio.paused && reviewBgmPreviewAudio.dataset.currentType === 'preset') {
+            reviewBgmPreviewAudio.pause();
+            btnPreviewBgm.textContent = '▶️';
+            return;
+        }
+
+        let selected = reviewBgmPresetSelect.value;
+        if (selected === 'random') {
+            const options = Array.from(reviewBgmPresetSelect.options).map(o => o.value).filter(v => v !== 'random');
+            if (options.length > 0) {
+                selected = options[Math.floor(Math.random() * options.length)];
+            } else {
+                showToast('Chưa có file nhạc nền khả dụng để nghe thử', 'warning');
+                return;
+            }
+        }
+
+        reviewBgmPreviewAudio.src = `/api/bgm/stream?type=preset&filename=${encodeURIComponent(selected)}&file=${encodeURIComponent(selected)}`;
+        reviewBgmPreviewAudio.dataset.currentType = 'preset';
+        reviewBgmPreviewAudio.play().then(() => {
+            btnPreviewBgm.textContent = '⏸️';
+            if (btnPreviewCustomBgm) btnPreviewCustomBgm.textContent = '▶️';
+        }).catch(err => {
+            console.error('Audio play failed:', err);
+            showToast('Không thể phát nhạc nghe thử', 'error');
+        });
+    });
+
+    reviewBgmPreviewAudio.addEventListener('ended', () => {
+        if (btnPreviewBgm) btnPreviewBgm.textContent = '▶️';
+        if (btnPreviewCustomBgm) btnPreviewCustomBgm.textContent = '▶️';
+    });
+    reviewBgmPreviewAudio.addEventListener('pause', () => {
+        if (reviewBgmPreviewAudio.dataset.currentType === 'preset' && btnPreviewBgm) {
+            btnPreviewBgm.textContent = '▶️';
+        } else if (reviewBgmPreviewAudio.dataset.currentType === 'custom' && btnPreviewCustomBgm) {
+            btnPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+}
+
+// Custom BGM Upload & Actions
+if (btnUploadBgm && reviewBgmFileInput) {
+    btnUploadBgm.addEventListener('click', () => {
+        reviewBgmFileInput.click();
+    });
+
+    reviewBgmFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        showToast('Đang tải lên nhạc nền...', 'info');
+        try {
+            const res = await fetch('/api/bgm/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'success') {
+                window.currentCustomBgmPath = data.path;
+                window.currentCustomBgmFilename = data.filename;
+                if (reviewBgmCustomFileName) {
+                    reviewBgmCustomFileName.textContent = `🎵 ${data.filename}`;
+                    reviewBgmCustomFileName.style.color = '#38bdf8';
+                }
+                if (btnPreviewCustomBgm) btnPreviewCustomBgm.style.display = 'flex';
+                if (btnRemoveCustomBgm) btnRemoveCustomBgm.style.display = 'flex';
+                showToast('Tải lên nhạc nền thành công!', 'success');
+            } else {
+                showToast(data.message || 'Lỗi khi tải file nhạc lên', 'error');
+            }
+        } catch (err) {
+            console.error('BGM upload failed:', err);
+            showToast('Không thể kết nối máy chủ để tải nhạc', 'error');
+        } finally {
+            reviewBgmFileInput.value = '';
+        }
+    });
+}
+
+if (btnPreviewCustomBgm && reviewBgmPreviewAudio) {
+    btnPreviewCustomBgm.addEventListener('click', () => {
+        if (!window.currentCustomBgmFilename) return;
+
+        if (!reviewBgmPreviewAudio.paused && reviewBgmPreviewAudio.dataset.currentType === 'custom') {
+            reviewBgmPreviewAudio.pause();
+            btnPreviewCustomBgm.textContent = '▶️';
+            return;
+        }
+
+        reviewBgmPreviewAudio.src = `/api/bgm/stream?type=custom&filename=${encodeURIComponent(window.currentCustomBgmFilename)}&file=${encodeURIComponent(window.currentCustomBgmFilename)}`;
+        reviewBgmPreviewAudio.dataset.currentType = 'custom';
+        reviewBgmPreviewAudio.play().then(() => {
+            btnPreviewCustomBgm.textContent = '⏸️';
+            if (btnPreviewBgm) btnPreviewBgm.textContent = '▶️';
+        }).catch(err => {
+            console.error('Custom audio play failed:', err);
+            showToast('Không thể phát file nhạc tải lên', 'error');
+        });
+    });
+}
+
+if (btnRemoveCustomBgm) {
+    btnRemoveCustomBgm.addEventListener('click', () => {
+        window.currentCustomBgmPath = '';
+        window.currentCustomBgmFilename = '';
+        if (reviewBgmPreviewAudio && reviewBgmPreviewAudio.dataset.currentType === 'custom') {
+            reviewBgmPreviewAudio.pause();
+        }
+        if (reviewBgmCustomFileName) {
+            reviewBgmCustomFileName.textContent = 'Chưa chọn file (.mp3, .wav, .m4a)';
+            reviewBgmCustomFileName.style.color = '#94a3b8';
+        }
+        if (btnPreviewCustomBgm) {
+            btnPreviewCustomBgm.style.display = 'none';
+            btnPreviewCustomBgm.textContent = '▶️';
+        }
+        btnRemoveCustomBgm.style.display = 'none';
+        showToast('Đã hủy chọn nhạc nền riêng', 'info');
+    });
+}
+
+// AI Stem Separation Toggle
+const reviewStemSeparationEnabled = document.getElementById('reviewStemSeparationEnabled');
+const reviewStemConfig = document.getElementById('reviewStemConfig');
+if (reviewStemSeparationEnabled && reviewStemConfig) {
+    reviewStemSeparationEnabled.addEventListener('change', (e) => {
+        reviewStemConfig.style.opacity = e.target.checked ? '1' : '0.4';
+        reviewStemConfig.style.pointerEvents = e.target.checked ? 'auto' : 'none';
     });
 }
 
@@ -6965,7 +7195,7 @@ if (btnStartReview) {
             mode: reviewVideoMode,
             voice_id: voiceId,
             voice_speed: voiceSpeed,
-            tts_threads: parseInt(document.getElementById('reviewTtsThreads')?.value || 3),
+            tts_threads: parseInt(document.getElementById('reviewTtsThreads')?.value || 8),
             target_minutes: document.getElementById('reviewTargetMinutes') ? (parseInt(document.getElementById('reviewTargetMinutes').value) || 5) : 5,
             review_style: document.getElementById('reviewStyleSelect')?.value || 'dramatic',
             custom_style_prompt: document.getElementById('reviewCustomStylePrompt')?.value || '',
@@ -6989,7 +7219,7 @@ if (btnStartReview) {
                 h_pct: (window.currentReviewLogoState && window.currentReviewLogoState.h_pct) || 12.0,
                 opacity: parseInt(document.getElementById('reviewLogoOpacity')?.value || 100)
             },
-            auto_subtitles: document.getElementById('reviewAutoSubtitles')?.checked || false,
+            auto_subtitles: Boolean(document.getElementById('reviewAutoSubtitles')?.checked),
             enable_scene_detect: document.getElementById('reviewEnableSceneDetect') ? document.getElementById('reviewEnableSceneDetect').checked : true,
             snap_threshold: parseFloat(document.getElementById('reviewSnapThreshold')?.value) || 0.6,
             min_clip_duration: parseFloat(document.getElementById('reviewMinClipDur')?.value) || 1.2,
@@ -6997,12 +7227,14 @@ if (btnStartReview) {
             enable_crossfade: document.getElementById('reviewEnableCrossfade')?.checked || false,
             original_volume: parseInt(document.getElementById('reviewOrigVol')?.value) || 15,
             bgm: {
-                enabled: document.getElementById('reviewBgmEnabled')?.checked || false,
+                enabled: Boolean(document.getElementById('reviewBgmEnabled')?.checked),
                 volume: parseInt(document.getElementById('reviewBgmVol')?.value) || 15,
-                ducking: document.getElementById('reviewBgmDucking')?.checked || false
+                ducking: Boolean(document.getElementById('reviewBgmDucking')?.checked),
+                preset: document.getElementById('reviewBgmPresetSelect')?.value || 'random',
+                path: (window.currentBgmSourceMode === 'custom' && window.currentCustomBgmPath) ? window.currentCustomBgmPath : ''
             },
             stem_separation: {
-                enabled: document.getElementById('reviewStemSeparationEnabled')?.checked !== false,
+                enabled: Boolean(document.getElementById('reviewStemSeparationEnabled')?.checked),
                 remove_vocals: document.getElementById('reviewRemoveVocals')?.checked !== false,
                 keep_sfx: document.getElementById('reviewKeepSfx')?.checked !== false,
                 mode: document.getElementById('reviewStemMode')?.value || 'mdx_net_hq4',

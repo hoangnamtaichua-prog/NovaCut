@@ -913,6 +913,101 @@ def review_check_cache():
         "files": cached_files
     })
 
+@video_edit_bp.route('/api/bgm/list', methods=['GET'])
+def bgm_list():
+    preset_dir = os.path.join(ROOT_DIR, 'backgroundmusic')
+    custom_dir = os.path.join(USER_DATA_DIR, 'bgm')
+    os.makedirs(custom_dir, exist_ok=True)
+    
+    tracks = []
+    # 1. Presets
+    if os.path.exists(preset_dir):
+        for f in sorted(os.listdir(preset_dir)):
+            if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac')):
+                full_path = os.path.join(preset_dir, f)
+                tracks.append({
+                    'id': f'preset_{f}',
+                    'name': os.path.splitext(f)[0],
+                    'filename': f,
+                    'type': 'preset',
+                    'path': full_path,
+                    'size_mb': round(os.path.getsize(full_path) / (1024 * 1024), 2)
+                })
+    # 2. Custom uploads
+    if os.path.exists(custom_dir):
+        for f in sorted(os.listdir(custom_dir)):
+            if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac')):
+                full_path = os.path.join(custom_dir, f)
+                tracks.append({
+                    'id': f'custom_{f}',
+                    'name': os.path.splitext(f)[0],
+                    'filename': f,
+                    'type': 'custom',
+                    'path': full_path,
+                    'size_mb': round(os.path.getsize(full_path) / (1024 * 1024), 2)
+                })
+                
+    return jsonify({'success': True, 'tracks': tracks})
+
+@video_edit_bp.route('/api/bgm/upload', methods=['POST'])
+def bgm_upload():
+    if 'audio_file' not in request.files:
+        return jsonify({'success': False, 'error': 'Vui lòng chọn file âm thanh'}), 400
+    file = request.files['audio_file']
+    if not file or not file.filename:
+        return jsonify({'success': False, 'error': 'Tên file rỗng'}), 400
+        
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in {'.mp3', '.m4a', '.wav', '.aac'}:
+        return jsonify({'success': False, 'error': 'Chỉ chấp nhận định dạng .mp3, .m4a, .wav, .aac'}), 400
+        
+    custom_dir = os.path.join(USER_DATA_DIR, 'bgm')
+    os.makedirs(custom_dir, exist_ok=True)
+    
+    clean_name = secure_filename(file.filename)
+    if not clean_name:
+        clean_name = f"bgm_{int(time.time())}{ext}"
+        
+    save_path = safe_join(custom_dir, clean_name, extensions=_AUDIO_EXTENSIONS)
+    file.save(save_path)
+    
+    # Check max size 50MB
+    if os.path.getsize(save_path) > 50 * 1024 * 1024:
+        os.remove(save_path)
+        return jsonify({'success': False, 'error': 'File quá lớn (tối đa 50MB)'}), 400
+        
+    return jsonify({
+        'success': True,
+        'track': {
+            'id': f'custom_{clean_name}',
+            'name': os.path.splitext(clean_name)[0],
+            'filename': clean_name,
+            'type': 'custom',
+            'path': save_path,
+            'size_mb': round(os.path.getsize(save_path) / (1024 * 1024), 2)
+        }
+    })
+
+@video_edit_bp.route('/api/bgm/stream', methods=['GET'])
+def bgm_stream():
+    path = request.args.get('path', '').strip()
+    if not path or not os.path.isabs(path):
+        raw_name = request.args.get('filename') or request.args.get('file') or ''
+        filename = secure_filename(raw_name)
+        track_type = request.args.get('type', '')
+        custom_candidate = os.path.join(USER_DATA_DIR, 'bgm', filename) if filename else ''
+        preset_candidate = os.path.join(ROOT_DIR, 'backgroundmusic', filename) if filename else ''
+        if track_type == 'custom' or (not os.path.exists(preset_candidate) and os.path.exists(custom_candidate)):
+            path = custom_candidate
+        else:
+            path = preset_candidate
+            
+    if not is_path_allowed(path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
+        return jsonify({'error': 'File âm thanh không hợp lệ hoặc không được phép'}), 403
+        
+    mime, _ = mimetypes.guess_type(path)
+    return send_file(path, mimetype=mime or 'audio/mpeg')
+
 @video_edit_bp.route('/api/review/start', methods=['POST'])
 def review_start():
     global review_stop_flag, _review_active

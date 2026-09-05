@@ -377,9 +377,92 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
         
     return filter_chain, curr
 
+def is_statistical_or_meta_sentence(sentence: str) -> bool:
+    """Kiểm tra xem câu có phải là thống kê số từ / thời lượng / ghi chú của LLM hay không."""
+    if not sentence:
+        return True
+    s = re.sub(r'[\*\_\#\`\[\]\(\)]', '', sentence).strip()
+    if not s or len(s) <= 1:
+        return True
+    lower = s.lower()
+    
+    # 1. Các tiền tố thống kê phổ biến
+    stat_prefixes = (
+        'tổng số từ', 'số từ thực tế', 'tổng số chữ', 'thời lượng đọc', 
+        'thời lượng ước tính', 'ước tính thời lượng', 'tốc độ đọc', 'tổng cộng:', 
+        'total words', 'word count', 'reading time', 'estimated time',
+        'lưu ý:', 'ghi chú:', 'chú thích:', 'note:', 'bối cảnh tiếp nối:'
+    )
+    if any(lower.startswith(p) for p in stat_prefixes):
+        return True
+        
+    # 2. Chứa cả 'tổng số từ' hoặc 'số từ' đi kèm số lượng từ
+    if ('tổng số từ' in lower or 'số từ' in lower) and ('khoảng' in lower or 'thực tế' in lower or re.search(r'\d+[\.,]?\d*\s*từ', lower)):
+        return True
+        
+    # 3. Chứa 'thời lượng' và số phút/giây
+    if 'thời lượng' in lower and ('ước tính' in lower or 'đối chiếu' in lower or re.search(r'\d+\s*(?:phút|giây|s|m)', lower)):
+        return True
+
+    # 4. Ký hiệu kết thúc kịch bản
+    if lower in ('hết.', 'kết thúc kịch bản.', 'the end.', 'hết kịch bản.', '--- hết ---', '---'):
+        return True
+        
+    return False
+
+
+def sanitize_review_script(text: str) -> str:
+    """Loại bỏ triệt để các đoạn thống kê số từ, thời lượng, ghi chú thừa mà AI tự thêm vào đầu/cuối kịch bản."""
+    if not text:
+        return ""
+    
+    lines = text.strip().split('\n')
+    
+    # 1. Dò từ cuối lên để cắt bỏ các dòng thống kê / ghi chú
+    end_idx = len(lines)
+    while end_idx > 0:
+        line_to_check = lines[end_idx - 1].strip()
+        if not line_to_check:
+            end_idx -= 1
+            continue
+        
+        # Dòng phân cách (---, ***, ===)
+        if re.match(r'^[\-\*\=\_]{3,}$', line_to_check):
+            end_idx -= 1
+            continue
+            
+        clean_strip = re.sub(r'[\*\_\#\`\[\]\(\)]', '', line_to_check).strip()
+        if is_statistical_or_meta_sentence(clean_strip):
+            end_idx -= 1
+            continue
+            
+        break
+        
+    lines = lines[:end_idx]
+    
+    # 2. Dò từ đầu xuống loại bỏ preamble thừa nếu có
+    start_idx = 0
+    preamble_pattern = re.compile(
+        r'^(?:dưới đây là|đây là|kịch bản review|bản kịch bản|chào bạn|sau đây là).*(?:kịch bản|voice|thu âm|hoàn chỉnh)[\:\.]?$',
+        re.IGNORECASE
+    )
+    while start_idx < len(lines):
+        line_to_check = lines[start_idx].strip()
+        if not line_to_check:
+            start_idx += 1
+            continue
+        if preamble_pattern.match(line_to_check):
+            start_idx += 1
+            continue
+        break
+        
+    lines = lines[start_idx:]
+    return "\n".join(lines).strip()
+
+
 def split_text_to_sentences(text):
-    """Tách văn bản thành các câu riêng biệt để TTS từng câu."""
-    text = text.strip()
+    """Tách văn bản thành các câu riêng biệt để TTS từng câu (đã lọc sạch thống kê/ghi chú thừa)."""
+    text = sanitize_review_script(text)
     if not text:
         return []
     # Tách theo dấu câu kết thúc (.!?) hoặc xuống dòng kép
@@ -403,7 +486,7 @@ def split_text_to_sentences(text):
                 sentences.append(buffer.strip())
         else:
             sentences.append(part)
-    return [s for s in sentences if len(s) > 1]
+    return [s for s in sentences if len(s) > 1 and not is_statistical_or_meta_sentence(s)]
 
 def enforce_max_2_lines_srt(srt_entries, max_chars_per_line=40):
     """Đảm bảo mỗi block SRT chỉ hiện tối đa 2 dòng trên màn hình.
@@ -562,7 +645,7 @@ def run_ffmpeg_with_progress_yield(cmd, total_duration, start_pct, end_pct, desc
         return False
     return True
 
-def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40, threads=3):
+def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40, threads=8, use_cache=False):
     """
     Tạo TTS cho từng câu theo cơ chế đa luồng (Multi-threading) và yield progress real-time.
     Yields:
@@ -574,6 +657,11 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
     ffprobe_path = os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe.exe') if os.name == 'nt' else 'ffprobe'
     
     sentence_dir = os.path.join(temp_dir, 'sentences')
+    if not use_cache and os.path.exists(sentence_dir):
+        try:
+            shutil.rmtree(sentence_dir, ignore_errors=True)
+        except Exception:
+            pass
     os.makedirs(sentence_dir, exist_ok=True)
     
     is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh']
@@ -584,7 +672,7 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
         yield 'error', "Không có câu nào để tạo TTS."
         return
 
-    num_threads = max(1, min(10, int(threads or 3)))
+    num_threads = max(1, min(10, int(threads or 8)))
     results_map = {}
     error_holder = []
     
@@ -595,8 +683,8 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
         filename = f"sent_{idx}.wav" if is_kokoro else f"sent_{idx}.mp3"
         wav_path = os.path.join(sentence_dir, f"sent_{idx}_pcm.wav")
         
-        # Nếu đã có file WAV hợp lệ (từ cache/lần chạy trước) thì tái sử dụng
-        if os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
+        # Nếu đã có file WAV hợp lệ (từ cache/lần chạy trước) VÀ use_cache=True thì tái sử dụng
+        if use_cache and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
             dur = 2.0
             try:
                 import wave
@@ -720,18 +808,18 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
     
     yield 'done', (final_audio, final_srt, srt_entries)
 
-def generate_tts_per_sentence(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40, threads=3):
-    """Hàm wrapper tương thích ngược chạy generator trả về tuple kết quả cuối."""
+def generate_tts_per_sentence(sentences, voice_id, speed, temp_dir, api_key_openspeaker='', check_stop_func=None, start_pct=20, end_pct=40, threads=8, use_cache=False):
     final_audio = None
     final_srt = None
     srt_entries = []
     error = None
-    for msg_type, data in generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct, end_pct, threads):
+    for msg_type, data in generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct, end_pct, threads, use_cache=use_cache):
         if msg_type == 'error':
             error = data
         elif msg_type == 'done':
             final_audio, final_srt, srt_entries = data
     return final_audio, final_srt, srt_entries, error
+
 def resolve_openai_credentials(payload=None):
     if payload is None:
         payload = {}
@@ -793,7 +881,7 @@ def resolve_openai_credentials(payload=None):
 import threading
 import queue
 
-def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chunks, target_words, prompt_map, prompt_reduce, temp_dir, log_func, style_directive=""):
+def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chunks, target_words, prompt_map, prompt_reduce, temp_dir, log_func, style_directive="", use_cache=False):
     q = queue.Queue()
     
     async def async_worker():
@@ -836,7 +924,7 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                 cache_key = hashlib.md5((chunk_text + prompt + str(openai_model)).encode('utf-8')).hexdigest()
                 cache_file = os.path.join(temp_dir, f"chunk_{cache_key}.txt")
                 
-                if os.path.exists(cache_file):
+                if use_cache and os.path.exists(cache_file):
                     with open(cache_file, 'r', encoding='utf-8') as f:
                         cached_text = f.read()
                         q.put({"type": "token", "count": len(cached_text)})
@@ -914,6 +1002,7 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                             q.put({"type": "token", "count": len(content)})
                             
                     if final_result.strip():
+                        final_result = sanitize_review_script(final_result)
                         q.put({"type": "done", "result": final_result})
                         break
                     raise RuntimeError("Phản hồi Reduce rỗng")
@@ -952,7 +1041,7 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                     yield log_func(f"⚡ Đang nhận dữ liệu: {token_accum} ký tự...")
                     last_log = token_accum
             elif item["type"] == "done":
-                final_script = item["result"]
+                final_script = sanitize_review_script(item["result"])
                 yield log_func(f"✅ Hoàn thành tổng cộng {token_accum} ký tự kịch bản.")
                 break
             elif item["type"] == "error":
@@ -962,12 +1051,12 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
             if not t.is_alive():
                 yield log_func("🛑 Luồng xử lý kịch bản kết thúc bất thường mà không có kết quả.")
                 return None
-    return final_script
+    return sanitize_review_script(final_script)
 
 def run_timeline_map_reduce_pipeline_sync(
     openai_key, openai_base_url, openai_model,
     voice_entries, condensed_orig_srt, prompt_json_template,
-    temp_dir, log_func, batch_size=35, max_concurrency=3
+    temp_dir, log_func, batch_size=35, max_concurrency=3, use_cache=False
 ):
     """
     Xử lý Step 3 theo cơ chế Map-Reduce / Batching:
@@ -1036,7 +1125,7 @@ def run_timeline_map_reduce_pipeline_sync(
                 cache_key = hashlib.md5((f"step3_{openai_model}_{s_ref}_{e_ref}_" + v_text[:100]).encode('utf-8')).hexdigest()
                 cache_file = os.path.join(temp_dir, f"timeline_batch_{b_idx}_{cache_key}.json")
                 
-                if os.path.exists(cache_file):
+                if use_cache and os.path.exists(cache_file):
                     try:
                         with open(cache_file, 'r', encoding='utf-8') as f:
                             cached_data = json.load(f)
@@ -1190,7 +1279,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
     
     openai_key, openai_base_url, openai_model = resolve_openai_credentials(payload)
     api_key_openspeaker = payload.get('openspeaker_api_key', '')
-    auto_subtitles = payload.get('auto_subtitles', True)
+    auto_subtitles = payload.get('auto_subtitles', False)
     
     # Advanced Anti-Flicker & Sync Parameters
     enable_scene_detect = payload.get('enable_scene_detect', True)
@@ -1263,7 +1352,28 @@ def run_auto_edit_workflow(payload, check_stop_func):
             return f"data: [STEP] {step}\n\ndata: {msg}\n\n"
         return f"data: {msg}\n\n"
 
-    use_cache = payload.get('use_cache', False)
+    use_cache = bool(payload.get('use_cache', False))
+    if not use_cache and os.path.exists(temp_dir):
+        yield log("🧹 Đang dọn dẹp tài liệu cũ để tạo mới hoàn toàn...")
+        undeleted = []
+        try:
+            for item in os.listdir(temp_dir):
+                item_path = os.path.join(temp_dir, item)
+                try:
+                    if os.path.isfile(item_path) or os.path.islink(item_path):
+                        os.unlink(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                except Exception:
+                    undeleted.append(item)
+            if undeleted:
+                yield log(f"⚠️ Một số file tạm đang bị khóa ({', '.join(undeleted[:3])}), hệ thống sẽ ghi đè trực tiếp.")
+            else:
+                yield log("✨ Đã dọn sạch tài liệu cũ thành công.")
+        except Exception as e:
+            yield log(f"⚠️ Cảnh báo dọn dẹp tài liệu cũ: {e}")
+    os.makedirs(temp_dir, exist_ok=True)
+
     script_txt_path = os.path.join(temp_dir, 'script.txt')
     voice_audio_path = os.path.join(temp_dir, "voice_review.wav")
     voice_srt_path = os.path.join(temp_dir, "voice_review.srt")
@@ -1296,7 +1406,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
 
         if cache_valid:
             with open(script_txt_path, 'r', encoding='utf-8') as f:
-                review_script = f.read()
+                review_script = sanitize_review_script(f.read())
             yield log(f"💚 Đã tìm thấy kịch bản cũ, tái sử dụng tại {script_txt_path}")
             yield log("[PROGRESS] 20")
         else:
@@ -1324,12 +1434,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
             review_script = yield from run_map_reduce_pipeline_sync(
                 openai_key, openai_base_url, openai_model, srt_chunks, 
                 target_words, prompt_map, prompt_reduce, temp_dir, log,
-                style_directive=style_directive
+                style_directive=style_directive,
+                use_cache=use_cache
             )
             
             if not review_script:
                 return
                 
+            review_script = sanitize_review_script(review_script)
             with open(script_txt_path, 'w', encoding='utf-8') as f:
                 f.write(review_script)
             with open(script_meta_path, 'w', encoding='utf-8') as mf:
@@ -1342,7 +1454,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if check_stop_func(): return
         
         voice_speed = float(payload.get('voice_speed', 1.0))
-        tts_threads = int(payload.get('tts_threads', 3))
+        tts_threads = int(payload.get('tts_threads', 8))
         
         if use_cache and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path) and os.path.getsize(voice_audio_path) > 1000:
             yield log("💚 Đã tìm thấy file giọng đọc cũ, tái sử dụng.")
@@ -1386,7 +1498,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 error = None
                 
                 for msg_type, data in generate_tts_per_sentence_stream(
-                    sentences, voice_id, voice_speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct=20, end_pct=40, threads=tts_threads
+                    sentences, voice_id, voice_speed, temp_dir, api_key_openspeaker, check_stop_func, start_pct=20, end_pct=40, threads=tts_threads, use_cache=use_cache
                 ):
                     if msg_type == 'progress':
                         curr_i, total_i, step_pct, overall_pct, snippet = data
@@ -1475,7 +1587,8 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 temp_dir=temp_dir,
                 log_func=log,
                 batch_size=35,
-                max_concurrency=4
+                max_concurrency=4,
+                use_cache=use_cache
             )
             
             if not timeline_data or len(timeline_data) == 0:
@@ -1760,7 +1873,34 @@ def run_auto_edit_workflow(payload, check_stop_func):
         logo_enabled = bool(logo_data.get('enabled', False))
         logo_path = logo_data.get('path', '').strip()
 
+        # BGM Configuration
+        bgm_data = payload.get('bgm') or {}
+        bgm_enabled = bool(bgm_data.get('enabled', False))
+        bgm_vol = max(0.0, min(1.0, float(bgm_data.get('volume', 15)) / 100.0))
+        bgm_ducking = bool(bgm_data.get('ducking', False))
+        bgm_path = bgm_data.get('path', '').strip()
+
+        bgm_file = None
+        if bgm_enabled:
+            if bgm_path and os.path.exists(bgm_path):
+                bgm_file = bgm_path
+            else:
+                bgm_preset = bgm_data.get('preset', '')
+                preset_dir = os.path.join(ROOT_DIR, 'backgroundmusic')
+                if bgm_preset and os.path.exists(os.path.join(preset_dir, bgm_preset)):
+                    bgm_file = os.path.join(preset_dir, bgm_preset)
+                elif os.path.exists(preset_dir):
+                    preset_files = [os.path.join(preset_dir, f) for f in os.listdir(preset_dir) if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac'))]
+                    if preset_files:
+                        bgm_file = random.choice(preset_files)
+
         overlay_inputs = ['-i', concat_silent_path, '-i', voice_audio_path]
+        bgm_input_idx = None
+        if bgm_file and os.path.exists(bgm_file):
+            yield log(f"🎵 Đang mix nhạc nền: {os.path.basename(bgm_file)} (Âm lượng: {int(bgm_vol*100)}%)...")
+            bgm_input_idx = len(overlay_inputs) // 2
+            overlay_inputs.extend(['-stream_loop', '-1', '-i', bgm_file])
+
         v_filters = []
         curr_v = "0:v"
 
@@ -1789,6 +1929,18 @@ def run_auto_edit_workflow(payload, check_stop_func):
             v_filters[-1] = re.sub(r'\[[a-zA-Z0-9_]+\]$', '[v_out]', v_filters[-1])
             vf_complex = ";".join(v_filters)
 
+        audio_filter = ""
+        if bgm_input_idx is not None:
+            if bgm_ducking:
+                audio_filter = f"[1:a]volume=1.0[v_aud];[{bgm_input_idx}:a]volume={bgm_vol:.2f}[bgm_raw];[bgm_raw][v_aud]sidechaincompress=threshold=0.08:ratio=4:attack=200:release=800[bgm_duck];[v_aud][bgm_duck]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
+            else:
+                audio_filter = f"[1:a]volume=1.0[v_aud];[{bgm_input_idx}:a]volume={bgm_vol:.2f}[bgm_raw];[v_aud][bgm_raw]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
+
+        filter_chains = [vf_complex]
+        if audio_filter:
+            filter_chains.append(audio_filter)
+        combined_filter = ";".join(filter_chains)
+
         if encoder == 'h264_nvenc':
             final_enc_cmd = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p']
         elif encoder == 'h264_qsv':
@@ -1796,11 +1948,13 @@ def run_auto_edit_workflow(payload, check_stop_func):
         else:
             final_enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
 
+        map_args = ['-map', '[v_out]', '-map', '[a_out]' if bgm_input_idx is not None else '1:a']
+
         cmd_overlay = [
             ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
             *overlay_inputs,
-            '-filter_complex', vf_complex,
-            '-map', '[v_out]', '-map', '1:a',
+            '-filter_complex', combined_filter,
+            *map_args,
             *final_enc_cmd,
             '-c:a', 'aac', '-b:a', '192k',
             '-shortest',
@@ -1809,8 +1963,36 @@ def run_auto_edit_workflow(payload, check_stop_func):
         
         proc_overlay = subprocess.run(cmd_overlay, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
         if proc_overlay.returncode != 0:
-            yield log(f"🛑 Lỗi chèn âm thanh/sub cuối cùng: {proc_overlay.stderr}")
-            return
+            if bgm_input_idx is not None:
+                yield log("⚠️ Lỗi mix BGM nâng cao, đang thử mix chuẩn fallback (giữ nguyên logo & phụ đề)...")
+                fallback_inputs = []
+                skip_next = False
+                for i, arg in enumerate(overlay_inputs):
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    if arg == '-stream_loop':
+                        skip_next = True
+                        continue
+                    if arg == '-i' and i + 1 < len(overlay_inputs) and overlay_inputs[i+1] == bgm_final_path:
+                        skip_next = True
+                        continue
+                    fallback_inputs.append(arg)
+
+                cmd_fallback = [
+                    ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
+                    *fallback_inputs,
+                    '-filter_complex', vf_complex,
+                    '-map', '[v_out]', '-map', '1:a',
+                    *final_enc_cmd,
+                    '-c:a', 'aac', '-b:a', '192k',
+                    '-shortest',
+                    final_output
+                ]
+                proc_overlay = subprocess.run(cmd_fallback, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
+            if proc_overlay.returncode != 0:
+                yield log(f"🛑 Lỗi chèn âm thanh/sub cuối cùng: {proc_overlay.stderr}")
+                return
             
         if not os.path.exists(final_output):
             yield log(f"🛑 Không tìm thấy file video đầu ra: {final_output}")
@@ -1835,7 +2017,7 @@ def run_narration_workflow(payload, check_stop_func):
     openai_key, openai_base_url, openai_model = resolve_openai_credentials(payload)
     api_key_openspeaker = payload.get('openspeaker_api_key', '')
     encoder = payload.get('encoder', 'libx264')
-    auto_subtitles = payload.get('auto_subtitles', True)
+    auto_subtitles = payload.get('auto_subtitles', False)
     blur_orig_subs = payload.get('blur_original_subtitles', True)
     orig_volume = float(payload.get('original_volume', 15)) / 100.0  # 0.0 - 1.0
 
@@ -1899,7 +2081,27 @@ def run_narration_workflow(payload, check_stop_func):
             return f"data: [STEP] {step}\n\ndata: {msg}\n\n"
         return f"data: {msg}\n\n"
 
-    use_cache = payload.get('use_cache', False)
+    use_cache = bool(payload.get('use_cache', False))
+    if not use_cache and os.path.exists(temp_dir):
+        yield log("🧹 Đang dọn dẹp tài liệu cũ để tạo mới hoàn toàn...")
+        undeleted = []
+        try:
+            for item in os.listdir(temp_dir):
+                item_path = os.path.join(temp_dir, item)
+                try:
+                    if os.path.isfile(item_path) or os.path.islink(item_path):
+                        os.unlink(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                except Exception:
+                    undeleted.append(item)
+            if undeleted:
+                yield log(f"⚠️ Một số file tạm đang bị khóa ({', '.join(undeleted[:3])}), hệ thống sẽ ghi đè trực tiếp.")
+            else:
+                yield log("✨ Đã dọn sạch tài liệu cũ thành công.")
+        except Exception as e:
+            yield log(f"⚠️ Cảnh báo dọn dẹp tài liệu cũ: {e}")
+    os.makedirs(temp_dir, exist_ok=True)
     script_txt_path = os.path.join(temp_dir, 'narration_script.txt')
     voice_audio_path = os.path.join(temp_dir, 'voice_narration.wav')
     voice_srt_path = os.path.join(temp_dir, 'voice_narration.srt')
@@ -1922,7 +2124,7 @@ def run_narration_workflow(payload, check_stop_func):
         narration_script = ""
         if use_cache and os.path.exists(script_txt_path):
             with open(script_txt_path, 'r', encoding='utf-8') as f:
-                narration_script = f.read()
+                narration_script = sanitize_review_script(f.read())
             yield log(f"💚 Đã tìm thấy kịch bản cũ, tái sử dụng tại {script_txt_path}")
         else:
             # Đọc prompt narration qua Vault bảo mật
@@ -1973,7 +2175,7 @@ def run_narration_workflow(payload, check_stop_func):
                 yield log(f"🛑 Lỗi gọi ChatGPT Bước 1: {err or 'Không có phản hồi'}")
                 return
 
-            narration_script = gpt_res['content']
+            narration_script = sanitize_review_script(gpt_res['content'])
             u = gpt_res.get('usage', {})
             token_str = f" (🪙 {u.get('total_tokens', 0):,} tokens)" if u else ""
 
@@ -2019,7 +2221,7 @@ def run_narration_workflow(payload, check_stop_func):
                     yield log("🛑 Kịch bản rỗng sau khi tách câu.")
                     return
 
-                tts_threads = int(payload.get('tts_threads', 3))
+                tts_threads = int(payload.get('tts_threads', 8))
                 yield log(f"Đang tạo giọng đọc cho {len(sentences)} câu (Đa luồng: {tts_threads} workers)...")
                 final_audio = None
                 final_srt = None
@@ -2203,14 +2405,23 @@ def run_narration_workflow(payload, check_stop_func):
         full_filter = f"{video_filter};{audio_filter}"
 
         # BGM
-        bgm_enabled = payload.get('bgm', {}).get('enabled', False)
+        bgm_data = payload.get('bgm') or {}
+        bgm_enabled = bool(bgm_data.get('enabled', False))
+        bgm_vol = max(0.0, min(1.0, float(bgm_data.get('volume', 15)) / 100.0))
+        bgm_path = bgm_data.get('path', '').strip()
         bgm_file = None
         if bgm_enabled:
-            bgm_dir = 'backgroundmusic'
-            if os.path.exists(bgm_dir):
-                bgm_files = [os.path.join(bgm_dir, f) for f in os.listdir(bgm_dir) if f.endswith(('.mp3', '.m4a'))]
-                if bgm_files:
-                    bgm_file = random.choice(bgm_files)
+            if bgm_path and os.path.exists(bgm_path):
+                bgm_file = bgm_path
+            else:
+                bgm_preset = bgm_data.get('preset', '')
+                preset_dir = os.path.join(ROOT_DIR, 'backgroundmusic')
+                if bgm_preset and os.path.exists(os.path.join(preset_dir, bgm_preset)):
+                    bgm_file = os.path.join(preset_dir, bgm_preset)
+                elif os.path.exists(preset_dir):
+                    bgm_files = [os.path.join(preset_dir, f) for f in os.listdir(preset_dir) if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac'))]
+                    if bgm_files:
+                        bgm_file = random.choice(bgm_files)
 
         # Lệnh FFmpeg cuối
         temp_no_bgm = os.path.join(temp_dir, 'narration_no_bgm.mp4')
@@ -2247,10 +2458,9 @@ def run_narration_workflow(payload, check_stop_func):
 
         if bgm_file:
             yield log(f"🎵 Đang mix nhạc nền: {os.path.basename(bgm_file)}...", step=4)
-            bgm_vol = int(payload.get('bgm', {}).get('volume', 10)) / 100.0
             cmd_bgm = [
                 ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
-                '-i', temp_no_bgm, '-i', bgm_file,
+                '-i', temp_no_bgm, '-stream_loop', '-1', '-i', bgm_file,
                 '-filter_complex', f"[0:a]volume=1.0[a0];[1:a]volume={bgm_vol:.2f}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[a]",
                 '-map', '0:v', '-map', '[a]',
                 '-c:v', 'copy', '-c:a', 'aac',

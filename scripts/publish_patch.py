@@ -52,7 +52,8 @@ GITHUB_TOKEN = get_github_token()
 PATCH_INCLUDE_DIRS = [
     "web",
     "resources",
-    "routes"
+    "routes",
+    "prompts"
 ]
 
 PATCH_INCLUDE_FILES = [

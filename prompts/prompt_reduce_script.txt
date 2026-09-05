@@ -24,5 +24,5 @@ YÊU CẦU VĂN PHONG (áp dụng toàn bộ kịch bản):
 - Không chèn placeholder kiểu "[nhạc nền]" hay ghi chú kỹ thuật trong lời thoại.
 
 ĐỊNH DẠNG ĐẦU RA:
-- Chỉ đưa ra văn bản kịch bản thuần hoàn chỉnh, chia đoạn rõ ràng theo mạch, không tiêu đề phụ mục lộ liễu như "Hook:", "Thân bài:".
-- Cuối kịch bản, ghi riêng: tổng số từ thực tế và thời lượng đọc ước tính (phút) theo tốc độ 3.5 từ/giây, để đối chiếu.
+- CHỈ đưa ra DUY NHẤT văn bản lời thoại kịch bản thuần hoàn chỉnh từ đầu đến cuối, chia đoạn rõ ràng theo mạch, không tiêu đề phụ mục lộ liễu như "Hook:", "Thân bài:", "Outro:".
+- TUYỆT ĐỐI KHÔNG ghi thêm bất kỳ dòng thống kê số từ thực tế, thời lượng đọc ước tính, hay ghi chú/lưu ý nào ở đầu hoặc cuối kịch bản vì toàn bộ nội dung xuất ra sẽ được nạp trực tiếp vào phần mềm đọc giọng tự động (TTS).

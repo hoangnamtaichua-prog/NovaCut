@@ -30,7 +30,26 @@
 ---
 
 ## 📦 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
-1. **Sửa lỗi UnboundLocalError trong Bước 3 Phân tích Timeline (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
+1. **Loại Bỏ Triệt Để Phần Thống Kê Số Từ / Thời Lượng Ở Cuối Kịch Bản Review (`prompts/prompt_reduce_script.txt`, `.prompt_vault.dat`, `auto_edit_pipeline.py`, `patches/active/...`):**
+   - **Cập nhật Prompt AI & Tái biên dịch Prompt Vault:** Chỉnh sửa chỉ thị đầu ra trong `prompt_reduce_script.txt`, gỡ bỏ yêu cầu ghi số từ/thời lượng đối chiếu; nghiêm cấm AI xuất thêm bất kỳ dòng thống kê, ghi chú kỹ thuật hay lưu ý nào. Đã tái mã hóa và biên dịch kho bảo mật `.prompt_vault.dat`.
+   - **Bộ lọc làm sạch kịch bản tự động (`sanitize_review_script` & `split_text_to_sentences`):** Bổ sung thuật toán phát hiện và bóc tách tự động mọi dòng thống kê số từ, thời lượng đọc, chú thích thừa ("Tổng số từ thực tế: khoảng...", "Thời lượng ước tính:...", "--- Hết kịch bản ---", etc.) trước khi lưu file và trước khi đưa vào luồng tạo giọng đọc TTS, đảm bảo không bao giờ bị phát âm nhầm phần thống kê.
+
+2. **Sửa Triệt Để Lỗi Tái Sử Dụng Cache Khi Người Dùng Không Cho Phép (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
+   - **Xóa sạch thư mục tạm khi `use_cache=False`:** Khi người dùng chọn "Hủy" hoặc chạy lại trong thư mục cũ mà không muốn tái sử dụng tài liệu cũ, toàn bộ các tệp cache (`script.txt`, `voice_review.wav`, `voice_review.srt`, `timeline_batch_*.json`, `temp_clips/`) trong `temp_dir` (`auto_edit_temp/`) sẽ được dọn dẹp sạch sẽ.
+   - **Truyền cờ `use_cache` xuống toàn bộ pipeline:** Bổ sung tham số `use_cache` cho `run_map_reduce_pipeline_sync`, `generate_tts_per_sentence_stream` và `run_timeline_map_reduce_pipeline_sync`, ngăn chặn việc tái sử dụng ngầm các tệp cache cũ khi người dùng yêu cầu làm lại từ đầu.
+
+2. **Cập Nhật Giá Trị Mặc Định Cho Âm Thanh, Phụ Đề & Luồng Đọc (`auto_edit_pipeline.py`, `web/index.html`, `web/app.js`, `patches/active/...`):**
+   - **Âm thanh phụ đề mặc định là KHÔNG:** Tùy chọn Tự động chèn phụ đề giọng Review (`reviewAutoSubtitles`) và Nhạc nền (`reviewBgmEnabled`) mặc định để trạng thái tắt (unchecked / False). Khối cấu hình BGM được làm mờ (opacity 0.4) khi chưa bật.
+   - **Tách lọc âm thanh gốc AI mặc định KHÔNG chọn:** Tùy chọn `reviewStemSeparationEnabled` mặc định tắt (unchecked / False), khối cấu hình MDX-Net làm mờ và khóa tương tác cho tới khi người dùng chủ động bật.
+   - **Số luồng tạo giọng đọc mặc định là 8:** Điều chỉnh giá trị mặc định của `reviewTtsThreads` và thanh trượt TTS Threads thành 8 luồng (thay vì 3 luồng), tối ưu tốc độ tổng hợp giọng đọc song song.
+
+3. **Nâng Cấp Bộ Công Cụ Nhạc Nền BGM Suite (`routes/video_edit.py`, `auto_edit_pipeline.py`, `web/index.html`, `web/app.js`, `patches/active/...`):**
+   - **Hỗ trợ 2 chế độ BGM:** Cho phép chuyển đổi linh hoạt giữa *Nhạc có sẵn* (Preset) và *Tải lên riêng* (Custom Upload).
+   - **Thư viện nhạc nền có sẵn:** Tích hợp sẵn 10 bản nhạc nền tuyển chọn theo nhiều sắc thái cảm xúc (Kịch tính, Alan Walker style, Piano nhẹ nhàng, Sci-Fi Blade Runner, Roblox hồi hộp, Trầm buồn...) kèm tùy chọn Random ngẫu nhiên.
+   - **Tải lên nhạc nền riêng:** Bổ sung API bảo mật `/api/bgm/upload` và `/api/bgm/stream`, cho phép tải lên file MP3/WAV/M4A/AAC riêng và nghe thử trực tiếp trên giao diện trước khi xuất video.
+   - **Trộn nhạc nền thông minh (BGM Looping & Ducking):** Tích hợp cờ `-stream_loop -1` trong FFmpeg đảm bảo nhạc nền lặp vô hạn khớp trọn vẹn độ dài video, kèm tính năng né tiếng thông minh (sidechain ducking) giảm âm lượng BGM khi giọng đọc xuất hiện.
+
+4. **Sửa lỗi UnboundLocalError trong Bước 3 Phân tích Timeline (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
    - Khắc phục lỗi `cannot access local variable 'max_concurrency'` khi khởi tạo Semaphore do biến bị giới hạn cục bộ trong vòng lặp Async, giúp quá trình phân tích cảnh bằng GPT (Bước 3) không bị crash khi sử dụng model khác "free".
    
 1. **Sửa lỗi 409 và Cố định mô hình Review Phim (`routes/video_edit.py`, `patches/active/routes/video_edit.py`):**
