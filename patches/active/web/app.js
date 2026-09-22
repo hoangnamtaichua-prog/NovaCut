@@ -4,6 +4,7 @@ import { initBatchQueueModule } from './js/features/batch_queue.js';
 import { initBatchEditorModule } from './js/features/batch_editor.js';
 import { initVideoStudioSuite, videoStudioInstances } from './js/features/video_studio_suite.js';
 import { initExportHistoryModule, loadExportHistory } from './js/features/export_history.js';
+import { initSocialPublisher, loadSocialProfiles, loadSocialHistory } from './js/features/social_publisher.js';
 import './js/features/comic_review.js';
 import { appendLog, showToast, showConfirmModal, showAlertModal, showPromptModal, formatTimeSec, parseTimeToSeconds, formatSrtTimestamp, formatDurationStr, escapeHtml, safeHttpUrl, timeNow } from './js/utils.js';
 
@@ -148,6 +149,17 @@ mainNavTabs.forEach(tab => {
             }
         }
 
+        // Kiểm tra phân quyền Đăng mạng xã hội
+        if (targetId === 'viewSocialPublish') {
+            if (typeof checkFeaturePermission === 'function') {
+                if (!checkFeaturePermission('can_access_social_publish', 'Đăng video lên mạng xã hội')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+            }
+        }
+
         // Remove active from all tabs
         mainNavTabs.forEach(t => t.classList.remove('active'));
         // Add active to clicked tab
@@ -181,7 +193,7 @@ mainNavTabs.forEach(tab => {
         const targetView = document.getElementById(targetId);
         if (targetView) {
             targetView.classList.add('active');
-            targetView.style.display = (targetId === 'viewEditor' || targetId === 'viewBatchEditor' || targetId === 'viewReview' || targetId === 'viewDownload' || targetId === 'viewCapCut' || targetId === 'viewCloneVoice' || targetId === 'viewExportHistory') ? 'block' : 'flex';
+            targetView.style.display = (targetId === 'viewEditor' || targetId === 'viewBatchEditor' || targetId === 'viewReview' || targetId === 'viewDownload' || targetId === 'viewCapCut' || targetId === 'viewCloneVoice' || targetId === 'viewExportHistory' || targetId === 'viewSocialPublish') ? 'block' : 'flex';
             
             // Special case for Editor
             if (targetId === 'viewEditor') {
@@ -205,6 +217,11 @@ mainNavTabs.forEach(tab => {
             // Special case for Export History
             if (targetId === 'viewExportHistory') {
                 loadExportHistory(1);
+            }
+            // Special case for Social Publisher
+            if (targetId === 'viewSocialPublish') {
+                loadSocialProfiles();
+                loadSocialHistory();
             }
         }
     });
@@ -17414,7 +17431,29 @@ function updateLicenseUI(info) {
         resetNavTab(tabReview, 'Review Phim', 'Studio Review Phim Tự Động (AI Auto-Edit)', reviewIcon);
     }
 
-    // 6. Tự động nạp và bảo vệ API Keys cho Gói VIP / Gói Năm (Chống copy / xem trộm key)
+    // 6. Cập nhật hiển thị các thẻ Tab dành riêng cho Admin (Biên tập hàng loạt, Review Truyện, Xử lý hàng loạt)
+    const isAdmin = Boolean(info && (info.tier === 'admin' || (info.features && info.features.is_admin)));
+    try {
+        if (isAdmin) {
+            localStorage.setItem('novacut_is_admin', '1');
+            document.documentElement.classList.add('is-admin-mode');
+            document.body.classList.add('is-admin-mode');
+        } else {
+            localStorage.removeItem('novacut_is_admin');
+            document.documentElement.classList.remove('is-admin-mode');
+            document.body.classList.remove('is-admin-mode');
+        }
+    } catch (e) {}
+
+    document.querySelectorAll('.nav-tab[data-admin-only="true"]').forEach(tabEl => {
+        if (isAdmin) {
+            tabEl.style.setProperty('display', 'flex', 'important');
+        } else {
+            tabEl.style.setProperty('display', 'none', 'important');
+        }
+    });
+
+    // 7. Tự động nạp và bảo vệ API Keys cho Gói VIP / Gói Năm (Chống copy / xem trộm key)
     const isVipTier = info && info.status === 'ACTIVE' && (info.tier === 'vip' || info.tier === 'yearly');
     const inputIds = ['openaiKey', 'openSpeakerApiKey', 'geminiApiKey'];
     
@@ -19110,6 +19149,13 @@ try {
     initExportHistoryModule();
 } catch (e) {
     console.warn('Error initializing Export History Module:', e);
+}
+
+// Initialize Social Publisher Module (Đăng Mạng Xã Hội)
+try {
+    initSocialPublisher();
+} catch (e) {
+    console.warn('Error initializing Social Publisher Module:', e);
 }
 
 

@@ -21,6 +21,7 @@ cookies.txt
 *cookie*.txt
 .*cookie*.txt
 .disclaimer_accepted
+user_data/
 telegram_config.json
 .telegram_config.json
 user_data/telegram_config.json

@@ -828,7 +828,8 @@ PACKAGE_TIERS = {
             "max_video_export_duration": 60, # Tối đa 60s
             "tts_unlimited_local": True,
             "online_voices_enabled": False,
-            "cloud_gpt_included": True
+            "cloud_gpt_included": True,
+            "can_access_social_publish": True
         }
     },
     "pro": {
@@ -846,7 +847,8 @@ PACKAGE_TIERS = {
             "max_video_export_duration": 99999,
             "tts_unlimited_local": True,
             "online_voices_enabled": False,
-            "cloud_gpt_included": False # Tự túc API key
+            "cloud_gpt_included": False, # Tự túc API key
+            "can_access_social_publish": True
         }
     },
     "vip": {
@@ -864,7 +866,8 @@ PACKAGE_TIERS = {
             "max_video_export_duration": 99999,
             "tts_unlimited_local": True,
             "online_voices_enabled": True, # Full 1000+ giọng
-            "cloud_gpt_included": True      # Bao server GPT
+            "cloud_gpt_included": True,      # Bao server GPT
+            "can_access_social_publish": True
         }
     },
     "yearly": {
@@ -882,7 +885,8 @@ PACKAGE_TIERS = {
             "max_video_export_duration": 99999,
             "tts_unlimited_local": True,
             "online_voices_enabled": True,
-            "cloud_gpt_included": True
+            "cloud_gpt_included": True,
+            "can_access_social_publish": True
         }
     },
     "admin": {
@@ -901,7 +905,8 @@ PACKAGE_TIERS = {
             "tts_unlimited_local": True,
             "online_voices_enabled": True,
             "cloud_gpt_included": True,
-            "is_admin": True
+            "is_admin": True,
+            "can_access_social_publish": True
         }
     },
     "unlicensed": {
@@ -919,7 +924,8 @@ PACKAGE_TIERS = {
             "max_video_export_duration": 0,
             "tts_unlimited_local": False,
             "online_voices_enabled": False,
-            "cloud_gpt_included": False
+            "cloud_gpt_included": False,
+            "can_access_social_publish": False
         }
     }
 }

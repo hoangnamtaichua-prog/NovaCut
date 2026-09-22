@@ -1698,6 +1698,7 @@ def run_timeline_map_reduce_pipeline_sync(
     return final_timeline
 
 def run_auto_edit_workflow(payload, check_stop_func):
+    start_time_auto_edit = time.time()
     video_path = payload.get('video_path')
     srt_path = payload.get('srt_path')
     voice_id = payload.get('voice_id', 'ngoc_huyen')
@@ -2494,15 +2495,48 @@ def run_auto_edit_workflow(payload, check_stop_func):
             except Exception as he:
                 logging.getLogger(__name__).error(f"[ExportHistory] Error recording review export: {he}")
 
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                movie_name = payload.get('title') or (os.path.splitext(os.path.basename(video_path))[0] if video_path else "Review Phim")
+                file_size_mb = (os.path.getsize(final_output) / (1024 * 1024)) if os.path.exists(final_output) else 0
+                notifier.notify_task_success(
+                    task_type='review',
+                    task_title='Review Phim AI (Auto-Edit)',
+                    video_title=movie_name,
+                    output_path=final_output,
+                    duration_sec=time.time() - start_time_auto_edit,
+                    file_size_mb=file_size_mb,
+                    extra_info={'Giọng đọc': voice_id, 'Phong cách': payload.get('video_style', '')}
+                )
+        except Exception as te:
+            logging.getLogger(__name__).warning(f"[Telegram] Error sending review notification: {te}")
+
         yield log(f"Tất cả đã xong! File được lưu tại: {final_output}", step=5)
         yield log("[PROGRESS] 100")
         
     except Exception as e:
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                movie_name = payload.get('title') or (os.path.splitext(os.path.basename(video_path))[0] if video_path else "Review Phim")
+                notifier.notify_task_failure(
+                    task_type='review',
+                    task_title='Review Phim AI (Auto-Edit)',
+                    video_title=movie_name,
+                    error_message=str(e),
+                    duration_sec=time.time() - start_time_auto_edit
+                )
+        except Exception as te:
+            pass
         yield log(f"🛑 Lỗi không xác định trong Auto-Edit: {str(e)} | {traceback.format_exc()}")
 
 
 def run_narration_workflow(payload, check_stop_func):
     """Chế độ 'Kể lại Video' - Giữ nguyên video gốc, overlay voice-over + phụ đề."""
+    start_time_narration = time.time()
     video_path = payload.get('video_path')
     srt_path = payload.get('srt_path')
     voice_id = payload.get('voice_id', 'ngoc_huyen')
@@ -3008,8 +3042,40 @@ def run_narration_workflow(payload, check_stop_func):
             except Exception as he:
                 logging.getLogger(__name__).error(f"[ExportHistory] Error recording narration export: {he}")
 
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                movie_name = os.path.splitext(os.path.basename(video_path))[0] if video_path else "Kể Lại Phim"
+                file_size_mb = (os.path.getsize(final_output) / (1024 * 1024)) if os.path.exists(final_output) else 0
+                notifier.notify_task_success(
+                    task_type='narration',
+                    task_title='Kể Lại Phim (Narration)',
+                    video_title=movie_name,
+                    output_path=final_output,
+                    duration_sec=time.time() - start_time_narration,
+                    file_size_mb=file_size_mb,
+                    extra_info={'Giọng đọc': voice_id}
+                )
+        except Exception as te:
+            logging.getLogger(__name__).warning(f"[Telegram] Error sending narration notification: {te}")
+
         yield log(f"🎉 HOÀN THÀNH! Video kể lại phim đã lưu tại: {final_output}", step=5)
         yield log("[PROGRESS] 100")
 
     except Exception as e:
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                movie_name = os.path.splitext(os.path.basename(video_path))[0] if video_path else "Kể Lại Phim"
+                notifier.notify_task_failure(
+                    task_type='narration',
+                    task_title='Kể Lại Phim (Narration)',
+                    video_title=movie_name,
+                    error_message=str(e),
+                    duration_sec=time.time() - start_time_narration if 'start_time_narration' in locals() else None
+                )
+        except Exception as te:
+            pass
         yield log(f"🛑 Lỗi không xác định trong Narration: {str(e)} | {traceback.format_exc()}")

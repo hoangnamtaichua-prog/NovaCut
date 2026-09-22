@@ -18,6 +18,11 @@
             message: 'Unhandled Promise: ' + (e.reason ? (e.reason.stack || e.reason.message || String(e.reason)) : 'unknown')
         });
     });
+    try {
+        if (localStorage.getItem('novacut_is_admin') === '1') {
+            document.documentElement.classList.add('is-admin-mode');
+        }
+    } catch (e) {}
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NovaCut - AI Video & Review Editor</title>
@@ -136,7 +141,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg></span>
                     <span class="nav-tab-label">Biên tập phim</span>
                 </button>
-                <button class="nav-tab" data-target="viewBatchEditor" title="Biên tập video & xuất hàng loạt theo danh sách" style="display: none !important;">
+                <button class="nav-tab" data-target="viewBatchEditor" data-admin-only="true" title="Biên tập video & xuất hàng loạt theo danh sách">
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 3H4a2 2 0 0 0-2 2v12"></path><polyline points="7 13 10 16 17 9"></polyline></svg></span>
                     <span class="nav-tab-label">Biên tập hàng loạt</span>
                 </button>
@@ -154,7 +159,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 8 20 0"></path><path d="m6 4 3 4"></path><path d="m11 4 3 4"></path><path d="m16 4 3 4"></path><polygon points="10 11 15 14 10 17 10 11" fill="currentColor"></polygon></svg></span>
                     <span class="nav-tab-label">Review Phim</span>
                 </button>
-                <button class="nav-tab" data-target="viewComicReview" title="Studio Review Truyện Tranh (AI Comic Video)" style="display: none !important;">
+                <button class="nav-tab" data-target="viewComicReview" data-admin-only="true" title="Studio Review Truyện Tranh (AI Comic Video)">
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg></span>
                     <span class="nav-tab-label">Review Truyện</span>
                 </button>
@@ -168,13 +173,17 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
                     <span class="nav-tab-label">Đồng bộ CapCut</span>
                 </button>
-                <button class="nav-tab" data-target="viewBatchQueue" title="Xử lý hàng loạt nhiều video cùng lúc" style="display: none !important;">
+                <button class="nav-tab" data-target="viewBatchQueue" data-admin-only="true" title="Xử lý hàng loạt nhiều video cùng lúc">
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></span>
                     <span class="nav-tab-label">Xử Lý Hàng Loạt</span>
                 </button>
                 <button class="nav-tab" data-target="viewExportHistory" title="Lịch sử xuất video & quản lý tệp">
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>
                     <span class="nav-tab-label">Lịch sử xuất</span>
+                </button>
+                <button class="nav-tab" data-target="viewSocialPublish" title="Đăng video lên mạng xã hội (YouTube Studio, TikTok, Facebook, Instagram...)">
+                    <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg></span>
+                    <span class="nav-tab-label">Đăng mạng xã hội</span>
                 </button>
             </div>
         </div>
@@ -4836,6 +4845,248 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             Trang sau ▶
                         </button>
                     </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- VIEW: ĐĂNG VIDEO LÊN MẠNG XÃ HỘI (SOCIAL PUBLISHER)            -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div id="viewSocialPublish" class="main-view" style="display: none;">
+        <div class="main-layout" style="max-width: 1440px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; padding: 10px 0 30px 0;">
+
+            <!-- Top Banner -->
+            <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.8)); border: 1px solid rgba(14, 165, 233, 0.3); border-radius: 16px; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                <div style="display: flex; align-items: center; gap: 16px;">
+                    <div style="width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, rgba(14, 165, 233, 0.2), rgba(168, 85, 247, 0.25)); border: 1px solid rgba(14, 165, 233, 0.4); display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0;">
+                        🌐
+                    </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <h2 style="margin: 0; font-size: 18px; font-weight: 800; color: #f8fafc; letter-spacing: 0.5px;">ĐĂNG VIDEO LÊN MẠNG XÃ HỘI</h2>
+                            <span style="font-size: 11px; background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.35); padding: 2px 8px; border-radius: 12px; font-weight: 700;">Chrome Profile Direct Launch</span>
+                        </div>
+                        <p style="margin: 3px 0 0 0; font-size: 12px; color: #94a3b8;">
+                            Mở thẳng Google Chrome với đúng Profile cá nhân • Tận dụng cookie/phiên đăng nhập sẵn có • Không lưu trữ cookie hay mật khẩu thô • Hỗ trợ YouTube Studio, TikTok, Facebook, Instagram, X/Twitter, LinkedIn.
+                        </p>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <button type="button" id="btnRefreshSocialProfiles" class="btn secondary" style="padding: 9px 14px; font-size: 13px; font-weight: 600; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px;">
+                        <span>🔄</span> <span>Quét lại Chrome Profile</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chrome Status Warning Alert (if Chrome is not found) -->
+            <div id="socialChromeStatusAlert" style="display: none; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 10px; padding: 12px 18px; color: #fbbf24; font-size: 12.5px; align-items: center; gap: 10px;"></div>
+
+            <!-- Two Column Layout: Setup & Preview -->
+            <div style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; align-items: start;">
+
+                <!-- LEFT COLUMN: Post Setup & Content Input -->
+                <div style="display: flex; flex-direction: column; gap: 16px;">
+
+                    <!-- STEP 1: Chọn Nền Tảng -->
+                    <div class="panel" style="background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: #38bdf8; color: #0f172a; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900;">1</span>
+                                <span>CHỌN NỀN TẢNG MẠNG XÃ HỘI</span>
+                            </div>
+                            <span style="font-size: 11px; color: #94a3b8;">Hỗ trợ 6 nền tảng</span>
+                        </div>
+                        <div id="socialPlatformCards" class="social-platform-grid">
+                            <!-- Platform cards rendered dynamically -->
+                        </div>
+                        <div id="socialPlatformTips" style="margin-top: 10px; font-size: 11.5px; color: #38bdf8; background: rgba(56, 189, 248, 0.08); border-left: 3px solid #38bdf8; padding: 8px 12px; border-radius: 0 6px 6px 0;">
+                            Đang tải cấu hình nền tảng...
+                        </div>
+                    </div>
+
+                    <!-- STEP 2: Chọn Chrome Profile -->
+                    <div class="panel" style="background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: #38bdf8; color: #0f172a; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900;">2</span>
+                                <span>CHỌN GOOGLE CHROME PROFILE (TÀI KHOẢN ĐÃ ĐĂNG NHẬP)</span>
+                            </div>
+                        </div>
+                        <div>
+                            <select id="socialProfileSelect" class="text-input" style="width: 100%; padding: 9px 12px; font-size: 13px; background: #070a13; border: 1px solid #334155; color: #f8fafc; border-radius: 8px; cursor: pointer;">
+                                <option value="Default">Đang quét Profile...</option>
+                            </select>
+                            <div style="font-size: 11px; color: #64748b; margin-top: 6px;">
+                                🔒 Trình duyệt sẽ mở đúng Profile này để dùng lại phiên đăng nhập, tài khoản YouTube Channel, TikTok Creator... của bạn.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- STEP 3: Chọn Video -->
+                    <div class="panel" style="background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: #38bdf8; color: #0f172a; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900;">3</span>
+                                <span>CHỌN VIDEO CẦN ĐĂNG</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" id="btnUseLastExportedVideo" class="btn secondary small" style="padding: 4px 10px; font-size: 11.5px; border-color: #a855f7; color: #c084fc;" title="Sử dụng video vừa xuất gần nhất từ NovaCut">
+                                    ⚡ Dùng Video Vừa Xuất
+                                </button>
+                                <button type="button" id="btnBrowseSocialVideo" class="btn secondary small" style="padding: 4px 10px; font-size: 11.5px; border-color: #38bdf8; color: #38bdf8;">
+                                    📁 Chọn Từ Máy Tính
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Manual input or selected card -->
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <input type="text" id="socialVideoPathInput" class="text-input" placeholder="Nhập hoặc dán đường dẫn tệp video (.mp4, .mov...)" style="width: 100%; padding: 8px 12px; font-size: 12.5px; background: #070a13; border: 1px solid #334155; color: #f8fafc; border-radius: 8px; font-family: monospace;">
+
+                            <!-- Video info card preview -->
+                            <div id="socialVideoInfoCard" style="display: none; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 10px 14px; align-items: center; gap: 12px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- STEP 4: Nội Dung Bài Đăng -->
+                    <div class="panel" style="background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: #38bdf8; color: #0f172a; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900;">4</span>
+                                <span>THÔNG TIN BÀI ĐĂNG (NỘI DUNG &amp; HASHTAGS)</span>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 14px;">
+                            <!-- Tiêu đề (Cho YouTube, Facebook) -->
+                            <div id="socialTitleGroup">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                    <label style="font-size: 12px; font-weight: 600; color: #cbd5e1;">Tiêu đề video (Title):</label>
+                                    <span id="socialTitleCount" style="font-size: 11px; color: #94a3b8; font-family: monospace;">0 / 100</span>
+                                </div>
+                                <input type="text" id="socialTitleInput" class="text-input" placeholder="Ví dụ: Review Phim: Tóm tắt siêu phẩm kinh dị kịch tính..." style="width: 100%; padding: 8px 12px; font-size: 13px; background: #070a13; border: 1px solid #334155; color: #f8fafc; border-radius: 8px;">
+                            </div>
+
+                            <!-- Mô tả / Caption -->
+                            <div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                    <label id="socialDescLabel" style="font-size: 12px; font-weight: 600; color: #cbd5e1;">Mô tả bài đăng (Description):</label>
+                                    <span id="socialDescCount" style="font-size: 11px; color: #94a3b8; font-family: monospace;">0 / 5000</span>
+                                </div>
+                                <textarea id="socialDescInput" class="text-input" rows="4" placeholder="Nhập tóm tắt kịch bản, lời bình, kêu gọi đăng ký kênh..." style="width: 100%; padding: 8px 12px; font-size: 12.5px; background: #070a13; border: 1px solid #334155; color: #f8fafc; border-radius: 8px; resize: vertical; line-height: 1.5;"></textarea>
+                            </div>
+
+                            <!-- Hashtags & Gợi ý nhanh -->
+                            <div>
+                                <label style="font-size: 12px; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 5px;">Hashtags (Gắn thẻ xu hướng):</label>
+                                <input type="text" id="socialHashtagsInput" class="text-input" placeholder="#reviewphim #phimhay #shorts #tiktok #reels" style="width: 100%; padding: 8px 12px; font-size: 12.5px; background: #070a13; border: 1px solid #334155; color: #f8fafc; border-radius: 8px;">
+                                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+                                    <span style="font-size: 11px; color: #64748b;">Gợi ý nhanh:</span>
+                                    <button type="button" class="btn-quick-hashtag" data-tag="#reviewphim">#reviewphim</button>
+                                    <button type="button" class="btn-quick-hashtag" data-tag="#phimhay">#phimhay</button>
+                                    <button type="button" class="btn-quick-hashtag" data-tag="#shorts">#shorts</button>
+                                    <button type="button" class="btn-quick-hashtag" data-tag="#reels">#reels</button>
+                                    <button type="button" class="btn-quick-hashtag" data-tag="#tiktok">#tiktok</button>
+                                    <button type="button" class="btn-quick-hashtag" data-tag="#novacut">#novacut</button>
+                                </div>
+                            </div>
+
+                            <!-- Quyền riêng tư -->
+                            <div>
+                                <label style="font-size: 12px; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 5px;">Chế độ quyền riêng tư:</label>
+                                <select id="socialPrivacySelect" class="text-input" style="width: 100%; padding: 8px 12px; font-size: 12.5px; background: #070a13; border: 1px solid #334155; color: #f8fafc; border-radius: 8px; cursor: pointer;">
+                                    <option value="public">Công khai (Public)</option>
+                                    <option value="unlisted">Không công khai (Unlisted)</option>
+                                    <option value="private">Riêng tư (Private)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- RIGHT COLUMN: Preview & Action -->
+                <div style="display: flex; flex-direction: column; gap: 16px; position: sticky; top: 10px;">
+
+                    <!-- Khung Xem Trước (Live Social Preview) -->
+                    <div class="panel" style="background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 6px;">
+                                <span>👁️</span> <span>XEM TRƯỚC BÀI ĐĂNG (LIVE PREVIEW)</span>
+                            </div>
+                            <span style="font-size: 11px; color: #34d399; font-weight: 600;">● Tự động cập nhật</span>
+                        </div>
+
+                        <div id="socialPreviewContainer">
+                            <!-- Live Preview Card will be injected here -->
+                        </div>
+                    </div>
+
+                    <!-- Nút Thao Tác & Mở Chrome -->
+                    <div class="panel" style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.85)); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 14px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
+                        <button type="button" id="btnSocialReviewAndOpen" class="btn primary-cyan" style="width: 100%; padding: 14px 20px; font-size: 14.5px; font-weight: 800; border-radius: 10px; background: linear-gradient(135deg, #0ea5e9, #8b5cf6); border: none; color: #fff; box-shadow: 0 6px 20px rgba(14, 165, 233, 0.45); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.2s;">
+                            <span>🚀 Xem Lại &amp; Mở Chrome Đăng Video</span>
+                        </button>
+
+                        <!-- Tiện ích sao chép 1 chạm -->
+                        <div style="margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <button type="button" id="btnSocialCopyTitle" class="btn secondary small" style="padding: 7px 10px; font-size: 11.5px; font-weight: 600;" title="Sao chép tiêu đề vào Clipboard">
+                                📋 Sao chép Tiêu đề
+                            </button>
+                            <button type="button" id="btnSocialCopyDesc" class="btn secondary small" style="padding: 7px 10px; font-size: 11.5px; font-weight: 600;" title="Sao chép mô tả/caption vào Clipboard">
+                                📋 Sao chép Mô tả
+                            </button>
+                            <button type="button" id="btnSocialCopyPath" class="btn secondary small" style="padding: 7px 10px; font-size: 11.5px; font-weight: 600; grid-column: span 2;" title="Sao chép đường dẫn file video">
+                                📁 Sao chép Đường dẫn Video
+                            </button>
+                        </div>
+
+                        <!-- Hướng dẫn thao tác -->
+                        <div style="margin-top: 14px; padding: 10px 12px; background: rgba(14, 165, 233, 0.06); border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 11.5px; color: #94a3b8; line-height: 1.5;">
+                            💡 <b>Mẹo tải lên siêu tốc:</b> Khi bạn bấm nút mở Chrome, NovaCut sẽ tự động sao chép đường dẫn video vào Clipboard. Khi hộp thoại chọn tệp của trình duyệt hiện ra, bạn chỉ cần nhấn <b>Ctrl+V</b> rồi Enter là video sẽ được chọn tức thì!
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- BOTTOM SECTION: LỊCH SỬ ĐĂNG VIDEO -->
+            <div class="panel" style="background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 18px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 16px;">📜</span>
+                        <h3 style="margin: 0; font-size: 14px; font-weight: 700; color: #f8fafc;">LỊCH SỬ THAO TÁC ĐĂNG GẦN ĐÂY</h3>
+                        <span id="socialHistoryBadge" style="font-size: 11px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 2px 8px; border-radius: 10px; font-weight: 700;">0 Lượt</span>
+                    </div>
+                    <button type="button" id="btnClearSocialHistory" class="btn secondary small" style="padding: 5px 12px; font-size: 11.5px; color: #f87171; border-color: rgba(239, 68, 68, 0.4);" title="Dọn dẹp danh sách lịch sử">
+                        🗑️ Xóa Lịch Sử
+                    </button>
+                </div>
+
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid #1e293b; color: #94a3b8; font-size: 11.5px;">
+                                <th style="padding: 10px 12px; width: 140px;">THỜI GIAN</th>
+                                <th style="padding: 10px 12px; width: 130px;">NỀN TẢNG</th>
+                                <th style="padding: 10px 12px;">TIÊU ĐỀ / NỘI DUNG</th>
+                                <th style="padding: 10px 12px;">TẬP TIN VIDEO</th>
+                                <th style="padding: 10px 12px; width: 110px;">CHROME PROFILE</th>
+                                <th style="padding: 10px 12px; width: 100px;">TRẠNG THÁI</th>
+                            </tr>
+                        </thead>
+                        <tbody id="socialHistoryTableBody">
+                            <tr>
+                                <td colspan="6" style="text-align: center; padding: 24px; color: #64748b;">
+                                    Đang nạp dữ liệu lịch sử...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 

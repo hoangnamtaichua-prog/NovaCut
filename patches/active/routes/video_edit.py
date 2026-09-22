@@ -443,6 +443,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
     dyn_blur_mask_path = None
     temp_srt_path = None
 
+    export_start_time = time.time()
     source_tool = str(data.get('source_tool') or 'editor').strip()
     export_run_id = str(data.get('export_run_id') or job.export_run_id).strip()
     mode = str(data.get('mode', 'none'))
@@ -1057,6 +1058,21 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     )
                 except Exception as he:
                     logging.getLogger(__name__).error(f"[ExportHistory] Error recording stream-copy export: {he}")
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled and notifier.notify_per_video:
+                        video_title = os.path.basename(input_video) if input_video else output_name
+                        notifier.notify_task_success(
+                            task_type='editor',
+                            task_title='Biên Tập Phim (Sao Chép Luồng)',
+                            video_title=video_title,
+                            output_path=final_output_path,
+                            duration_sec=time.time() - export_start_time,
+                            file_size_mb=sz_mb
+                        )
+                except Exception as te:
+                    logging.getLogger(__name__).warning(f"[Telegram] Error sending stream-copy notification: {te}")
                 emit(f"✅ [XUẤT THÀNH CÔNG] Video đã được sao chép luồng tại: {final_output_path} ({sz_mb:.1f} MB)")
                 emit(f"[EVENT:SUCCESS] {json.dumps({'path': final_output_path, 'size_mb': round(sz_mb, 2), 'history_id': history_id})}")
                 emit(f"--- HOÀN THÀNH QUÁ TRÌNH TẠO ---")
@@ -1779,6 +1795,22 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     )
                 except Exception as he:
                     logging.getLogger(__name__).error(f"[ExportHistory] Error recording encode export: {he}")
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled and notifier.notify_per_video:
+                        video_title = os.path.basename(input_video) if input_video else output_name
+                        notifier.notify_task_success(
+                            task_type='editor',
+                            task_title='Biên Tập Phim',
+                            video_title=video_title,
+                            output_path=final_output_path,
+                            duration_sec=time.time() - export_start_time,
+                            file_size_mb=file_size_mb,
+                            extra_info={'Preset': preset, 'Encoder': current_enc}
+                        )
+                except Exception as te:
+                    logging.getLogger(__name__).warning(f"[Telegram] Error sending encode notification: {te}")
                 emit(f"✅ [XUẤT THÀNH CÔNG] Video đã được lưu tại: {final_output_path} ({file_size_mb:.1f} MB)")
                 emit(f"[EVENT:SUCCESS] {json.dumps({'path': final_output_path, 'size_mb': round(file_size_mb, 2), 'history_id': history_id})}")
                 emit(f"--- HOÀN THÀNH QUÁ TRÌNH TẠO ---")
@@ -1848,6 +1880,20 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             except Exception:
                 pass
 
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    video_title = os.path.basename(input_video) if input_video else output_name
+                    notifier.notify_task_failure(
+                        task_type='editor',
+                        task_title='Biên Tập Phim',
+                        video_title=video_title,
+                        error_message=f"FFmpeg export failed (Exit code: {return_code})",
+                        duration_sec=time.time() - export_start_time
+                    )
+            except Exception as te:
+                pass
             emit(f"[EVENT:FAILED] {json.dumps({'reason': 'FFmpeg export failed', 'return_code': return_code})}")
         elif STOP_EXPORT_FLAG:
             emit(f"[EVENT:CANCELLED] {json.dumps({'reason': 'User stopped export'})}")

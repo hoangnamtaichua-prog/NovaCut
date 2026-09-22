@@ -82,6 +82,22 @@ PATCH_INCLUDE_FILES = [
     "batch_queue_manager.py",
     "telegram_notifier.py",
     "timeline_sanitizer.py",
+    "translation_config.py",
+    "export_history.py",
+    "export_job_manager.py",
+    "glossary_manager.py",
+    "gpu_resource_coordinator.py",
+    "local_ai_manager.py",
+    "local_voice_worker.py",
+    "local_voice_worker_client.py",
+    "numpy_timeline_mixer.py",
+    "social_publisher.py",
+    "social_adapters.py",
+    "social_workflow.py",
+    "subtitle_layout.py",
+    "bilibili_downloader.py",
+    "run_rvc.py",
+    "custom_pronunciations.json",
     "vietnamese_text_normalizer.py",
     "local_voice_engine.py",
     "rvc_bridge.py",
@@ -163,10 +179,21 @@ def build_patch_zip(target_version):
     log(f"Đang đóng gói bản vá patch.zip sạch cho phiên bản v{target_version}...")
 
     with zipfile.ZipFile(PATCH_ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+        added_files = set()
         for f in PATCH_INCLUDE_FILES:
             src = os.path.join(ROOT_DIR, f)
-            if os.path.exists(src):
+            if os.path.exists(src) and f not in added_files:
                 zipf.write(src, arcname=f)
+                added_files.add(f)
+
+        # Tự động quét bổ sung tất cả tệp .py cốt lõi ở thư mục gốc (loại trừ test, scratch, benchmark, scripts)
+        for item in os.listdir(ROOT_DIR):
+            if item.endswith('.py') and not item.startswith(('test_', 'scratch_', 'benchmark_')):
+                if item not in added_files and item not in PATCH_EXCLUDES:
+                    src = os.path.join(ROOT_DIR, item)
+                    if os.path.isfile(src):
+                        zipf.write(src, arcname=item)
+                        added_files.add(item)
 
         for d in PATCH_INCLUDE_DIRS:
             src_dir = os.path.join(ROOT_DIR, d)

@@ -219,6 +219,55 @@ class TestTelegramNotifier(unittest.TestCase):
         self.assertIn("Đã hoàn thành: 4/10", sent_html)
 
     @patch.object(TelegramNotifier, "send_async")
+    def test_notify_task_success_editor(self, mock_send_async):
+        """Thông báo khi tác vụ biên tập phim hoàn tất."""
+        sent = self.notifier.notify_task_success(
+            task_type="editor",
+            video_title="Avatar 2 Recap",
+            output_path="D:/output/avatar_edit.mp4",
+            duration_sec=65.2,
+            file_size_mb=42.5,
+            extra_info={"Preset": "Fast (GPU NVENC)"}
+        )
+        self.assertTrue(sent)
+        sent_html = mock_send_async.call_args[0][0]
+        self.assertIn("Biên Tập Phim Hoàn Tất!", sent_html)
+        self.assertIn("Avatar 2 Recap", sent_html)
+        self.assertIn("42.5 MB", sent_html)
+        self.assertIn("Fast (GPU NVENC)", sent_html)
+
+    @patch.object(TelegramNotifier, "send_async")
+    def test_notify_task_success_review(self, mock_send_async):
+        """Thông báo khi tác vụ review phim AI hoàn tất."""
+        sent = self.notifier.notify_task_success(
+            task_type="review",
+            video_title="Inception Review",
+            output_path="D:/output/inception_review.mp4",
+            duration_sec=120.0,
+            file_size_mb=85.0,
+            extra_info={"Giọng đọc": "ngoc_huyen"}
+        )
+        self.assertTrue(sent)
+        sent_html = mock_send_async.call_args[0][0]
+        self.assertIn("Review Phim AI Hoàn Tất!", sent_html)
+        self.assertIn("Inception Review", sent_html)
+        self.assertIn("ngoc_huyen", sent_html)
+
+    @patch.object(TelegramNotifier, "send_async")
+    def test_notify_task_failure(self, mock_send_async):
+        """Thông báo khi tác vụ gặp lỗi."""
+        sent = self.notifier.notify_task_failure(
+            task_type="editor",
+            video_title="Titanic",
+            error_message="FFmpeg returned exit code 1"
+        )
+        self.assertTrue(sent)
+        sent_html = mock_send_async.call_args[0][0]
+        self.assertIn("Biên Tập Phim Thất Bại", sent_html)
+        self.assertIn("Titanic", sent_html)
+        self.assertIn("FFmpeg returned exit code 1", sent_html)
+
+    @patch.object(TelegramNotifier, "send_async")
     def test_disabled_notifications(self, mock_send_async):
         """Khi người dùng tắt thông báo, hệ thống không gọi gửi Telegram."""
         self.notifier.enabled = False
@@ -226,11 +275,15 @@ class TestTelegramNotifier(unittest.TestCase):
         res2 = self.notifier.notify_video_failure("Test", "Err")
         res3 = self.notifier.notify_batch_completed(5, 5, 0)
         res4 = self.notifier.notify_batch_cancelled(5, 2, 0)
+        res5 = self.notifier.notify_task_success("editor", "Test", "out.mp4")
+        res6 = self.notifier.notify_task_failure("editor", "Test", "Err")
 
         self.assertFalse(res1)
         self.assertFalse(res2)
         self.assertFalse(res3)
         self.assertFalse(res4)
+        self.assertFalse(res5)
+        self.assertFalse(res6)
         mock_send_async.assert_not_called()
 
 

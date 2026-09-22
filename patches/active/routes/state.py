@@ -11,7 +11,20 @@ import threading
 import asr_manager
 from platformdirs import user_data_dir
 from flask import Flask, send_from_directory, Response, jsonify, request, send_file
-from translation_config import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
+try:
+    from translation_config import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
+except ImportError:
+    DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.7-flash"
+    DEFAULT_TRANSLATION_CONFIG = {
+        "model": "qwen/qwen3.7-flash",
+        "chunkSize": 80,
+        "concurrency": 3,
+        "maxRetries": 3,
+        "requestTimeout": 60,
+        "contextLines": 6,
+        "temperature": 0.0,
+        "providerRouting": "throughput"
+    }
 
 def get_app_root_dir():
     """Xác định chính xác tuyệt đối thư mục gốc của ứng dụng NovaCut."""

@@ -870,6 +870,22 @@ def render_comic_video_stream():
             except Exception as he:
                 logging.getLogger(__name__).error(f"[ExportHistory] Error recording comic review export: {he}")
 
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    file_sz = (os.path.getsize(final_output_path) / (1024 * 1024)) if os.path.exists(final_output_path) else 0
+                    notifier.notify_task_success(
+                        task_type='comic',
+                        task_title='Review Truyện Tranh AI',
+                        video_title=proj_folder_name or f"Truyện Tranh ({session_id})",
+                        output_path=final_output_path,
+                        file_size_mb=file_sz,
+                        extra_info={'Số phân đoạn': len(segments), 'Tỷ lệ': aspect_ratio}
+                    )
+            except Exception:
+                pass
+
             # Lưu thêm bản sao trực tiếp trong thư mục dự án (nội bộ dự án, không ghi lịch sử bản sao này)
             try:
                 proj_output = os.path.join(session_dir, 'output')

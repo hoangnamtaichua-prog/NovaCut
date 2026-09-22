@@ -125,6 +125,7 @@ from routes.batch_queue import batch_queue_bp
 from routes.comic_review import comic_review_bp
 from routes.export_history import export_history_bp
 from routes.telegram import telegram_bp
+from routes.social_publish import social_publish_bp
 
 app.register_blueprint(core_bp)
 app.register_blueprint(video_edit_bp)
@@ -141,6 +142,7 @@ app.register_blueprint(batch_queue_bp)
 app.register_blueprint(comic_review_bp)
 app.register_blueprint(export_history_bp)
 app.register_blueprint(telegram_bp)
+app.register_blueprint(social_publish_bp)
 
 def main():
     import threading

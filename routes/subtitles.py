@@ -1,7 +1,23 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading
 from routes.state import *
-from translation_config import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
+try:
+    from translation_config import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
+except ImportError:
+    try:
+        from routes.state import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
+    except ImportError:
+        DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.7-flash"
+        DEFAULT_TRANSLATION_CONFIG = {
+            "model": "qwen/qwen3.7-flash",
+            "chunkSize": 80,
+            "concurrency": 3,
+            "maxRetries": 3,
+            "requestTimeout": 60,
+            "contextLines": 6,
+            "temperature": 0.0,
+            "providerRouting": "throughput"
+        }
 from routes.security import is_path_allowed, safe_join
 import asr_manager
 import license_manager

@@ -31,6 +31,49 @@
 
 ### 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (STAGING FOR NEXT RELEASE)
 
+- **Khắc Phục Lỗi Khởi Động "No module named 'translation_config'" Sau Khi Cập Nhật ([scripts/publish_patch.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/scripts/publish_patch.py), [routes/state.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/state.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/state.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/state.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py)) (22/09/2026):**
+  - **Nguyên nhân sự cố:** `scripts/publish_patch.py` sử dụng danh sách `PATCH_INCLUDE_FILES` tĩnh chưa kịp bổ sung các module cốt lõi mới (`translation_config.py`, `export_history.py`, `export_job_manager.py`, `glossary_manager.py`, `gpu_resource_coordinator.py`, `local_ai_manager.py`, `social_publisher.py`...). Khi người dùng cập nhật qua OTA Release v1.3.0, `patch.zip` thiếu `translation_config.py` dẫn đến việc `routes/state.py` nạp module thất bại và hiển thị hộp thoại `ModuleNotFoundError: No module named 'translation_config'`.
+  - **Giải pháp xử lý triệt để:**
+    1. **Bổ sung toàn diện danh sách tệp vá:** Đưa đầy đủ 14 module mới vào `PATCH_INCLUDE_FILES` trong `scripts/publish_patch.py`.
+    2. **Cơ chế tự động bảo hiểm thư mục gốc (Root PY Auto-Scan):** Bổ sung hàm tự động quét tất cả các module `.py` cốt lõi ở thư mục gốc (loại trừ các file test/scratch/benchmark) đưa vào `patch.zip` nhằm triệt tiêu hoàn toàn nguy cơ sót file mã nguồn trong mọi bản phát hành tương lai.
+    3. **Phòng thủ đa tầng (Defensive Fallback Import):** Thêm khối `try...except ImportError` trong `routes/state.py` và `routes/subtitles.py` với cấu hình mặc định an toàn (`DEFAULT_TRANSLATION_MODEL = 'qwen/qwen3.7-flash'`), đảm bảo ứng dụng không bao giờ bị dừng khởi động đột ngột ngay cả khi file cấu hình phụ trợ bị gián đoạn.
+
+
+- **Mở Rộng Thông Báo Telegram Tự Động Cho Toàn Bộ Tác Vụ Đơn Lẻ: Review Phim AI, Kể Lại Phim & Biên Tập Phim ([telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/telegram_notifier.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [review_phim.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/review_phim.py), [routes/comic_review.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/comic_review.py), [patches/active/telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/telegram_notifier.py), [patches/active/routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/video_edit.py), [patches/active/auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/auto_edit_pipeline.py), [patches/active/routes/comic_review.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/comic_review.py)) (22/09/2026):**
+  - **Mục tiêu đáp ứng yêu cầu người dùng:** Trước đây thông báo Telegram chỉ kích hoạt khi chạy hàng loạt (Batch Queue / Batch Editor). Người dùng yêu cầu các tác vụ độc lập phổ biến của app như **Biên tập phim** hay **Review Phim** khi hoàn thành hoặc gặp lỗi cũng phải tự động gửi tin nhắn báo cáo về Telegram.
+  - **Các phương thức thông báo chuyên biệt mới trong TelegramNotifier:**
+    - `notify_task_success()`: Gửi tin nhắn HTML đẹp mắt, tối ưu cho từng loại tác vụ (Biên tập phim, Review Phim AI, Kể lại phim, Review Truyện Tranh). Báo cáo đầy đủ: Tên tác phẩm/video, trạng thái thành công, tên file kết quả, dung lượng MB, thời gian xử lý thực tế, thư mục xuất và các thông số đi kèm (giọng đọc AI, preset, encoder).
+    - `notify_task_failure()`: Gửi cảnh báo sự cố nếu FFmpeg hoặc pipeline render gặp lỗi (kèm thời gian trước khi lỗi, thông báo lỗi an toàn đã lọc nhạy cảm).
+  - **Tích hợp vào các pipeline:**
+    1. **Biên tập phim ([routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py)):** Tự động gửi thông báo khi xuất xong video bằng chế độ biên mã (Encode) hoặc chế độ sao chép luồng nhanh (Stream-copy), và khi xuất lỗi.
+    2. **Review Phim AI Auto-Edit ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py)):** Tự động gửi thông báo khi hoàn tất toàn bộ 5 bước (lên kịch bản, lồng tiếng, ghép timeline, render video thành phẩm).
+    3. **Kể Lại Phim Narration ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py)):** Tự động gửi thông báo khi hoàn thành video narration.
+    4. **Review Phim Thủ Công ([review_phim.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/review_phim.py)):** Tự động gửi thông báo khi render xong cả video ngang YouTube và video dọc TikTok.
+    5. **Review Truyện Tranh ([routes/comic_review.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/comic_review.py)):** Tự động gửi thông báo khi render video truyện tranh hoàn tất.
+  - **Kiểm thử tự động:** Vượt qua 100% bộ 34 bài kiểm thử trong test suite Telegram (`tests/test_telegram_notifier.py` và `tests/test_telegram_auto_connect.py`).
+
+- **Triển Khai Tính Năng Đăng Video Lên Mạng Xã Hội (Social Media Video Publisher Engine) ([social_publisher.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/social_publisher.py), [routes/social_publish.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/social_publish.py), [web/js/features/social_publisher.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/social_publisher.js), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/style.css), [license_manager.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/license_manager.py), [web_app.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web_app.py)) (22/09/2026):**
+  - **Mục tiêu & Nhu cầu người dùng:** Bổ sung tính năng đăng video thành phẩm từ NovaCut lên các nền tảng mạng xã hội phổ biến (YouTube Studio, TikTok Studio, Facebook Meta Suite, Instagram, X/Twitter, LinkedIn).
+  - **Nguyên tắc an toàn & bảo mật cốt lõi:**
+    1. Tự động dò tìm Google Chrome trên Windows và quét danh sách Chrome Profile người dùng (`User Data\Local State`).
+    2. Khởi chạy Chrome với đúng Profile cá nhân mà người dùng chọn (`--profile-directory="..."`).
+    3. Tận dụng 100% phiên đăng nhập và cookie sẵn có trong Chrome của người dùng.
+    4. Tuyệt đối **KHÔNG đọc, trích xuất, hiển thị hoặc lưu cookie/mật khẩu dưới dạng văn bản**.
+    5. Không can thiệp, không cố vượt CAPTCHA/2FA để tránh vi phạm chính sách của các nền tảng.
+    6. Kiểm soát và giới hạn đường dẫn file video an toàn (`routes.security.is_path_allowed`).
+  - **Các tính năng nổi bật:**
+    - Hỗ trợ 6 nền tảng: YouTube Studio, TikTok Studio, Facebook Meta Business, Instagram, X (Twitter), LinkedIn.
+    - Cho phép nạp nhanh video vừa xuất từ NovaCut hoặc chọn file từ máy tính.
+    - Nhập tiêu đề, mô tả, caption, hashtags (kèm bộ nút gợi ý hashtag nhanh).
+    - Tùy chọn quyền riêng tư linh hoạt theo từng nền tảng (Công khai, Không công khai, Riêng tư, Bạn bè...).
+    - Khung xem trước trực quan (Live Social Preview Card) cập nhật theo thời gian thực.
+    - Kiểm tra và đếm ký tự bài đăng, đưa ra cảnh báo nếu vượt quá giới hạn nền tảng.
+    - Nút thao tác một chạm: Tự động copy đường dẫn video vào Windows Clipboard để người dùng nhấn `Ctrl+V` vào hộp thoại chọn file của trình duyệt.
+    - Bộ nút sao chép nhanh Tiêu đề, Mô tả/Caption, Đường dẫn file.
+    - Lưu lịch sử thao tác đăng an toàn vào `user_data/social_publish_history.json` (nguyên tử qua `atomic_write_json`, không chứa token nhạy cảm).
+    - Phân quyền bảo mật 2 tầng đầy đủ (`can_access_social_publish` trong `license_manager.py` và `checkFeaturePermission` tại frontend).
+    - Đã vượt qua 100% bộ 17 bài test tự động (`scripts/test_social_publisher.py`).
+
 - **Cô Lập Hoàn Toàn Cache Dữ Liệu Review Phim Theo Từng Video (Video-Isolated Cache) — Sửa Lỗi Bắt Nhầm Dự Án Làm Dở Của Video Khác ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/auto_edit_pipeline.py), [patches/active/routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/video_edit.py), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js)) (22/09/2026):**
   - **Hiện tượng người dùng phản ánh:** Trong tính năng Review Phim (AI Auto-Edit), khi người dùng chọn một video mới toanh vừa tải về máy, hệ thống vẫn hiển thị hộp thoại cảnh báo: *"Hệ thống tìm thấy dữ liệu đang làm dở từ lần chạy trước (script.txt, voice_review.wav...). Bạn có muốn TÁI SỬ DỤNG chúng để tiết kiệm thời gian không?"*. Nếu bấm Đồng ý, hệ thống lấy nhầm kịch bản và giọng đọc của một video cũ trước đó để ghép vào video mới.
   - **Nguyên nhân gốc rễ (Root Cause):**
@@ -46,12 +89,15 @@
     3. **Đồng bộ Frontend ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js)):**
        - Gửi kèm `video_path` và `srt_path` của video hiện tại trong sự kiện kiểm tra cache trước khi kích hoạt quy trình Review Phim.
 
-- **[Kế Hoạch Bản Cập Nhật Tới] Ẩn 3 Thẻ Tab Trên Giao Diện: "Biên Tập Hàng Loạt", "Review Truyện" & "Xử Lý Hàng Loạt" ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html)):**
-  - **Chỉ đạo của người dùng:** Khi thực hiện đóng gói và phát hành bản cập nhật tới đây, sẽ ẩn đi 3 thẻ tab chức năng trên thanh điều hướng chính (Header Tabs / Navigation Bar):
-    1. Thẻ **"Biên tập hàng loạt"** (`data-target="viewBatchEditor"`).
-    2. Thẻ **"Review Truyện"** (`data-target="viewComicReview"`).
-    3. Thẻ **"Xử Lý Hàng Loạt"** (`data-target="viewBatchQueue"`).
-  - **Mục đích:** Tinh gọn giao diện, tập trung trải nghiệm tối ưu vào các tính năng trọng tâm (Biên tập phim, Review Phim, TTS, Clone Voice, Tải Video, CapCut Draft...) trước khi người dùng có chỉ đạo kích hoạt lại.
+- **Cơ Chế Hiển Thị Linh Hoạt 3 Thẻ Tab Theo Phân Quyền Admin Quản Trị ("Biên Tập Hàng Loạt", "Review Truyện" & "Xử Lý Hàng Loạt") ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/style.css), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/index.html), [patches/active/web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/style.css), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js)) (22/09/2026):**
+  - **Mục tiêu & Cơ chế:**
+    1. Tinh gọn giao diện cho người dùng phổ thông (Khách, Dùng Thử, Gói Pro, Gói VIP, Gói Năm): Mặc định ẩn hoàn toàn 3 thẻ tab (`.nav-tab[data-admin-only="true"] { display: none !important; }`).
+    2. Tự động mở hiển thị đầy đủ cả 3 thẻ tab đối với tài khoản Admin Quản Trị (`tier === 'admin'` hoặc `features.is_admin === true`) để Admin dễ dàng truy cập kiểm thử, nghiên cứu và biên tập nhanh.
+    3. Tối ưu hiệu năng & Trải nghiệm người dùng: Sử dụng class `is-admin-mode` kết hợp bộ nhớ đệm `localStorage.getItem('novacut_is_admin')`, kích hoạt hiển thị `display: flex !important;` ngay tức thì ngay khi mở trang web, không gây chớp nháy giao diện.
+    4. 3 thẻ tab được quản lý phân quyền:
+       - Thẻ **"Biên tập hàng loạt"** (`data-target="viewBatchEditor"`).
+       - Thẻ **"Review Truyện"** (`data-target="viewComicReview"`).
+       - Thẻ **"Xử Lý Hàng Loạt"** (`data-target="viewBatchQueue"`).
 
 - **Đồng Bộ Hoàn Toàn Logic Dịch Thuật & Lồng Tiếng AI Hàng Loạt Theo Chuẩn Biên Tập Phim — Sửa Triệt Để Lỗi Cụt Tiếng 3-5 Phút & Lỗi 400 Danh Sách Phụ Đề Quá Lớn ([web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js)) (22/09/2026):**
   - **Hiện tượng người dùng phản ánh:**

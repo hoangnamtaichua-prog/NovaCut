@@ -883,6 +883,118 @@ class TelegramNotifier:
         self.send_async(msg, deduplication_key=dedup, custom_chat_id=target_chat)
         return True
 
+    def notify_task_success(
+        self,
+        task_type: str,
+        video_title: str,
+        output_path: str = "",
+        duration_sec: Optional[float] = None,
+        file_size_mb: Optional[float] = None,
+        task_title: str = "",
+        extra_info: Optional[dict] = None,
+        task_id: str = "",
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Gửi thông báo Telegram khi một tác vụ đơn lẻ (Biên tập phim, Review Phim, Narration...) hoàn thành."""
+        if not self.enabled or not self.notify_per_video:
+            return False
+
+        type_headers = {
+            'editor': ('🎬', 'Biên Tập Phim'),
+            'review': ('🍿', 'Review Phim AI'),
+            'narration': ('🎙️', 'Kể Lại Phim (Narration)'),
+            'comic': ('📖', 'Review Truyện Tranh'),
+            'batch': ('📦', 'Video Hàng Loạt'),
+        }
+        icon, default_header = type_headers.get(task_type, ('🎬', 'Tác Vụ Video'))
+        display_header = task_title or default_header
+
+        safe_title = html.escape(video_title or "Video không tên")
+        safe_out_name = html.escape(os.path.basename(output_path)) if output_path else "Không rõ"
+        safe_out_dir = html.escape(os.path.dirname(output_path)) if output_path else ""
+
+        duration_str = format_duration(duration_sec) if duration_sec is not None else "N/A"
+        size_str = f"{file_size_mb:.1f} MB" if file_size_mb is not None and file_size_mb > 0 else (
+            f"{os.path.getsize(output_path) / (1024*1024):.1f} MB" if output_path and os.path.exists(output_path) else "N/A"
+        )
+
+        lines = [
+            f"{icon} <b>NovaCut: {display_header} Hoàn Tất!</b>",
+            "",
+            f"📹 <b>Tác phẩm:</b> <code>{safe_title}</code>",
+            f"✅ <b>Trạng thái:</b> Xuất thành công 100%",
+            f"📁 <b>Tệp kết quả:</b> <code>{safe_out_name}</code>",
+            f"💾 <b>Dung lượng:</b> {size_str}",
+            f"⏱️ <b>Thời gian xử lý:</b> {duration_str}",
+        ]
+        if safe_out_dir:
+            lines.append(f"📂 <b>Thư mục:</b> <code>{safe_out_dir}</code>")
+
+        if extra_info:
+            for k, v in extra_info.items():
+                if v:
+                    lines.append(f"⚙️ <b>{html.escape(str(k))}:</b> {html.escape(str(v))}")
+
+        lines.extend([
+            "",
+            "🌟 <i>Video đã sẵn sàng để đăng tải hoặc chỉnh sửa tiếp.</i>"
+        ])
+
+        msg = "\n".join(lines)
+        dedup = f"task_success:{task_type}:{task_id or safe_title}:{output_path}:{int(time.time() // 60)}"
+        target_chat = self._resolve_target_chat(user_id)
+        self.send_async(msg, deduplication_key=dedup, custom_chat_id=target_chat)
+        return True
+
+    def notify_task_failure(
+        self,
+        task_type: str,
+        video_title: str,
+        error_message: str = "",
+        duration_sec: Optional[float] = None,
+        task_title: str = "",
+        task_id: str = "",
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Gửi thông báo Telegram khi một tác vụ gặp sự cố hoặc thất bại."""
+        if not self.enabled or not self.notify_per_video:
+            return False
+
+        type_headers = {
+            'editor': 'Biên Tập Phim',
+            'review': 'Review Phim AI',
+            'narration': 'Kể Lại Phim',
+            'comic': 'Review Truyện Tranh',
+            'batch': 'Video Hàng Loạt',
+        }
+        display_header = task_title or type_headers.get(task_type, 'Tác Vụ Video')
+
+        safe_title = html.escape(video_title or "Video không tên")
+        clean_err = scrub_sensitive_text(error_message or "Lỗi không xác định")
+        clean_err = clean_err.split("\n")[0].strip()
+        if len(clean_err) > 180:
+            clean_err = clean_err[:177] + "..."
+        safe_err = html.escape(clean_err)
+
+        duration_str = format_duration(duration_sec) if duration_sec is not None else "N/A"
+
+        lines = [
+            f"⚠️ <b>NovaCut: {display_header} Thất Bại</b>",
+            "",
+            f"📹 <b>Tác phẩm:</b> <code>{safe_title}</code>",
+            f"❌ <b>Trạng thái:</b> Thất bại",
+            f"🛑 <b>Nguyên nhân:</b> {safe_err}",
+            f"⏱️ <b>Thời gian trước khi lỗi:</b> {duration_str}",
+            "",
+            "💡 <i>Vui lòng kiểm tra lại log chi tiết trên giao diện NovaCut để khắc phục.</i>"
+        ]
+
+        msg = "\n".join(lines)
+        dedup = f"task_failure:{task_type}:{task_id or safe_title}:{int(time.time() // 60)}"
+        target_chat = self._resolve_target_chat(user_id)
+        self.send_async(msg, deduplication_key=dedup, custom_chat_id=target_chat)
+        return True
+
     def notify_batch_completed(
         self,
         total_count: int,
