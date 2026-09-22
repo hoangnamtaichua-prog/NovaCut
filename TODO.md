@@ -29,7 +29,9 @@
 
 ---
 
-### 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (STAGING FOR NEXT RELEASE)
+### 🚀 CÁC THAY ĐỔI ĐÃ PHÁT HÀNH TRONG BẢN VÁ v1.3.1 (ĐÃ PHÁT HÀNH 22/09/2026)
+
+> **Trạng thái:** Đã đóng gói và phát hành thành công lên GitHub Release v1.3.1 (Asset ID: 393933431, SHA-256: `efc3e706e9f381cbf5a6da801db51818b6cced90a451554d5c8cf6f170d613a1`). Người dùng có thể nhấn [🚀 Cập Nhật Ngay] trên ứng dụng để nâng cấp tự động.
 
 - **Khắc Phục Lỗi Khởi Động "No module named 'translation_config'" Sau Khi Cập Nhật ([scripts/publish_patch.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/scripts/publish_patch.py), [routes/state.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/state.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/state.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/state.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py)) (22/09/2026):**
   - **Nguyên nhân sự cố:** `scripts/publish_patch.py` sử dụng danh sách `PATCH_INCLUDE_FILES` tĩnh chưa kịp bổ sung các module cốt lõi mới (`translation_config.py`, `export_history.py`, `export_job_manager.py`, `glossary_manager.py`, `gpu_resource_coordinator.py`, `local_ai_manager.py`, `social_publisher.py`...). Khi người dùng cập nhật qua OTA Release v1.3.0, `patch.zip` thiếu `translation_config.py` dẫn đến việc `routes/state.py` nạp module thất bại và hiển thị hộp thoại `ModuleNotFoundError: No module named 'translation_config'`.
