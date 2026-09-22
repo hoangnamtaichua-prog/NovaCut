@@ -44,6 +44,16 @@ def get_bin_dir():
 
 def get_ffmpeg_path():
     """Tìm đường dẫn tệp thực thi ffmpeg.exe trên hệ thống theo thứ tự ưu tiên."""
+    # 0. Ưu tiên biến môi trường FFMPEG_PATH hoặc cờ thử nghiệm VIDEO_EXPORT_EXPERIMENTAL_GPU
+    env_ffmpeg = os.environ.get('FFMPEG_PATH')
+    if env_ffmpeg and os.path.exists(env_ffmpeg):
+        return os.path.normpath(env_ffmpeg)
+
+    if os.environ.get('VIDEO_EXPORT_EXPERIMENTAL_GPU', '1') == '1':
+        exp_path = os.path.join(ROOT_DIR, "tools", "ffmpeg-nvenc-test", "ffmpeg.exe")
+        if os.path.exists(exp_path) and os.path.getsize(exp_path) > 1000:
+            return os.path.normpath(exp_path)
+
     if os.name == 'nt':
         candidates = [
             os.path.join(os.path.dirname(sys.executable), "bin", "ffmpeg.exe"),
@@ -54,11 +64,12 @@ def get_ffmpeg_path():
         for c in candidates:
             if c and os.path.exists(c) and os.path.getsize(c) > 1000:
                 return os.path.normpath(c)
-                
+
     cand = shutil.which('ffmpeg.exe') or shutil.which('ffmpeg')
     if cand and os.path.exists(cand):
         return os.path.normpath(cand)
     return None
+
 
 def ensure_ffmpeg(yield_func=None):
     """
@@ -134,8 +145,6 @@ def ensure_ffmpeg(yield_func=None):
     return ffmpeg_exe
 
 
-_HW_ENCODER_CACHE = None
-
 def get_stealth_subprocess_kwargs():
     """
     Trả về cấu hình chuẩn Windows để đảm bảo 100% không bao giờ nháy/bật cửa sổ đen Console/CMD:
@@ -155,55 +164,166 @@ def get_stealth_subprocess_kwargs():
         'stdin': subprocess.DEVNULL
     }
 
-def detect_hardware_encoder(ffmpeg_path=None):
-    """
-    Phát hiện và kiểm tra tính khả dụng thực tế của GPU Hardware Encoder (NVENC, QSV).
-    Chạy thử nghiệm encode 0.2s vào null sink để đảm bảo tuyệt đối không crash khi xuất video.
-    Trả về: (encoder_name, is_gpu, encoder_args)
-    """
-    global _HW_ENCODER_CACHE
-    if _HW_ENCODER_CACHE is not None:
-        return _HW_ENCODER_CACHE
 
+_HW_CAPS_CACHE = {}
+
+
+
+def get_hardware_capabilities(ffmpeg_path=None):
+    """
+    Phân tích toàn diện và cache khả năng hỗ trợ phần cứng của binary FFmpeg hiện tại:
+    - NVENC (H.264, HEVC)
+    - Hardware Decoder NVDEC (av1_cuvid, h264_cuvid, hevc_cuvid, -hwaccel cuda)
+    - QSV / AMF / MediaFoundation
+    - Thông tin GPU và Driver NVIDIA
+    - Chi tiết mã lỗi cụ thể nếu GPU encoder thất bại (để hiển thị UI, không bao giờ fallback im lặng)
+    """
+    global _HW_CAPS_CACHE
     if not ffmpeg_path:
         ffmpeg_path = get_ffmpeg_path()
     if not ffmpeg_path or not os.path.exists(ffmpeg_path):
-        _HW_ENCODER_CACHE = ('libx264', False, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22'])
-        return _HW_ENCODER_CACHE
+        return {
+            'ffmpeg_path': None,
+            'nvenc_supported': False,
+            'nvenc_error': 'Không tìm thấy FFmpeg',
+            'hevc_nvenc_supported': False,
+            'qsv_supported': False,
+            'amf_supported': False,
+            'mf_supported': False,
+            'hw_decoders': {},
+            'gpu_name': None,
+            'gpu_model': 'N/A',
+            'driver_version': None,
+            'supported_encoders': ['libx264'],
+            'hardware_decoders': []
+        }
+
+    mtime = os.path.getmtime(ffmpeg_path)
+    cache_key = (ffmpeg_path, mtime)
+    if cache_key in _HW_CAPS_CACHE:
+        return _HW_CAPS_CACHE[cache_key]
 
     import subprocess
     stealth_kwargs = get_stealth_subprocess_kwargs()
 
-    # 1. Thử nghiệm Nvidia NVENC (h264_nvenc)
-    try:
-        test_cmd = [
-            ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
-            '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.2',
-            '-c:v', 'h264_nvenc', '-preset', 'p4', '-f', 'null', '-'
-        ]
-        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3, **stealth_kwargs)
-        if res.returncode == 0:
-            _HW_ENCODER_CACHE = ('h264_nvenc', True, ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22'])
-            return _HW_ENCODER_CACHE
-    except Exception:
-        pass
+    caps = {
+        'ffmpeg_path': ffmpeg_path,
+        'nvenc_supported': False,
+        'nvenc_error': None,
+        'hevc_nvenc_supported': False,
+        'qsv_supported': False,
+        'amf_supported': False,
+        'mf_supported': False,
+        'hw_decoders': {},
+        'gpu_name': None,
+        'driver_version': None
+    }
 
-    # 2. Thử nghiệm Intel QSV (h264_qsv)
-    try:
-        test_cmd = [
-            ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
-            '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.2',
-            '-c:v', 'h264_qsv', '-preset', 'veryfast', '-f', 'null', '-'
-        ]
-        res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3, **stealth_kwargs)
-        if res.returncode == 0:
-            _HW_ENCODER_CACHE = ('h264_qsv', True, ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22'])
-            return _HW_ENCODER_CACHE
-    except Exception:
-        pass
+    # Query GPU and Driver via nvidia-smi
+    if shutil.which("nvidia-smi"):
+        try:
+            res_smi = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=3, **stealth_kwargs
+            )
+            if res_smi.returncode == 0 and res_smi.stdout.strip():
+                parts = [p.strip() for p in res_smi.stdout.strip().splitlines()[0].split(',')]
+                if len(parts) >= 1:
+                    caps['gpu_name'] = parts[0]
+                if len(parts) >= 2:
+                    caps['driver_version'] = parts[1]
+        except Exception:
+            pass
 
-    # 3. Fallback mặc định: CPU libx264
-    _HW_ENCODER_CACHE = ('libx264', False, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22'])
-    return _HW_ENCODER_CACHE
+    def _test_codec(args):
+        try:
+            cmd = [ffmpeg_path, '-y', '-hide_banner', '-nostdin'] + args
+            res = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=4, **stealth_kwargs)
+            return res.returncode == 0, res.stderr.strip()
+        except Exception as ex:
+            return False, str(ex)
+
+    # 1. Test h264_nvenc
+    ok_nvenc, err_nvenc = _test_codec(['-f', 'lavfi', '-i', 'testsrc=s=256x256:d=0.2', '-c:v', 'h264_nvenc', '-preset', 'p4', '-f', 'null', '-'])
+    if ok_nvenc:
+        caps['nvenc_supported'] = True
+    else:
+        caps['nvenc_supported'] = False
+        caps['nvenc_error'] = err_nvenc
+
+    # 2. Test hevc_nvenc
+    ok_hevc, _ = _test_codec(['-f', 'lavfi', '-i', 'testsrc=s=256x256:d=0.2', '-c:v', 'hevc_nvenc', '-preset', 'p4', '-f', 'null', '-'])
+    caps['hevc_nvenc_supported'] = ok_hevc
+
+    # 3. Test QSV
+    ok_qsv, _ = _test_codec(['-f', 'lavfi', '-i', 'testsrc=s=256x256:d=0.2', '-c:v', 'h264_qsv', '-preset', 'veryfast', '-f', 'null', '-'])
+    caps['qsv_supported'] = ok_qsv
+
+    # 4. Test AMF
+    ok_amf, _ = _test_codec(['-f', 'lavfi', '-i', 'testsrc=s=256x256:d=0.2', '-c:v', 'h264_amf', '-f', 'null', '-'])
+    caps['amf_supported'] = ok_amf
+
+    # 5. Test MediaFoundation (mf)
+    ok_mf, _ = _test_codec(['-f', 'lavfi', '-i', 'testsrc=s=256x256:d=0.2', '-c:v', 'h264_mf', '-f', 'null', '-'])
+    caps['mf_supported'] = ok_mf
+
+    # 6. Test Hardware Decoders (CUDA / CUVID)
+    if caps['nvenc_supported']:
+        # Probe decoders via ffmpeg -decoders
+        try:
+            res_dec = subprocess.run([ffmpeg_path, '-hide_banner', '-decoders'], capture_output=True, encoding='utf-8', errors='replace', timeout=3, **stealth_kwargs)
+            dec_txt = res_dec.stdout.lower() if res_dec.returncode == 0 else ''
+            caps['hw_decoders'] = {
+                'av1': 'av1_cuvid' in dec_txt,
+                'h264': 'h264_cuvid' in dec_txt,
+                'hevc': 'hevc_cuvid' in dec_txt,
+                'cuda_hwaccel': True
+            }
+        except Exception:
+            pass
+
+    # Build standardized encoder & decoder lists for consumers
+    supported_encoders = ['libx264']
+    if caps.get('nvenc_supported'):
+        supported_encoders.append('h264_nvenc')
+    if caps.get('hevc_nvenc_supported'):
+        supported_encoders.append('hevc_nvenc')
+    if caps.get('qsv_supported'):
+        supported_encoders.append('h264_qsv')
+    if caps.get('amf_supported'):
+        supported_encoders.append('h264_amf')
+    if caps.get('mf_supported'):
+        supported_encoders.append('h264_mf')
+    caps['supported_encoders'] = supported_encoders
+    caps['gpu_model'] = caps.get('gpu_name') or 'GPU'
+
+    hardware_decoders = []
+    if caps.get('hw_decoders', {}).get('cuda_hwaccel'):
+        hardware_decoders.append('cuda')
+    for dec_name, supported in caps.get('hw_decoders', {}).items():
+        if supported and dec_name != 'cuda_hwaccel':
+            hardware_decoders.append(f"{dec_name}_cuvid")
+    caps['hardware_decoders'] = hardware_decoders
+
+    _HW_CAPS_CACHE[cache_key] = caps
+    return caps
+
+
+def detect_hardware_encoder(ffmpeg_path=None):
+    """
+    Phát hiện và kiểm tra tính khả dụng thực tế của GPU Hardware Encoder (NVENC, QSV, AMF, MF).
+    Trả về: (encoder_name, is_gpu, encoder_args)
+    """
+    caps = get_hardware_capabilities(ffmpeg_path)
+    if caps.get('nvenc_supported'):
+        return ('h264_nvenc', True, ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '20'])
+    if caps.get('qsv_supported'):
+        return ('h264_qsv', True, ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '20'])
+    if caps.get('amf_supported'):
+        return ('h264_amf', True, ['-c:v', 'h264_amf', '-quality', 'quality'])
+    if caps.get('mf_supported'):
+        return ('h264_mf', True, ['-c:v', 'h264_mf'])
+    return ('libx264', False, ['-c:v', 'libx264', '-preset', 'faster', '-crf', '20'])
+
 
 

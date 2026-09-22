@@ -17,7 +17,7 @@ def get_rvc_python():
 def get_rvc_dir():
     return DEFAULT_RVC_DIR if os.path.exists(DEFAULT_RVC_DIR) else ROOT_DIR
 
-def convert_voice(input_audio, output_audio, model_path, index_path=None, pitch=0, f0_method="rmvpe", index_rate=0.45, rms_mix_rate=0.25, protect=0.50):
+def convert_voice(input_audio, output_audio, model_path, index_path=None, pitch=0, f0_method="pm", index_rate=0.45, rms_mix_rate=0.25, protect=0.50):
     """
     Converts input_audio using the specified RVC model and index via the RTX 5060 RVC runtime.
     """

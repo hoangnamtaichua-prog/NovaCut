@@ -1,0 +1,343 @@
+Total length of JS: 2678326
+MATCH: {const R=await d.text();R===""||(this.headers.get("Accept")==="text/csv"||this.headers.get("Accept")&&(!((h=this.headers.get("Accept"))===null||h===void 0)&&h.includes("application/vnd.pgrst.plan+text"))?_=R:_=JSON.parse(R))}
+---
+MATCH: {if(e.eventType==="INSERT"||e.eventType==="DELETE")return!0;const t=e.old,n=e.new;return!t||!n?!1:(t.status??null)!==(n.status??null)||(t.deleted_at??null)!==(n.deleted_at??null)||(t.credit_cost??null)!==(n.credit_cost??null)}
+---
+MATCH: {...re,credit_packages:pe}
+---
+MATCH: {...H,premium_credits:W.new.premium_credits,free_credits:W.new.free_credits}
+---
+MATCH: {const de=te.current,pe=(de==null?void 0:de.credit_owner_id)??(de==null?void 0:de.id);return(de==null?void 0:de.id)===ne&&pe===H?de.credit_packages??[]:[]}
+---
+MATCH: {console.error("Error fetching credit packages:",de),ee.credit_packages=re()}
+---
+MATCH: {const ee=i.group_credits_used??0,W=i.group_credit_limit,re=ne+Y;if(W==null)return Math.max(0,re);const de=Math.max(0,W-ee);return Math.min(re,de)}
+---
+MATCH: {continueWith:"Continue with",trialCredits:"3,333 trial credits for new Gmail or Apple accounts",trialBadge:"Trial credits included"}
+---
+MATCH: {credits}
+---
+MATCH: {credits}
+---
+MATCH: {title:"Set Credit Limit",description:"Leave blank to remove the limit.",placeholder:"Example: 50000",cancel:"Cancel",confirm:"Confirm"}
+---
+MATCH: {title:"Set Credit Reset Schedule",description:"Set an automatic reset schedule for used credits. The reset time will depend on the server location.",optionNone:"Turn off auto-reset",optionDaily:"Daily",optionWeekly:"Weekly",optionMonthly:"Monthly",cancel:"Cancel",confirm:"Confirm"}
+---
+MATCH: {refunded_credits}
+---
+MATCH: {continueWith:"Tiếp tục với",trialCredits:"3.333 credits dùng thử cho tài khoản Gmail hoặc Apple mới",trialBadge:"Có credits dùng thử"}
+---
+MATCH: {credits}
+---
+MATCH: {credits}
+---
+MATCH: {refunded_credits}
+---
+MATCH: {id:l,className:"sr-only",children:s("trialCredits")}
+---
+MATCH: {if(e==="kiki"||(s==null?void 0:s.premium_credits)===0)return"good";const h=a==null?void 0:a[e];return h==="overloaded"?"overloaded":h==="degraded"||h==="error"?"degraded":"good"}
+---
+MATCH: {userCredits:i,user:l,logout:c,isEmailPasswordUser:d}
+---
+MATCH: {className:"text-xs text-muted-foreground",children:s("Credits")}
+---
+MATCH: {className:"font-semibold",children:s("Buy Credits")}
+---
+MATCH: {s("Credits")}
+---
+MATCH: {className:"text-xs text-sidebar-foreground/55",children:s("Credits")}
+---
+MATCH: {title:"Pricing",url:"/app/buy-credits",icon:S$}
+---
+MATCH: {chunks:x,enhanceableCount:w,creditEstimate:S}
+---
+MATCH: {chunks:A,enhanceableCount:A.filter(k=>k.enhanceable).length,creditEstimate:mge(A)}
+---
+MATCH: {errorCode:typeof t.transcript_error_code=="string"?t.transcript_error_code:void 0,refundedCredits:Number.isFinite(n)&&n>=0?n:void 0}
+---
+MATCH: {credits:i.refundedCredits.toLocaleString(a)}
+---
+MATCH: {children:[e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund"),": ",e.credit_cost.toLocaleString()]}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {onSingleImport:e,computeCredit:t,onGenerate:n,onBatchComplete:a}
+---
+MATCH: {...L,credit:t(L.text)}
+---
+MATCH: {id:D+Date.now(),filename:D,text:L,charCount:$,credit:Z}
+---
+MATCH: {id:$.name,filename:$.name,text:G,charCount:G.length,credit:Z(G)}
+---
+MATCH: {className:"text-right",children:i("Credits")}
+---
+MATCH: {className:"text-right",children:D.credit.toLocaleString()}
+---
+MATCH: {user:n,userCredits:a,isCurrentUser:s,requestCrossTabTaskRefresh:i}
+---
+MATCH: {variant:"secondary",children:k.type==="cash"?n("Cash"):n("Credit")}
+---
+MATCH: {value:"credit",children:e("Credit")}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"||e.status==="pending"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {userCredits:a,requestCrossTabTaskRefresh:s}
+---
+MATCH: {resetCredits:a,setCreditLimit:s,setResetSchedule:i}
+---
+MATCH: {N(!0),await a([We]),me.success(v("creditsResetSuccess")),await H()}
+---
+MATCH: {x(!0),await s([P.id],be===""?null:Number(be)),me.success(v("creditLimitUpdateSuccess")),ve(null),ne(""),await H()}
+---
+MATCH: {className:"text-xs",children:[v("Members use leader credits"),"."]}
+---
+MATCH: {children:v("resetUsedCreditsTooltip")}
+---
+MATCH: {ve(We),ne(String(We.group_credit_limit??""))}
+---
+MATCH: {We.group_credit_reset_schedule.charAt(0).toUpperCase()+We.group_credit_reset_schedule.slice(1)}
+---
+MATCH: {se(We),W(We.group_credit_reset_schedule??"none")}
+---
+MATCH: {children:v("setCreditLimitDialog.title")}
+---
+MATCH: {value:be,onChange:We=>ne(We.target.value.replace(/[^0-9]/g,"")),placeholder:v("setCreditLimitDialog.placeholder"),autoFocus:!0}
+---
+MATCH: {type:"button",variant:"outline",onClick:()=>ve(null),children:v("setCreditLimitDialog.cancel")}
+---
+MATCH: {className:"text-sm text-muted-foreground whitespace-pre-line",children:[v("Members use leader credits"),"."]}
+---
+MATCH: {children:"Calculate credits cost before generating an image."}
+---
+MATCH: {
+  "success": true,
+  "credits": 1188
+}
+---
+MATCH: {
+  "success": true,
+  "task_id": "abc123",
+  "estimated_credits": 1188,
+  "ec_remain_credits": "8812"
+}
+---
+MATCH: {
+  "id": "abc123",
+  "type": "imagen2",
+  "status": "doing",
+  "progress": 30,
+  "credit_cost": 1188,
+  "created_at": "2026-02-22T06:00:00.000Z"
+}
+---
+MATCH: {
+  "id": "abc123",
+  "type": "imagen2",
+  "status": "error",
+  "error_message": "Image generation failed: ...",
+  "credit_cost": 1188
+}
+---
+MATCH: {','    "audio_url": "https://example.com/default.m4a",','    "srt_url": "https://example.com/translated.srt",','    "replacement_voice_id": "elevenlabs_TX3LPaxmHKxFdv7VOQHJ",','    "replacement_credit_multiplier": 1.25,','    "replacement_status": "done",','    "replacement_audio_url": "https://example.com/replacement.mp3"',"  }
+---
+MATCH: {",'  "success": true,','  "task_id": "uuid_task_id",','  "ec_remain_credits": "9500"',"}
+---
+MATCH: {",'  "success": true,','  "task_id": "uuid_task_id",','  "ec_remain_credits": "9500"',"}
+---
+MATCH: {id:"api_key",className:"min-w-[220px] flex-1 !opacity-100",onChange:O=>O.preventDefault(),value:t?e==null?void 0:e.api_key:"",placeholder:"You need to buy premium credits to get API key",type:d?"text":"password",disabled:!t}
+---
+MATCH: {
+  "success": true,
+  "task_id": "uuid_task_id",
+  "ec_remain_credits": 12345
+}
+---
+MATCH: {
+    "audio_url": "https://example.com/default.m4a",
+    "srt_url": "https://example.com/translated.srt",
+    "replacement_voice_id": "elevenlabs_TX3LPaxmHKxFdv7VOQHJ",
+    "replacement_credit_multiplier": 1.25,
+    "replacement_status": "done",
+    "replacement_audio_url": "https://example.com/replacement.mp3"
+  }
+---
+MATCH: {
+  "success": true,
+  "task_id": uuid_task_id,
+  "ec_remain_credits": int_credits_remain
+}
+---
+MATCH: {className:"font-semibold text-sm",children:"Credit Cost"}
+---
+MATCH: {children:"• Minimum: 50 credits"}
+---
+MATCH: {
+  "success": true,
+  "task_id": uuid_task_id,
+  "ec_remain_credits": int_credits_remain
+}
+---
+MATCH: {
+  "success": true,
+  "task_id": uuid_task_id,
+  "duration": 120.5,
+  "credit_cost": 5000,
+  "ec_remain_credits": "9500"
+}
+---
+MATCH: {
+  "success": true,
+  "task_id": uuid_task_id,
+  "ec_remain_credits": int_credits_remain
+}
+---
+MATCH: {
+  "success": true,
+  "task_id": "uuid_task_id",
+  "ec_remain_credits": "9500"
+}
+---
+MATCH: {
+  "success": true,
+  "refund_credits": 100
+}
+---
+MATCH: {children:"Get Credits"}
+---
+MATCH: {children:"Returns total available credits of current user."}
+---
+MATCH: {
+  "success": true,
+  "credits": 123
+}
+---
+MATCH: {const O=localStorage.getItem("buy-credits-step"),M=O?parseInt(O,10):1;return Math.min(40,Math.max(1,Number.isFinite(M)?M:1))}
+---
+MATCH: {if(typeof window>"u")return"1_month";const O=localStorage.getItem("buy-credits-validity-period");return O&&qNe.includes(O)?O:"1_month"}
+---
+MATCH: {const M=Math.min(40,Math.max(1,Math.round(O)));a(M),typeof window<"u"&&localStorage.setItem("buy-credits-step",M.toString())}
+---
+MATCH: {i(O),typeof window<"u"&&localStorage.setItem("buy-credits-validity-period",O)}
+---
+MATCH: {children:g("Buy more credits, the cheaper the price")}
+---
+MATCH: {amount:w,validityPeriod:s,step:n,onSuccess:A,onError:k,className:Oe("flex-1","bg-yellow-400 hover:bg-yellow-500 text-black"),variant:p==="vi"?"secondary":"default",children:"PayPal / Credit Card"}
+---
+MATCH: {i&&(console.error("Error fetching credit data:",i),me.error(e("Failed to fetch credit data")||"Unable to load credit data"))}
+---
+MATCH: {className:"text-sm text-muted-foreground mb-1",children:e("Total Credits")||"Tổng tín dụng"}
+---
+MATCH: {children:[e("Expiring")||"Có hạn",":"," ",s.credit_packages.reduce((_,x)=>_+x.remaining_credits,0).toLocaleString()]}
+---
+MATCH: {className:"text-sm font-medium mb-2",children:e("Credit Packages")||"Gói tín dụng có hạn"}
+---
+MATCH: {className:"font-medium",children:_.remaining_credits.toLocaleString()}
+---
+MATCH: {className:"text-sm text-muted-foreground text-center py-4",children:e("No expiring credit packages")||"Không có gói tín dụng có hạn"}
+---
+MATCH: {userData:a,fetchUserData:s,userCredits:i}
+---
+MATCH: {voiceName:e,setVoiceName:t,selectedFile:n,previewUrl:a,duration:s,isDragging:i,isLoading:l,removeBackground:c,setRemoveBackground:d,fileInputRef:h,audioRef:f,handleRecorded:p,removeFile:g,handleDragOver:v,handleDragLeave:_,handleDrop:x,handleFileInputChange:w,handleSubmit:S,userCredits:E,acceptedTypes:N,canvasRef:T,togglePreviewPlayback:R,isPlayingPreview:A,setCurrentTime:k,setIsPlayingPreview:O}
+---
+MATCH: {children:[e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund"),": ",e.credit_cost.toLocaleString()]}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {audioDurationSeconds:t,audioDurationMinutes:parseFloat(n.toFixed(2)),baseCredits:a,bufferCredits:s,totalCreditsNeeded:i,userChargeCredits:l,bufferPercentage:this.BUFFER_PERCENTAGE*100,chargeMultiplier:this.CHARGE_MULTIPLIER*100}
+---
+MATCH: {if(t<=0)throw new Error("Audio file size must be greater than 0");const a=t*8/(n*1e3);return this.calculateCredits(a)}
+---
+MATCH: {...this.calculateCredits(n),chunkCount:t.length,averageChunkDuration:parseFloat((n/t.length).toFixed(2))}
+---
+MATCH: {t.baseCredits}
+---
+MATCH: {t.bufferCredits}
+---
+MATCH: {t.totalCreditsNeeded}
+---
+MATCH: {t.userChargeCredits}
+---
+MATCH: {user:a,userCredits:s,isCurrentUser:i,requestCrossTabTaskRefresh:l}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {userCredits:a,requestCrossTabTaskRefresh:s}
+---
+MATCH: {children:a("Credit refund")}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:i(It==="done"?"Credit cost":It==="doing"?"Credit frozen":"Credit refund")}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?i("Credit cost"):e.status==="doing"?i("Credit frozen"):i("Credit refund")}
+---
+MATCH: {value:1,label:"1",credits:1200}
+---
+MATCH: {value:2,label:"2",credits:2400}
+---
+MATCH: {value:3,label:"3",credits:3600}
+---
+MATCH: {userCredits:n,userData:a,requestCrossTabTaskRefresh:s}
+---
+MATCH: {userCredits:t,requestCrossTabTaskRefresh:n}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {user:t,userCredits:n,requestCrossTabTaskRefresh:a}
+---
+MATCH: {user:t,userCredits:n,fetchUserData:a}
+---
+MATCH: {total_purchased:N.total_purchased,refunded_credits:N.refunded_credits,unavailable_proxies:N.unavailable_proxies}
+---
+MATCH: {className:"text-xs text-muted-foreground",children:[R.credit_cost.toLocaleString()," credits"]}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {user:i,userCredits:l,requestCrossTabTaskRefresh:c}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+---
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {user:c,userCredits:d,requestCrossTabTaskRefresh:h}
+---
+MATCH: {className:"text-xs",children:((ne=e.credit_cost)==null?void 0:ne.toLocaleString())||0}
+---
+MATCH: {className:"text-xs text-muted-foreground",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+---
+MATCH: {userCredits:t,requestCrossTabTaskRefresh:n}
+---
+MATCH: {children:s.durationSeconds===null?e("credits_auto"):e("credits_per_second")}
+---
+MATCH: {user:a,userCredits:s,isCurrentUser:i,requestCrossTabTaskRefresh:l}
+---
+MATCH: {user:n,userCredits:a,isCurrentUser:s,requestCrossTabTaskRefresh:i}
+---
+MATCH: {side:"left",className:"whitespace-pre-line",children:e("dialogue_credit_tooltip")}
+---

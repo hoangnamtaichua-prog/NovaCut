@@ -123,10 +123,80 @@ def extract_video_id(url_or_text):
     return None, raw_url
 
 
+def extract_mix_id(url_or_text):
+    """
+    Trích xuất mix_id (ID bộ sưu tập / tuyển tập) từ liên kết Douyin hoặc chuỗi số thuần.
+    Ví dụ:
+    - https://www.douyin.com/collection/7412345678901234567
+    - https://www.douyin.com/user/...&mix_id=7412345678901234567
+    - 7412345678901234567
+    """
+    raw_url = clean_url_input(url_or_text)
+    if not raw_url:
+        return None
+    if "v.douyin.com" in raw_url:
+        raw_url = resolve_redirect_url(raw_url)
+    m = re.search(r'collection/(\d+)', raw_url)
+    if m:
+        return m.group(1)
+    m = re.search(r'mix_id=(\d+)', raw_url)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r'\d{15,22}', raw_url):
+        return raw_url
+    return None
+
+
+class GlobalConnectionPool:
+    """
+    Quản lý pool giới hạn kết nối HTTP đồng thời trên toàn bộ batch job,
+    chống bị rate-limit hoặc ngắt kết nối từ CDN Douyin.
+    """
+    _instances = {}
+    _lock = threading.Lock()
+
+    def __init__(self, max_connections=12, max_total_connections=None):
+        limit = max_total_connections if max_total_connections is not None else max_connections
+        self.max_connections = max(1, int(limit))
+        self.semaphore = threading.Semaphore(self.max_connections)
+
+    def acquire(self, blocking=True, timeout=None):
+        from contextlib import contextmanager
+        @contextmanager
+        def _ctx():
+            if timeout is not None:
+                acquired = self.semaphore.acquire(blocking=blocking, timeout=timeout)
+            else:
+                acquired = self.semaphore.acquire(blocking=blocking)
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    self.semaphore.release()
+        return _ctx()
+
+    def __enter__(self):
+        self.semaphore.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.semaphore.release()
+
+    @classmethod
+    def get_pool(cls, max_connections=12):
+        with cls._lock:
+            key = max(1, int(max_connections))
+            if key not in cls._instances:
+                cls._instances[key] = cls(key)
+            return cls._instances[key]
+
+
+
 class DouyinBrowserDownloader:
     """
     Trình thu thập và tải video Douyin bằng Browser Worker ngầm (Microsoft Edge / Chromium).
     """
+
 
     def __init__(self, profile_dir=None, headless=True):
         self.profile_dir = profile_dir or PROFILE_DIR
@@ -174,9 +244,14 @@ class DouyinBrowserDownloader:
 
     def scan_channel_videos(self, channel_url_or_sec_uid, limit=30, progress_cb=None):
         """
-        Cào danh sách video từ 1 kênh Douyin bằng cách lắng nghe API /aweme/v1/web/aweme/post/.
-        Hỗ trợ phân trang tự động bằng cách cuộn chuột ảo.
+        Cào danh sách video từ 1 kênh Douyin hoặc từ Bộ sưu tập (Mix / Collection).
+        Hỗ trợ phân trang tự động bằng cách cuộn chuột ảo và API cursor.
         """
+        # Nếu người dùng truyền URL bộ sưu tập hoặc mix_id trực tiếp
+        mix_id_direct = extract_mix_id(channel_url_or_sec_uid)
+        if mix_id_direct:
+            return self.scan_collection_videos(mix_id_direct, limit=limit, progress_cb=progress_cb)
+
         sec_uid, resolved_url = extract_sec_uid(channel_url_or_sec_uid)
         if not sec_uid:
             # Thử kiểm tra nếu dán link video -> tìm sec_uid của tác giả video
@@ -193,6 +268,7 @@ class DouyinBrowserDownloader:
             raise ValueError(f"Không tìm thấy sec_uid của kênh Douyin từ: {channel_url_or_sec_uid}. Vui lòng kiểm tra lại link.")
 
         profile_url = f"https://www.douyin.com/user/{sec_uid}"
+
         if progress_cb: progress_cb(5, "Đang xác thực liên kết & thông tin kênh...")
 
         from playwright.sync_api import sync_playwright
@@ -280,25 +356,28 @@ class DouyinBrowserDownloader:
                     )
                     cover_url = cover_list[0] if cover_list else ""
 
-                    # Direct MP4 URL (Trích xuất luồng 1080p/Bitrate cao nhất)
+                    # Direct MP4 URL qua resolve_douyin_variants (ưu tiên bản sạch, bitrate/phân giải cao nhất)
+                    import downloader
+                    variants = downloader.resolve_douyin_variants(item, aweme_id=aweme_id)
                     play_url = ""
-                    bit_rate_list = video_obj.get("bit_rate") or []
-                    if bit_rate_list and isinstance(bit_rate_list, list):
-                        try:
-                            # Sắp xếp theo bitrate giảm dần để lấy chất lượng cao nhất
-                            bit_rate_sorted = sorted(bit_rate_list, key=lambda b: int(b.get("bit_rate") or 0), reverse=True)
-                            for b_item in bit_rate_sorted:
+                    backup_urls = []
+                    is_clean = False
+                    if variants:
+                        play_url = variants[0]["url"]
+                        backup_urls = variants[0].get("backup_urls", [])
+                        is_clean = variants[0].get("is_clean", False)
+                    else:
+                        bit_rate_list = video_obj.get("bit_rate") or []
+                        if bit_rate_list and isinstance(bit_rate_list, list):
+                            for b_item in bit_rate_list:
                                 p_addrs = (b_item.get("play_addr") or {}).get("url_list") or []
                                 if p_addrs:
-                                    play_url = p_addrs[-1].replace("playwm", "play")
+                                    play_url = p_addrs[0]
                                     break
-                        except Exception:
-                            pass
-
-                    if not play_url:
-                        play_addr_list = (video_obj.get("play_addr") or {}).get("url_list") or []
-                        if play_addr_list:
-                            play_url = play_addr_list[-1].replace("playwm", "play")
+                        if not play_url:
+                            p_list = (video_obj.get("play_addr") or {}).get("url_list") or []
+                            if p_list:
+                                play_url = p_list[0]
 
                     # Hỗ trợ bài đăng Album Ảnh / Slide (Photo Note)
                     is_images = bool(item.get("images") or item.get("aweme_type") == 68)
@@ -332,12 +411,20 @@ class DouyinBrowserDownloader:
                             channel_info["total_favorited"] = author_obj.get("total_favorited") or stats.get("total_favorited") or 0
                             channel_info["aweme_count"] = author_obj.get("aweme_count") or 0
 
+                    mix_info = item.get("mix_info") or {}
+                    mix_order = item.get("_mix_order") or mix_info.get("mix_order") or mix_info.get("episode_number")
+
                     video_item = {
                         "aweme_id": aweme_id,
                         "title": desc,
-                        "clean_title": sanitize_filename(desc),
+                        "clean_title": downloader.sanitize_filename_windows(desc),
                         "url": f"https://www.douyin.com/video/{aweme_id}",
                         "download_url": play_url,
+                        "backup_urls": backup_urls,
+                        "is_clean": is_clean,
+                        "variants": variants,
+                        "mix_order": mix_order,
+                        "mix_id": mix_info.get("mix_id"),
                         "cover_url": cover_url,
                         "is_images": is_images,
                         "image_urls": image_urls,
@@ -350,6 +437,7 @@ class DouyinBrowserDownloader:
                         "author": author_obj.get("nickname", channel_info["nickname"]),
                         "create_time": item.get("create_time", int(time.time()))
                     }
+
 
                     seen_aweme_ids.add(aweme_id)
                     collected_videos.append(video_item)
@@ -513,17 +601,29 @@ class DouyinBrowserDownloader:
                         for m_idx, m_id in enumerate(mix_ids):
                             if limit and len(collected_videos) >= limit:
                                 break
-                            if progress_cb:
-                                progress_cb(80 + int((m_idx + 1) / len(mix_ids) * 15), f"Đang trích xuất Bộ sưu tập {m_idx + 1}/{len(mix_ids)}... (Hiện có {len(collected_videos)} video)")
-                            
-                            mix_data = page.evaluate(f"""async () => {{
-                                try {{
-                                    const res = await window.fetch('/aweme/v1/web/mix/aweme/?device_platform=webapp&aid=6383&channel=channel_pc_web&mix_id={m_id}&cursor=0&count=50');
-                                    return await res.json();
-                                }} catch(e) {{ return null; }}
-                            }}""")
-                            if mix_data and mix_data.get("aweme_list"):
-                                process_aweme_list(mix_data["aweme_list"])
+                            cur_cursor = 0
+                            cur_has_more = 1
+                            while cur_has_more:
+                                if limit and len(collected_videos) >= limit:
+                                    break
+                                if progress_cb:
+                                    progress_cb(80 + int((m_idx + 1) / len(mix_ids) * 15), f"Đang trích xuất Bộ sưu tập {m_idx + 1}/{len(mix_ids)}... (Hiện có {len(collected_videos)} video)")
+
+                                mix_data = page.evaluate(f"""async () => {{
+                                    try {{
+                                        const res = await window.fetch('/aweme/v1/web/mix/aweme/?device_platform=webapp&aid=6383&channel=channel_pc_web&mix_id={m_id}&cursor={cur_cursor}&count=20');
+                                        return await res.json();
+                                    }} catch(e) {{ return null; }}
+                                }}""")
+                                if not mix_data or not isinstance(mix_data, dict):
+                                    break
+                                aweme_list = mix_data.get("aweme_list") or []
+                                if not aweme_list:
+                                    break
+                                process_aweme_list(aweme_list)
+                                cur_cursor = mix_data.get("cursor", 0)
+                                cur_has_more = int(mix_data.get("has_more", 0) or 0)
+                                time.sleep(0.3)
                 except Exception:
                     pass
 
@@ -546,9 +646,174 @@ class DouyinBrowserDownloader:
             "total": len(collected_videos)
         }
 
+    def scan_collection_videos(self, mix_id_or_url, limit=None, progress_cb=None):
+        """
+        Trích xuất toàn bộ video thuộc một Bộ sưu tập (合集 / Collection / Mix) cụ thể của Douyin.
+        Phân trang liên tục bằng cursor và has_more == 1 cho tới khi has_more == 0.
+        Bảo toàn thứ tự mix_order của các tập để phục vụ ghép video dài.
+        """
+        mix_id = extract_mix_id(mix_id_or_url)
+        if not mix_id:
+            raise ValueError(f"Không nhận diện được mix_id từ liên kết: {mix_id_or_url}")
+
+        if progress_cb: progress_cb(10, f"Đang kết nối để phân tích Bộ sưu tập (Mix ID: {mix_id})...")
+
+        target_url = f"https://www.douyin.com/collection/{mix_id}"
+        from playwright.sync_api import sync_playwright
+
+        collected_videos = []
+        seen_aweme_ids = set()
+        channel_info = {
+            "nickname": f"Tuyển tập {mix_id}",
+            "avatar": "",
+            "signature": "",
+            "follower_count": 0,
+            "total_favorited": 0,
+            "mix_id": mix_id,
+            "is_collection": True
+        }
+
+        with sync_playwright() as p:
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    channel="msedge",
+                    headless=self.headless,
+                    viewport={"width": 1280, "height": 800},
+                    user_agent=DEFAULT_USER_AGENT,
+                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                )
+            except Exception:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    headless=self.headless,
+                    viewport={"width": 1280, "height": 800},
+                    user_agent=DEFAULT_USER_AGENT,
+                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                )
+
+            page = context.pages[0] if context.pages else context.new_page()
+
+            def process_mix_items(items):
+                import downloader
+                new_added = 0
+                for item in items:
+                    aid = str(item.get("aweme_id") or "")
+                    if not aid or aid in seen_aweme_ids:
+                        continue
+                    desc = str(item.get("desc") or "Video Douyin").strip()
+                    video_obj = item.get("video") or {}
+                    cover_list = ((video_obj.get("cover") or {}).get("url_list") or
+                                  (video_obj.get("origin_cover") or {}).get("url_list") or [])
+                    cover_url = cover_list[0] if cover_list else ""
+
+                    variants = downloader.resolve_douyin_variants(item, aweme_id=aid)
+                    play_url = variants[0]["url"] if variants else ""
+                    backup_urls = variants[0].get("backup_urls", []) if variants else []
+                    is_clean = variants[0].get("is_clean", False) if variants else False
+
+                    is_images = bool(item.get("images") or item.get("aweme_type") == 68)
+                    image_urls = []
+                    if is_images:
+                        for img_obj in (item.get("images") or []):
+                            u_list = img_obj.get("url_list") or []
+                            if u_list: image_urls.append(u_list[-1])
+                        if not cover_url and image_urls: cover_url = image_urls[0]
+
+                    dur_ms = int(video_obj.get("duration") or 0)
+                    dur_sec = dur_ms // 1000 if dur_ms > 1000 else dur_ms
+                    stats = item.get("statistics") or {}
+                    author_obj = item.get("author") or {}
+                    if author_obj.get("nickname") and channel_info["nickname"].startswith("Tuyển tập"):
+                        channel_info["nickname"] = author_obj.get("nickname")
+                        channel_info["avatar"] = ((author_obj.get("avatar_thumb") or {}).get("url_list") or [""])[0]
+
+                    mix_info = item.get("mix_info") or {}
+                    mix_order = item.get("_mix_order") or mix_info.get("mix_order") or mix_info.get("episode_number") or (len(collected_videos) + 1)
+                    if mix_info.get("mix_name") and "mix_name" not in channel_info:
+                        channel_info["mix_name"] = mix_info.get("mix_name")
+
+                    collected_videos.append({
+                        "aweme_id": aid,
+                        "title": desc,
+                        "clean_title": downloader.sanitize_filename_windows(desc),
+                        "url": f"https://www.douyin.com/video/{aid}",
+                        "download_url": play_url,
+                        "backup_urls": backup_urls,
+                        "is_clean": is_clean,
+                        "variants": variants,
+                        "mix_order": mix_order,
+                        "mix_id": mix_id,
+                        "cover_url": cover_url,
+                        "is_images": is_images,
+                        "image_urls": image_urls,
+                        "duration": dur_sec,
+                        "duration_formatted": f"{dur_sec // 60:02d}:{dur_sec % 60:02d}",
+                        "digg_count": stats.get("digg_count", 0),
+                        "comment_count": stats.get("comment_count", 0),
+                        "author": author_obj.get("nickname", channel_info["nickname"]),
+                        "create_time": item.get("create_time", int(time.time()))
+                    })
+                    seen_aweme_ids.add(aid)
+                    new_added += 1
+                return new_added
+
+            try:
+                page.goto(target_url, timeout=15000, wait_until="domcontentloaded")
+                time.sleep(1.5)
+            except Exception:
+                pass
+
+            cursor = 0
+            has_more = 1
+            page_idx = 0
+
+            while has_more:
+                if limit and len(collected_videos) >= limit:
+                    break
+                page_idx += 1
+                if progress_cb:
+                    progress_cb(min(95, 20 + page_idx * 5), f"Đang phân trang Bộ sưu tập: trang {page_idx} (Đã tìm thấy {len(collected_videos)} tập)...")
+
+                mix_data = page.evaluate(f"""async () => {{
+                    try {{
+                        const res = await window.fetch('/aweme/v1/web/mix/aweme/?device_platform=webapp&aid=6383&channel=channel_pc_web&mix_id={mix_id}&cursor={cursor}&count=20');
+                        return await res.json();
+                    }} catch(e) {{ return null; }}
+                }}""")
+
+                if not mix_data or not isinstance(mix_data, dict):
+                    break
+                aweme_list = mix_data.get("aweme_list") or []
+                if not aweme_list:
+                    break
+
+                process_mix_items(aweme_list)
+                cursor = mix_data.get("cursor", 0)
+                has_more = int(mix_data.get("has_more", 0) or 0)
+                time.sleep(0.4)
+
+            context.close()
+
+        if not collected_videos:
+            raise Exception(f"Không tìm thấy tập nào trong Bộ sưu tập ID {mix_id}.")
+
+        collected_videos.sort(key=lambda x: int(x.get("mix_order") or 999999))
+        channel_info["total_videos_scanned"] = len(collected_videos)
+        if progress_cb:
+            progress_cb(100, f"Hoàn tất! Đã trích xuất {len(collected_videos)} tập từ Bộ sưu tập.")
+
+        return {
+            "success": True,
+            "channel_info": channel_info,
+            "videos": collected_videos,
+            "total": len(collected_videos)
+        }
+
+
     def get_single_video_info(self, video_url_or_id):
         """
-        Trích xuất thông tin và link MP4 không logo cho 1 video Douyin lẻ.
+        Trích xuất thông tin và link MP4 không logo chất lượng cao nhất cho 1 video Douyin lẻ.
         Sử dụng cơ chế 2 tầng: Tầng 1 (Fast SSR) -> Tầng 2 (Browser Network Sniffer).
         """
         vid, resolved_url = extract_video_id(video_url_or_id)
@@ -570,19 +835,22 @@ class DouyinBrowserDownloader:
                 import downloader
                 detail = downloader._extract_aweme_detail_from_html(res.text)
                 if detail:
-                    video_obj = detail.get("video") or {}
-                    play_addr_list = (video_obj.get("play_addr") or {}).get("url_list") or []
-                    if play_addr_list:
-                        play_url = play_addr_list[-1].replace("playwm", "play")
+                    variants = downloader.resolve_douyin_variants(detail, aweme_id=vid)
+                    if variants:
+                        best = variants[0]
                         desc = str(detail.get("desc") or "Douyin Video").strip()
+                        video_obj = detail.get("video") or {}
                         duration_ms = int(video_obj.get("duration") or 0)
                         duration_sec = duration_ms // 1000 if duration_ms > 1000 else duration_ms
                         return {
                             "success": True,
                             "video_id": vid,
                             "title": desc,
-                            "clean_title": sanitize_filename(desc),
-                            "download_url": play_url,
+                            "clean_title": downloader.sanitize_filename_windows(desc),
+                            "download_url": best["url"],
+                            "is_clean": best.get("is_clean", False),
+                            "quality": best.get("quality", "1080p"),
+                            "backup_urls": [v["url"] for v in variants[1:]],
                             "duration": duration_sec,
                             "duration_formatted": f"{duration_sec // 60:02d}:{duration_sec % 60:02d}",
                             "cover_url": ((video_obj.get("cover") or {}).get("url_list") or [""])[0],
@@ -606,7 +874,6 @@ class DouyinBrowserDownloader:
             )
             page = context.pages[0] if context.pages else context.new_page()
 
-            # Chặn toàn bộ ảnh, font, css, trackers để tải trang trong 1 - 2s
             def block_heavy_assets(route):
                 req = route.request
                 rtype = req.resource_type
@@ -619,12 +886,10 @@ class DouyinBrowserDownloader:
 
             def on_res(response):
                 try:
-                    # Bắt API aweme/detail, tab/feed hoặc video stream .douyinvod.com
                     if any(x in response.url for x in ["/aweme/v1/web/aweme/detail/", "/aweme/v1/web/tab/feed/", "/aweme/v1/web/item/detail/"]):
                         j = response.json()
                         aweme_detail = j.get("aweme_detail")
                         if not aweme_detail and j.get("aweme_list"):
-                            # Nếu là feed chứa danh sách, tìm đúng video có ID trùng khớp vid
                             for itm in j.get("aweme_list", []):
                                 if str(itm.get("aweme_id") or "") == str(vid):
                                     aweme_detail = itm
@@ -633,17 +898,26 @@ class DouyinBrowserDownloader:
                                 aweme_detail = j["aweme_list"][0]
 
                         if aweme_detail:
+                            import downloader
+                            variants = downloader.resolve_douyin_variants(aweme_detail, aweme_id=vid)
                             v_obj = aweme_detail.get("video") or {}
-                            p_list = (v_obj.get("play_addr") or {}).get("url_list") or []
-                            if p_list:
-                                captured_data["download_url"] = p_list[-1].replace("playwm", "play")
-                                captured_data["title"] = aweme_detail.get("desc", "")
-                                captured_data["author"] = (aweme_detail.get("author") or {}).get("nickname", "")
-                                captured_data["cover_url"] = ((v_obj.get("cover") or {}).get("url_list") or [""])[0]
-                                dur = int(v_obj.get("duration") or 0)
-                                captured_data["duration"] = dur // 1000 if dur > 1000 else dur
+                            if variants:
+                                best = variants[0]
+                                captured_data["download_url"] = best["url"]
+                                captured_data["is_clean"] = best.get("is_clean", False)
+                                captured_data["backup_urls"] = [v["url"] for v in variants[1:]]
+                                captured_data["quality"] = best.get("quality", "1080p")
+                            else:
+                                p_list = (v_obj.get("play_addr") or {}).get("url_list") or []
+                                if p_list:
+                                    captured_data["download_url"] = p_list[0]
+                            captured_data["title"] = aweme_detail.get("desc", "")
+                            captured_data["author"] = (aweme_detail.get("author") or {}).get("nickname", "")
+                            captured_data["cover_url"] = ((v_obj.get("cover") or {}).get("url_list") or [""])[0]
+                            dur = int(v_obj.get("duration") or 0)
+                            captured_data["duration"] = dur // 1000 if dur > 1000 else dur
                     elif "douyinvod.com" in response.url and not captured_data.get("download_url"):
-                        if response.status == 200 or response.status == 206:
+                        if response.status in [200, 206]:
                             captured_data["download_url"] = response.url
                 except Exception:
                     pass
@@ -670,12 +944,16 @@ class DouyinBrowserDownloader:
         title = captured_data.get("title") or f"Douyin_Video_{vid or int(time.time())}"
         dur_sec = captured_data.get("duration", 0)
 
+        import downloader
         return {
             "success": True,
             "video_id": vid,
             "title": title,
-            "clean_title": sanitize_filename(title),
+            "clean_title": downloader.sanitize_filename_windows(title),
             "download_url": captured_data["download_url"],
+            "is_clean": captured_data.get("is_clean", False),
+            "backup_urls": captured_data.get("backup_urls", []),
+            "quality": captured_data.get("quality", "1080p"),
             "duration": dur_sec,
             "duration_formatted": f"{dur_sec // 60:02d}:{dur_sec % 60:02d}",
             "cover_url": captured_data.get("cover_url", ""),
@@ -683,127 +961,22 @@ class DouyinBrowserDownloader:
         }
 
 
-def download_stream_file(video_url, output_path, progress_cb=None, num_threads=4):
+def download_stream_file(video_url, output_path, progress_cb=None, num_threads=4, aweme_id=None, backup_urls=None, cancel_event=None, connection_pool=None):
     """
-    Tải file video MP4 từ URL trực tiếp qua Multi-Connection Range Downloader (IDM Standard 4 luồng).
-    Tự động fallback về đơn luồng nếu server không hỗ trợ Range.
+    Tải file video MP4 từ URL trực tiếp qua ResumableRangeDownloader (hỗ trợ HTTP 206, resume qua manifest, refresh URL 403/410, và connection pool).
     """
-    headers = {
-        "User-Agent": DEFAULT_USER_AGENT,
-        "Referer": "https://www.douyin.com/",
-        "Accept": "*/*"
-    }
-
-    session = requests.Session()
-    total_size = 0
-    accept_ranges = False
-
-    try:
-        head_res = session.head(video_url, headers=headers, allow_redirects=True, timeout=10)
-        if head_res.status_code in [200, 206]:
-            total_size = int(head_res.headers.get("content-length", 0))
-            accept_ranges = 'bytes' in head_res.headers.get('accept-ranges', '').lower() or head_res.status_code == 206
-    except Exception:
-        pass
-
-    if not total_size:
-        try:
-            test_res = session.get(video_url, headers={**headers, 'Range': 'bytes=0-1'}, stream=True, timeout=8)
-            if test_res.status_code == 206:
-                accept_ranges = True
-                cr = test_res.headers.get('content-range', '')
-                if '/' in cr:
-                    total_size = int(cr.split('/')[-1])
-        except Exception:
-            pass
-
-    part_path = output_path + ".part"
-
-    # 1. Đa luồng Range nếu hỗ trợ và file > 2MB
-    if accept_ranges and total_size > 2 * 1024 * 1024:
-        threads_count = min(num_threads, 6)
-        chunk_size_per_thread = total_size // threads_count
-        ranges = []
-        for i in range(threads_count):
-            start = i * chunk_size_per_thread
-            end = total_size - 1 if i == threads_count - 1 else (start + chunk_size_per_thread - 1)
-            ranges.append((i, start, end))
-
-        temp_files = [f"{part_path}.p{i}" for i in range(threads_count)]
-        downloaded_bytes = [0] * threads_count
-        lock = threading.Lock()
-        t0 = time.time()
-        last_cb_time = t0
-
-        def _download_range(idx, start_byte, end_byte):
-            nonlocal last_cb_time
-            req_h = headers.copy()
-            req_h['Range'] = f"bytes={start_byte}-{end_byte}"
-            temp_f = temp_files[idx]
-
-            with requests.get(video_url, headers=req_h, stream=True, timeout=25) as r:
-                r.raise_for_status()
-                with open(temp_f, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 512):
-                        if chunk:
-                            f.write(chunk)
-                            with lock:
-                                downloaded_bytes[idx] += len(chunk)
-                                total_dl = sum(downloaded_bytes)
-                                now = time.time()
-                                if progress_cb and (now - last_cb_time >= 0.15 or total_dl >= total_size):
-                                    last_cb_time = now
-                                    pct = int(total_dl / total_size * 100) if total_size > 0 else 0
-                                    el = now - t0
-                                    spd = (total_dl / (1024 * 1024)) / (el + 1e-6)
-                                    progress_cb(pct, total_dl, total_size, spd)
-
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=threads_count) as executor:
-                futures = [executor.submit(_download_range, r[0], r[1], r[2]) for r in ranges]
-                concurrent.futures.wait(futures)
-                for f in futures:
-                    f.result()
-
-            with open(output_path, 'wb') as out_f:
-                for temp_f in temp_files:
-                    if os.path.exists(temp_f):
-                        with open(temp_f, 'rb') as in_f:
-                            while True:
-                                b = in_f.read(1024 * 1024 * 2)
-                                if not b: break
-                                out_f.write(b)
-                        try: os.remove(temp_f)
-                        except Exception: pass
-            return output_path
-        except Exception:
-            for temp_f in temp_files:
-                if os.path.exists(temp_f):
-                    try: os.remove(temp_f)
-                    except Exception: pass
-
-    # 2. Fallback đơn luồng
-    res = requests.get(video_url, headers=headers, stream=True, timeout=30)
-    if res.status_code not in [200, 206]:
-        raise Exception(f"Máy chủ Douyin trả về mã lỗi HTTP: {res.status_code}")
-
-    total_size = int(res.headers.get("content-length", 0)) if not total_size else total_size
-    downloaded = 0
-    chunk_size = 1024 * 1024 # 1MB
-
-    t0 = time.time()
-    with open(output_path, "wb") as f:
-        for chunk in res.iter_content(chunk_size=chunk_size):
-            if chunk:
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total_size > 0 and progress_cb:
-                    pct = int(downloaded / total_size * 100)
-                    elapsed = time.time() - t0
-                    speed = (downloaded / (1024 * 1024)) / (elapsed + 1e-6)
-                    progress_cb(pct, downloaded, total_size, speed)
-
-    return output_path
+    import downloader
+    downloader_instance = downloader.ResumableRangeDownloader(
+        url=video_url,
+        output_path=output_path,
+        num_connections=num_threads,
+        aweme_id=aweme_id,
+        backup_urls=backup_urls,
+        progress_callback=progress_cb,
+        cancel_event=cancel_event,
+        connection_pool=connection_pool
+    )
+    return downloader_instance.download()
 
 
 BATCH_CANCEL_EVENT = threading.Event()
@@ -818,38 +991,77 @@ def reset_batch_cancel_event():
     BATCH_CANCEL_EVENT.clear()
 
 
-def download_channel_batch(video_list, output_dir=None, channel_name=None, max_workers=3, progress_cb=None):
+def download_channel_batch(video_list, output_dir=None, channel_name=None, max_workers=3, connections_per_file=2, prefix_index=True, auto_merge=False, merge_mode="auto", progress_cb=None):
     """
-    Tải hàng loạt danh sách video Douyin qua ThreadPoolExecutor (2-4 workers) với cơ chế hủy tức thì.
-    Hỗ trợ cả Video MP4 1080p và Album ảnh / Slide Photo Notes.
+    Tải hàng loạt danh sách video Douyin qua ThreadPoolExecutor với GlobalConnectionPool,
+    hỗ trợ resume qua batch_manifest.json, Windows-safe filename, và tự động gộp tập (auto_merge).
     """
     reset_batch_cancel_event()
 
     if not output_dir:
         output_dir = DOWNLOAD_DIR
         
+    import downloader
     if channel_name:
-        clean_ch_name = sanitize_filename(channel_name, max_len=50)
+        clean_ch_name = downloader.sanitize_filename_windows(channel_name, max_len=60)
         output_dir = os.path.join(output_dir, f"Douyin_{clean_ch_name}")
 
     os.makedirs(output_dir, exist_ok=True)
+
+    manifest_path = os.path.join(output_dir, "batch_manifest.json")
+    manifest = {
+        "channel_name": channel_name,
+        "total_count": len(video_list),
+        "created_at": time.time(),
+        "items": {}
+    }
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                old_m = json.load(mf)
+                if isinstance(old_m, dict) and "items" in old_m:
+                    manifest["items"] = old_m["items"]
+        except Exception:
+            pass
+
+    max_total_conn = max(4, min(12, max_workers * connections_per_file))
+    conn_pool = GlobalConnectionPool(max_total_connections=max_total_conn)
 
     total_count = len(video_list)
     results = []
     completed_count = 0
     lock = threading.Lock()
 
+    def save_batch_manifest():
+        with lock:
+            try:
+                with open(manifest_path, "w", encoding="utf-8") as mf:
+                    json.dump(manifest, mf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
     def _worker(idx, video_info):
         nonlocal completed_count
         if BATCH_CANCEL_EVENT.is_set():
             return None
 
-        vid_id = video_info.get("aweme_id") or f"vid_{idx}"
-        title = video_info.get("clean_title") or f"video_{vid_id}"
+        vid_id = str(video_info.get("aweme_id") or f"vid_{idx}")
+        title = video_info.get("title") or video_info.get("clean_title") or f"video_{vid_id}"
+
+        # Kiểm tra manifest đã thành công chưa
+        if vid_id in manifest["items"] and manifest["items"][vid_id].get("status") == "success":
+            saved_f = manifest["items"][vid_id].get("file_path")
+            if saved_f and os.path.exists(saved_f) and os.path.getsize(saved_f) > 100000:
+                with lock:
+                    completed_count += 1
+                    if progress_cb:
+                        progress_cb(completed_count, total_count, video_info, saved_f, "existed")
+                return saved_f
 
         # 1. Nếu là Album Ảnh / Slide Photo Note
         if video_info.get("is_images") and video_info.get("image_urls"):
-            album_dir_name = f"{idx+1:03d}_{title}_Album"
+            prefix_str = f"{idx+1:03d}_" if prefix_index else ""
+            album_dir_name = f"{prefix_str}{downloader.sanitize_filename_windows(title, max_len=60)}_Album"
             album_path = os.path.join(output_dir, album_dir_name)
             os.makedirs(album_path, exist_ok=True)
             
@@ -873,39 +1085,70 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
 
             with lock:
                 completed_count += 1
+                manifest["items"][vid_id] = {
+                    "status": "success",
+                    "file_path": album_path,
+                    "type": "album",
+                    "title": title
+                }
+                save_batch_manifest()
                 if progress_cb:
                     progress_cb(completed_count, total_count, video_info, album_path, "album_success")
             return album_path
 
         # 2. Nếu là Video MP4
-        file_name = f"{idx+1:03d}_{title}.mp4"
-        file_path = os.path.join(output_dir, file_name)
+        prefix = (idx + 1) if prefix_index else None
+        file_path = downloader.resolve_unique_filename(output_dir, title, ext='mp4', prefix_index=prefix)
 
         # Tránh tải lại nếu file đã tồn tại và đủ dung lượng
         if os.path.exists(file_path) and os.path.getsize(file_path) > 100000:
             with lock:
                 completed_count += 1
+                manifest["items"][vid_id] = {
+                    "status": "success",
+                    "file_path": file_path,
+                    "type": "video",
+                    "title": title
+                }
+                save_batch_manifest()
                 if progress_cb:
                     progress_cb(completed_count, total_count, video_info, file_path, "existed")
             return file_path
 
         # Lấy URL tải trực tiếp
         dl_url = video_info.get("download_url")
+        backup_urls = video_info.get("backup_urls", [])
         if not dl_url:
             try:
                 crawler = DouyinBrowserDownloader()
                 single_info = crawler.get_single_video_info(video_info.get("url") or vid_id)
                 dl_url = single_info.get("download_url")
+                backup_urls = single_info.get("backup_urls", [])
             except Exception:
                 pass
 
         if not dl_url or BATCH_CANCEL_EVENT.is_set():
+            with lock:
+                manifest["items"][vid_id] = {
+                    "status": "failed",
+                    "error": "No download URL found",
+                    "title": title
+                }
+                save_batch_manifest()
             return None
 
-        # Tải stream video đa kết nối
-        time.sleep(random.uniform(0.2, 0.6))
+        # Tải stream video với ResumableRangeDownloader
+        time.sleep(random.uniform(0.1, 0.4))
         try:
-            download_stream_file(dl_url, file_path)
+            download_stream_file(
+                video_url=dl_url,
+                output_path=file_path,
+                num_threads=connections_per_file,
+                aweme_id=vid_id,
+                backup_urls=backup_urls,
+                cancel_event=BATCH_CANCEL_EVENT,
+                connection_pool=conn_pool
+            )
             if BATCH_CANCEL_EVENT.is_set():
                 if os.path.exists(file_path):
                     try: os.remove(file_path)
@@ -914,16 +1157,29 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
 
             with lock:
                 completed_count += 1
+                manifest["items"][vid_id] = {
+                    "status": "success",
+                    "file_path": file_path,
+                    "type": "video",
+                    "title": title
+                }
+                save_batch_manifest()
                 if progress_cb:
                     progress_cb(completed_count, total_count, video_info, file_path, "success")
             return file_path
         except Exception as e:
             with lock:
+                manifest["items"][vid_id] = {
+                    "status": "failed",
+                    "error": str(e),
+                    "title": title
+                }
+                save_batch_manifest()
                 if progress_cb:
                     progress_cb(completed_count, total_count, video_info, None, f"error: {str(e)}")
             return None
 
-    workers_num = max(1, min(max_workers, 4))
+    workers_num = max(1, min(max_workers, 6))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers_num) as executor:
         futures = {executor.submit(_worker, i, v): i for i, v in enumerate(video_list)}
         for f in concurrent.futures.as_completed(futures):
@@ -934,4 +1190,71 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
             if res:
                 results.append(res)
 
-    return results
+    # Tự động gộp tập nếu auto_merge=True
+    merged_result_file = None
+    if auto_merge and not BATCH_CANCEL_EVENT.is_set():
+        ordered_files = []
+        for v in video_list:
+            v_id = str(v.get("aweme_id") or "")
+            item_data = manifest.get("items", {}).get(v_id, {})
+            fp = item_data.get("file_path")
+            if fp and os.path.exists(fp) and fp.lower().endswith(".mp4"):
+                ordered_files.append(fp)
+
+        if len(ordered_files) > 1:
+            try:
+                if progress_cb:
+                    progress_cb(completed_count, total_count, {}, None, "Đang ghép nối các tập video...")
+                merged_name = f"Merged_{downloader.sanitize_filename_windows(channel_name or 'Collection', max_len=60)}.mp4"
+                merged_path = os.path.join(output_dir, merged_name)
+                merged_result_file = downloader.merge_collection_episodes(ordered_files, merged_path, merge_mode=merge_mode)
+            except Exception as me:
+                print(f"[Douyin Merge Error]: {me}")
+
+    return {
+        "downloaded_files": results,
+        "total": len(results),
+        "merged_file": merged_result_file,
+        "manifest_path": manifest_path
+    }
+
+
+def retry_failed_batch_items(manifest_path_or_dir, max_workers=2, connections_per_file=2, progress_cb=None):
+    """
+    Đọc manifest và tải lại các video bị thất bại trong lần chạy trước.
+    """
+    if os.path.isdir(manifest_path_or_dir):
+        manifest_path = os.path.join(manifest_path_or_dir, "batch_manifest.json")
+    else:
+        manifest_path = manifest_path_or_dir
+
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f"Không tìm thấy manifest tại {manifest_path}")
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    failed_items = []
+    output_dir = os.path.dirname(manifest_path)
+
+    for aweme_id, item in manifest.get("items", {}).items():
+        if item.get("status") == "failed":
+            failed_items.append({
+                "aweme_id": aweme_id,
+                "title": item.get("title", f"video_{aweme_id}"),
+                "clean_title": item.get("title", f"video_{aweme_id}"),
+                "url": f"https://www.douyin.com/video/{aweme_id}"
+            })
+
+    if not failed_items:
+        return {"retried": 0, "message": "Không có video lỗi cần tải lại."}
+
+    return download_channel_batch(
+        failed_items,
+        output_dir=output_dir,
+        channel_name=manifest.get("channel_name"),
+        max_workers=max_workers,
+        connections_per_file=connections_per_file,
+        progress_cb=progress_cb
+    )
+

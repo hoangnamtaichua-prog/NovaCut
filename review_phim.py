@@ -131,56 +131,82 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
             yield f"data: 🎙️ Text: {narration}\n\n"
             yield f"data: [PROGRESS] {clip_pct}\n\n"
             
-            # Request TTS
+            # Request TTS có cache manifest
             audio_out_path = os.path.abspath(os.path.join('clips', 'audio', f'narration_{i}.wav'))
+            manifest_path = os.path.abspath(os.path.join('clips', 'audio', 'manifest.json'))
+            import hashlib
+            text_hash = hashlib.md5(f"{voice_id}_{narration}".encode('utf-8')).hexdigest()
             
-            # Calling the local API (Assuming it runs on port 5000)
-            try:
-                res = requests.post("http://127.0.0.1:5000/api/tts/kokoro", json={
-                    "text": narration,
-                    "voice_id": voice_id,
-                    "speed": 1.0,
-                    "output_dir": os.path.abspath(os.path.join('clips', 'audio')),
-                    "filename": f'narration_{i}.wav'
-                })
-                if res.status_code != 200:
-                    yield f"data: 🛑 Lỗi tạo TTS: {res.text}\n\n"
+            tts_cached = False
+            audio_dur = 3.0
+            if os.path.exists(manifest_path) and os.path.exists(audio_out_path) and os.path.getsize(audio_out_path) > 1000:
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as mf:
+                        m_data = json.load(mf)
+                        if m_data.get(str(i), {}).get('hash') == text_hash:
+                            audio_dur = float(m_data[str(i)].get('duration', 3.0))
+                            tts_cached = True
+                            yield f"data: ⚡ Đã nạp giọng đọc từ Cache ({audio_dur:.2f}s)\n\n"
+                except Exception:
+                    tts_cached = False
+
+            if not tts_cached:
+                try:
+                    res = requests.post("http://127.0.0.1:5000/api/tts/kokoro", json={
+                        "text": narration,
+                        "voice_id": voice_id,
+                        "speed": 1.0,
+                        "output_dir": os.path.abspath(os.path.join('clips', 'audio')),
+                        "filename": f'narration_{i}.wav'
+                    })
+                    if res.status_code != 200:
+                        yield f"data: 🛑 Lỗi tạo TTS: {res.text}\n\n"
+                        return
+                except Exception as e:
+                    yield f"data: 🛑 Lỗi gọi API TTS: {str(e)}. (Máy chủ Flask có đang chạy không?)\n\n"
                     return
-            except Exception as e:
-                yield f"data: 🛑 Lỗi gọi API TTS: {str(e)}. (Máy chủ Flask có đang chạy không?)\n\n"
-                return
+                
+                # Check audio duration using ffprobe
+                ffprobe_path = os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe.exe') if os.name == 'nt' else 'ffprobe'
+                dur_cmd = [ffprobe_path, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_out_path]
+                try:
+                    audio_dur = float(subprocess.check_output(dur_cmd, **ffmpeg_installer.get_stealth_subprocess_kwargs()).decode('utf-8').strip())
+                except Exception:
+                    audio_dur = 3.0
+                    
+                try:
+                    m_data = {}
+                    if os.path.exists(manifest_path):
+                        with open(manifest_path, 'r', encoding='utf-8') as mf:
+                            m_data = json.load(mf)
+                    m_data[str(i)] = {"hash": text_hash, "duration": audio_dur}
+                    with open(manifest_path, 'w', encoding='utf-8') as mf:
+                        json.dump(m_data, mf, indent=2)
+                except Exception:
+                    pass
             
-            # Check audio duration using ffprobe
-            ffprobe_path = os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe.exe') if os.name == 'nt' else 'ffprobe'
-            dur_cmd = [ffprobe_path, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_out_path]
-            audio_dur = 3.0 # Default Fallback
-            try:
-                audio_dur = float(subprocess.check_output(dur_cmd, **ffmpeg_installer.get_stealth_subprocess_kwargs()).decode('utf-8').strip())
-            except Exception:
-                pass
-            
-            video_dur = end_s - start_s
-            if video_dur <= 0: video_dur = 1.0
+            video_dur = max(0.1, end_s - start_s)
             
             # Video speed ratio
-            speed_ratio = video_dur / audio_dur
-            # clamp between 0.5 and 2.0 to avoid ridiculous speeds
-            speed_ratio = max(0.5, min(2.0, speed_ratio))
+            speed_ratio = video_dur / audio_dur if audio_dur > 0 else 1.0
+            # clamp between 0.65 and 1.5 to avoid unnatural motion
+            speed_ratio = max(0.65, min(1.5, speed_ratio))
             
             out_clip = os.path.abspath(os.path.join('clips', f'clip_{i}.mp4'))
             
             yield f"data: Đang cắt video & chỉnh tốc độ (Video: {video_dur:.1f}s, Audio: {audio_dur:.1f}s, Speed: {speed_ratio:.2f}x)...\n\n"
             
-            # FFmpeg make adjusted clip
-            # ffmpeg -ss start -to end -i video -i audio -filter_complex "[0:v]setpts=PTS/SPEED[v]" -map "[v]" -map 1:a out
+            # FFmpeg make standardized adjusted clip with PTS starting at 0 and normalized timebase
             cmd = [
                 ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
-                '-ss', str(start_s), '-to', str(end_s), '-i', video_path,
+                '-ss', str(start_s), '-t', str(video_dur), '-i', video_path,
                 '-i', audio_out_path,
-                '-filter_complex', f"[0:v]setpts=PTS/{speed_ratio}[v]",
+                '-filter_complex', f"[0:v]setpts=PTS/{speed_ratio:.6f},fps=30,settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v]",
                 '-map', '[v]', '-map', '1:a',
                 '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22',
+                '-r', '30', '-video_track_timescale', '90000', '-g', '60', '-keyint_min', '60',
                 '-c:a', 'aac', '-b:a', '192k',
+                '-t', str(audio_dur),
                 out_clip
             ]
             success = yield from _run_cmd_yield(cmd, f"Cắt cảnh {i+1}", check_stop)

@@ -29,3 +29,10 @@
 - Bất cứ khi nào người dùng gõ lệnh `/claude <nội dung>`, hỏi "hỏi Claude", "nhờ Claude viết", "Claude review", hoặc yêu cầu tối ưu hóa kịch bản review phim:
   1. Tự động kích hoạt Claude Runner (`node "C:\Users\hoang\.gemini\config\plugins\claude\scripts\claude-runner.mjs" task "<nội dung>"`) để Claude xử lý trực tiếp.
   2. Báo cáo nguyên văn (verbatim) phản hồi từ Claude cho người dùng.
+
+# Live Demo & UI Testing Rule (Chạy Demo & Kiểm Thử Trực Quan Có Giao Diện)
+- Mỗi khi người dùng yêu cầu làm demo hoặc yêu cầu test trực tiếp tính năng biên tập phim / giao diện:
+  1. TUYỆT ĐỐI KHÔNG dùng Antigravity Browser ngầm nếu có lỗi hoặc chạy chế độ headless vô hình.
+  2. Bắt buộc khởi chạy trình duyệt Chromium thật ở chế độ có giao diện trực quan (`headless: false`, headed mode) để người dùng nhìn thấy trực tiếp 100% từng thao tác click, nhập liệu, chuyển tab và kết quả trên màn hình desktop.
+  3. Duy trì nhịp độ thao tác vừa phải (slowMo hoặc giãn cách 0.5s - 1s) giúp người dùng theo dõi rõ ràng, mạch lạc từng bước.
+

@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-09-17 23:10:26",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5060",
+    "compute_capability": [
+      12,
+      0
+    ],
+    "torch_version": "2.8.0+cu128",
+    "vieneu_version": "3.8.1"
+  },
+  "dataset": {
+    "total_items": 5000,
+    "total_characters": 133506,
+    "success_count": 4999,
+    "error_count": 1,
+    "total_audio_duration_sec": 8561.12,
+    "total_audio_duration_min": 142.69
+  },
+  "timing": {
+    "model_load_sec": 8.56,
+    "inference_sec": 271.59,
+    "mixing_sec": 54.58,
+    "total_end_to_end_sec": 326.26,
+    "total_end_to_end_min": 5.44
+  },
+  "performance": {
+    "inference_rtf": 0.0317,
+    "e2e_rtf": 0.0381,
+    "avg_sec_per_sentence": 0.0653,
+    "throughput_sentences_per_sec": 15.33
+  },
+  "resources": {
+    "peak_vram_allocated_mb": 582.42,
+    "peak_vram_reserved_mb": 960.0,
+    "peak_ram_mb": 37.83
+  },
+  "target_evaluation": {
+    "target_sla_minutes": 30.0,
+    "aspirational_sla_minutes": 15.0,
+    "achieved_minutes": 5.44,
+    "status_30m": "PASS",
+    "status_15m": "PASS"
+  }
+}

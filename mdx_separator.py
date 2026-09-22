@@ -13,8 +13,12 @@ import math
 import shutil
 import subprocess
 import urllib.request
+import gc
+import warnings
 import numpy as np
 import torch
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 # ─── BƯỚC 0: TỰ ĐỘNG CÀI ĐẶT DIRECTML TRONG TIẾN TRÌNH CÔ LẬP (TRÁNH KHÓA DLL) ───
@@ -389,16 +393,31 @@ def separate_stems_mdx(
                 np.zeros((2, chunk_size - actual_chunk), dtype=np.float32)], axis=-1)
 
         window = np.tile(np.hanning(actual_chunk)[None, None, :], (1, 2, 1))
-        mix_part = torch.tensor([mix_part_], dtype=torch.float32)
+        mix_part = torch.from_numpy(np.ascontiguousarray(mix_part_)[None, ...]).to(dtype=torch.float32)
 
         with torch.no_grad():
             spek = stft(mix_part)
             spek[:, :, :3, :] *= 0
-            spec_pred = session.run(None, {input_name: spek.numpy()})[0]
-            tar_wave = stft.inverse(torch.tensor(spec_pred)).detach().numpy()
+            spek_np = spek.numpy()
+
+            try:
+                spec_pred = session.run(None, {input_name: spek_np})[0]
+            except Exception as e_run:
+                if hw_label != "CPU":
+                    log(f"[UVR-MDX] ⚠️ GPU DirectML inference gặp sự cố ({e_run}). Đang tự động chuyển sang CPU an toàn...")
+                    session, hw_label = get_mdx_session(model_name=model_name, device="cpu", logger_cb=logger_cb)
+                    input_name = session.get_inputs()[0].name
+                    spec_pred = session.run(None, {input_name: spek_np})[0]
+                else:
+                    raise
+
+            tar_wave = stft.inverse(torch.from_numpy(np.ascontiguousarray(spec_pred))).detach().numpy()
             tar_wave = tar_wave[..., :actual_chunk] * window
             divider[..., start:end] += window
             result[..., start:end]  += tar_wave
+
+        if chunk_idx % 4 == 0:
+            gc.collect()
 
         pct = 20 + int((chunk_idx / total_chunks) * 70)
         fps = chunk_idx / max(time.time() - start_time, 0.001)
@@ -422,8 +441,8 @@ def separate_stems_mdx(
     if progress_cb:
         progress_cb(92, "Đang xuất âm thanh PCM 16-bit...")
 
-    torchaudio.save(vocals_path, torch.tensor(vocals_np, dtype=torch.float32), sr)
-    torchaudio.save(instrumental_path, torch.tensor(inst_np,   dtype=torch.float32), sr)
+    torchaudio.save(vocals_path, torch.from_numpy(np.ascontiguousarray(vocals_np, dtype=np.float32)), sr)
+    torchaudio.save(instrumental_path, torch.from_numpy(np.ascontiguousarray(inst_np, dtype=np.float32)), sr)
 
     clean_bg_path = instrumental_path if remove_vocals else input_audio_path
     if progress_cb:
@@ -435,3 +454,57 @@ def separate_stems_mdx(
         "instrumental_path": instrumental_path,
         "clean_background_path": clean_bg_path,
     }
+
+
+# ─── CLI RUNNER CHO TIẾN TRÌNH CON CÔ LẬP (ISOLATED SUBPROCESS) ───────────────
+
+def main():
+    import argparse
+    import json
+
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
+        except Exception:
+            pass
+
+    parser = argparse.ArgumentParser(description="NovaCut UVR-MDX Stem Separator CLI")
+    parser.add_argument("--input", required=True, help="Input audio file path")
+    parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument("--model", default="UVR-MDX-NET-Inst_HQ_4.onnx", help="Model filename")
+    parser.add_argument("--device", default="auto", help="Hardware device: auto, gpu, directml, cpu")
+    parser.add_argument("--remove-vocals", action="store_true", default=True)
+    parser.add_argument("--remove-bgm", action="store_true", default=False)
+    parser.add_argument("--keep-sfx", action="store_true", default=True)
+    parser.add_argument("--overlap", type=float, default=0.5)
+
+    args = parser.parse_args()
+
+    def progress_cb(pct, msg):
+        print(f"[PROGRESS] {pct}|{msg}", flush=True)
+
+    def logger_cb(msg):
+        print(f"[LOG] {msg}", flush=True)
+
+    try:
+        res = separate_stems_mdx(
+            input_audio_path=args.input,
+            output_dir=args.output_dir,
+            model_name=args.model,
+            device=args.device,
+            remove_vocals=args.remove_vocals,
+            remove_bgm=args.remove_bgm,
+            keep_sfx=args.keep_sfx,
+            overlap=args.overlap,
+            progress_cb=progress_cb,
+            logger_cb=logger_cb
+        )
+        print(f"[RESULT] {json.dumps(res, ensure_ascii=False)}", flush=True)
+        sys.exit(0)
+    except Exception as e:
+        print(f"[ERROR] {str(e)}", flush=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -94,6 +94,10 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 @app.after_request
 def add_no_cache_headers(response):
+    # Cho phép bộ nhớ đệm cho luồng media, ảnh và Partial Content Range để WebView2 tua video mượt mà
+    if response.status_code == 206 or request.path.startswith(('/api/video', '/api/image', '/samples/')):
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -118,6 +122,9 @@ from routes.project import project_bp
 from routes.updater import updater_bp
 from routes.audio import audio_bp
 from routes.batch_queue import batch_queue_bp
+from routes.comic_review import comic_review_bp
+from routes.export_history import export_history_bp
+from routes.telegram import telegram_bp
 
 app.register_blueprint(core_bp)
 app.register_blueprint(video_edit_bp)
@@ -131,6 +138,9 @@ app.register_blueprint(project_bp)
 app.register_blueprint(updater_bp)
 app.register_blueprint(audio_bp)
 app.register_blueprint(batch_queue_bp)
+app.register_blueprint(comic_review_bp)
+app.register_blueprint(export_history_bp)
+app.register_blueprint(telegram_bp)
 
 def main():
     import threading
@@ -144,8 +154,13 @@ def main():
         except Exception:
             pass
 
-    # Cấu hình tham số Microsoft Edge WebView2 tối ưu, chống crash GPU DWM / TDR trên dòng card RTX 50-series
-    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--disable-features=CalculateNativeWinOcclusion,DirectCompositionVideoOverlays"
+    # Cấu hình tham số Microsoft Edge WebView2 tối ưu: bật GPU Rasterization, chống crash DWM / TDR
+    gpu_args = [
+        "--enable-gpu-rasterization",
+        "--ignore-gpu-blocklist",
+        "--disable-features=CalculateNativeWinOcclusion,DirectCompositionVideoOverlays"
+    ]
+    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(gpu_args)
 
     def apply_custom_window_icon():
         """Tự động gắn icon.ico vào Titlebar và Taskbar của cửa sổ NovaCut trên Windows."""
@@ -196,52 +211,92 @@ def main():
             register_user_path(path)
         return path
 
+    def register_dialog_results(result):
+        if not result:
+            return []
+        from routes.security import register_user_path
+        paths = []
+        for p in result:
+            if p:
+                norm_p = os.path.normpath(p)
+                register_user_path(norm_p)
+                paths.append(norm_p)
+        return paths
+
+    dialog_open = getattr(getattr(webview, 'FileDialog', None), 'OPEN', getattr(webview, 'OPEN_DIALOG', None))
+    dialog_folder = getattr(getattr(webview, 'FileDialog', None), 'FOLDER', getattr(webview, 'FOLDER_DIALOG', None))
+
     class Api:
         def select_input_video(self):
-            if window_ref:
-                file_types = ('Video files (*.mp4;*.mkv;*.avi)', 'All files (*.*)')
-                result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                file_types = ('Video files (*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v)', 'All files (*.*)')
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=False, file_types=file_types)
                 return register_dialog_result(result)
             return None
-            
+
+        def select_multiple_videos(self):
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                file_types = ('Video files (*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v)', 'All files (*.*)')
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=True, file_types=file_types)
+                return register_dialog_results(result)
+            return []
+
         def select_output_directory(self):
-            if window_ref:
-                result = window_ref.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                result = target_win.create_file_dialog(dialog_folder, allow_multiple=False)
                 return register_dialog_result(result)
             return None
             
-        
         def select_image_file(self):
-            import webview
-            file_types = ('Image Files (*.png;*.jpg;*.jpeg)', 'All files (*.*)')
-            result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-            return register_dialog_result(result)
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                file_types = ('Image Files (*.png;*.jpg;*.jpeg;*.webp)', 'All files (*.*)')
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=False, file_types=file_types)
+                return register_dialog_result(result)
+            return None
 
         def select_audio_file(self):
-            if window_ref:
-                file_types = ('Audio files (*.mp3;*.wav;*.m4a)', 'All files (*.*)')
-                result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                file_types = ('Audio files (*.mp3;*.wav;*.m4a;*.aac;*.flac)', 'All files (*.*)')
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=False, file_types=file_types)
                 return register_dialog_result(result)
             return None
             
         def select_model_file(self):
-            if window_ref:
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
                 file_types = ('Model files (*.pth)', 'All files (*.*)')
-                result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=False, file_types=file_types)
                 return register_dialog_result(result)
             return None
             
         def select_rvc_index_file(self):
-            if window_ref:
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
                 file_types = ('Index files (*.index)', 'All files (*.*)')
-                result = window_ref.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=False, file_types=file_types)
                 return register_dialog_result(result)
             return None
             
         def select_srt_file(self):
-            file_types = ('SRT files (*.srt)', 'All files (*.*)')
-            result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types)
-            return register_dialog_result(result)
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                file_types = ('SRT files (*.srt;*.vtt;*.ass)', 'All files (*.*)')
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=False, file_types=file_types)
+                return register_dialog_result(result)
+            return None
+
+        def select_multiple_srts(self):
+            target_win = window_ref or (webview.windows[0] if getattr(webview, 'windows', None) else None)
+            if target_win:
+                file_types = ('Subtitle files (*.srt;*.vtt;*.ass)', 'All files (*.*)')
+                result = target_win.create_file_dialog(dialog_open, allow_multiple=True, file_types=file_types)
+                return register_dialog_results(result)
+            return []
 
         def open_in_explorer(self, path):
             import subprocess
@@ -277,7 +332,8 @@ def main():
     window_ref = webview.create_window('NovaCut - AI Video & Review Editor', 'http://127.0.0.1:5000', js_api=api, width=1280, height=800, min_size=(1024, 768), maximized=True, fullscreen=False)
     try:
         # Bắt buộc sử dụng EdgeChromium (WebView2) để đảm bảo giao diện hiển thị chuẩn HTML5/CSS3
-        webview.start(gui='edgechromium')
+        # Tắt DevTools (debug=False) để giao diện gọn gàng, không tự mở cửa sổ inspect
+        webview.start(gui='edgechromium', debug=False)
     except Exception as e:
         print(f"[NovaCut] Chu y: Khong the khoi dong WebView2 ({e}). Dang tu dong mo ung dung tren trinh duyet mac dinh...")
         import webbrowser

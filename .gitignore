@@ -18,6 +18,14 @@ config.json
 gist_config.json
 client_secrets.json
 cookies.txt
+*cookie*.txt
+.*cookie*.txt
+.disclaimer_accepted
+telegram_config.json
+.telegram_config.json
+user_data/telegram_config.json
+*telegram_config*.json
+.telegram_token
 
 # Projects, Media & Temp
 projects/
@@ -43,11 +51,12 @@ dist/
 *.iso
 *.tar*
 
-# Virtual Environments
+# Virtual Environments & Runtimes
 .venv/
 venv/
 .asr_venv/
 rvc_env/
+runtimes/
 python-nuget/
 .qodo/
 .vscode/

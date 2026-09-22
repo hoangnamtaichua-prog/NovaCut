@@ -11,6 +11,7 @@ import threading
 import asr_manager
 from platformdirs import user_data_dir
 from flask import Flask, send_from_directory, Response, jsonify, request, send_file
+from translation_config import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
 
 def get_app_root_dir():
     """Xác định chính xác tuyệt đối thư mục gốc của ứng dụng NovaCut."""

@@ -58,9 +58,8 @@ PROCESSED_TX_FILE = os.path.join(DATA_DIR, '.processed_txs.dat')
 TOKEN_CACHE_FILE = os.path.join(DATA_DIR, '.token_quota.dat')
 # Lưu trạng thái (tier, expire_epoch, status) của lần sync cloud gần nhất đã thành công.
 # Dùng để phát hiện nâng gói / gia hạn khi check bản quyền lần đầu mỗi phiên.
-LAST_SYNC_STATE_FILE = os.path.join(DATA_DIR, '.last_sync_state.dat')
-MAX_PROMPT_TOKENS = 1_000_000      # 1,000,000 Token gửi đi (Prompt)
-MAX_COMPLETION_TOKENS = 1_000_000  # 1,000,000 Token nhận về (Completion)
+MAX_PROMPT_TOKENS = 1_000_000_000_000      # Không giới hạn (Unlimited)
+MAX_COMPLETION_TOKENS = 1_000_000_000_000  # Không giới hạn (Unlimited)
 
 # Secret Salt bảo mật chống giả mạo chữ ký HMAC cục bộ và định danh HWID máy
 DEFAULT_LOCAL_SALT = "AMS_SECRET_SALT_2026_@GOOGLE_DEEPMIND_ANTIGRAVITY_SECURE_KEY"
@@ -226,6 +225,91 @@ DEFAULT_CONFIG = {
     }
 }
 
+DISCLAIMER_MARKER_FILE = os.path.join(DATA_DIR, '.disclaimer_accepted')
+_DISCLAIMER_REG_PATH = r"Software\AMS_MovieShorts\Security"
+
+def is_disclaimer_accepted() -> bool:
+    """
+    Kiểm tra xem máy tính này đã từng xác nhận cam kết bản quyền hay chưa.
+    Sử dụng cơ chế đa tầng (Registry Windows -> Marker File -> Config JSON)
+    đảm bảo không bao giờ bị mất hoặc hiện lại trên cùng 1 máy tính.
+    """
+    # 1. Kiểm tra Windows Registry (bền vững nhất trên Windows)
+    if os.name == 'nt':
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _DISCLAIMER_REG_PATH, 0, winreg.KEY_READ) as key:
+                val, _ = winreg.QueryValueEx(key, "DisclaimerAccepted")
+                if str(val).strip() in ("1", "true", "True"):
+                    return True
+        except Exception:
+            pass
+
+    # 2. Kiểm tra Marker File bí mật trong DATA_DIR hoặc ROOT_DIR
+    for mpath in (DISCLAIMER_MARKER_FILE, os.path.join(ROOT_DIR, '.disclaimer_accepted')):
+        try:
+            if os.path.exists(mpath):
+                with open(mpath, 'r', encoding='utf-8') as f:
+                    content = f.read().strip().lower()
+                    if content in ('1', 'true'):
+                        return True
+        except Exception:
+            pass
+
+    # 3. Kiểm tra trong CONFIG_FILE (%APPDATA%/NovaCut/license_config.json) hoặc legacy_cfg
+    for cpath in (CONFIG_FILE, os.path.join(ROOT_DIR, 'license_config.json')):
+        try:
+            if os.path.exists(cpath):
+                with open(cpath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if bool(data.get('disclaimer_accepted')):
+                        set_disclaimer_accepted(True)
+                        return True
+        except Exception:
+            pass
+
+    return False
+
+
+def set_disclaimer_accepted(accepted: bool = True) -> None:
+    """
+    Lưu vĩnh viễn trạng thái chấp thuận cam kết bản quyền vào cả 3 tầng lưu trữ.
+    """
+    # 1. Ghi vào Windows Registry
+    if os.name == 'nt':
+        try:
+            import winreg
+            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, _DISCLAIMER_REG_PATH)
+            winreg.SetValueEx(key, "DisclaimerAccepted", 0, winreg.REG_SZ, "1" if accepted else "0")
+            winreg.CloseKey(key)
+        except Exception:
+            pass
+
+    # 2. Ghi vào Marker File bí mật
+    for mpath in (DISCLAIMER_MARKER_FILE, os.path.join(ROOT_DIR, '.disclaimer_accepted')):
+        try:
+            os.makedirs(os.path.dirname(mpath), exist_ok=True)
+            with open(mpath, 'w', encoding='utf-8') as f:
+                f.write("1" if accepted else "0")
+        except Exception:
+            pass
+
+    # 3. Ghi vào CONFIG_FILE và ROOT_DIR/license_config.json
+    for cpath in (CONFIG_FILE, os.path.join(ROOT_DIR, 'license_config.json')):
+        try:
+            data = {}
+            if os.path.exists(cpath):
+                with open(cpath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            data['disclaimer_accepted'] = bool(accepted)
+            data['disclaimer_accepted_at'] = time.time()
+            os.makedirs(os.path.dirname(cpath), exist_ok=True)
+            with open(cpath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
+
+
 def load_app_config():
     """Đọc cấu hình cloud và thông tin thanh toán do bản phát hành quản lý."""
     cfg = {**DEFAULT_CONFIG, "prices": dict(DEFAULT_CONFIG["prices"])}
@@ -258,13 +342,6 @@ def load_app_config():
         except Exception:
             pass
 
-    # Không nhận endpoint hoặc credential từ AppData. Nếu người dùng có thể
-    # trỏ app tới server của họ và tự chọn token, họ cũng có thể tự ký phản hồi
-    # HMAC để vượt bản quyền. EXE mới dùng resource bootstrap chỉ-đọc; môi
-    # trường triển khai đáng tin cậy có thể ghi đè ở bên dưới.
-
-    # Cho phép cấu hình ở môi trường triển khai đáng tin cậy ghi đè khi cần,
-    # nhưng không dùng dữ liệu tùy ý trong AppData.
     for key, env_name in (
         ("bank_code", "NOVACUT_BANK_CODE"),
         ("bank_account", "NOVACUT_BANK_ACCOUNT"),
@@ -273,12 +350,17 @@ def load_app_config():
         value = os.environ.get(env_name, "").strip()
         if value:
             cfg[key] = value
+
+    # Đồng bộ trạng thái chấp thuận cam kết bản quyền
+    cfg["disclaimer_accepted"] = is_disclaimer_accepted()
     return cfg
 
 def save_app_config(new_cfg):
     """Lưu cấu hình server-side."""
     cfg = load_app_config()
     cfg.update(new_cfg)
+    if 'disclaimer_accepted' in new_cfg:
+        set_disclaimer_accepted(bool(new_cfg['disclaimer_accepted']))
     try:
         os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -388,7 +470,7 @@ def _set_machine_trial_anchor(expire_epoch):
 def get_hardware_raw_components():
     """Thu thập thông số phần cứng máy tính (Motherboard UUID + CPU ID + BaseBoard Serial) với Registry cache siêu tốc."""
     global _CACHED_RAW_HWID
-    if _CACHED_RAW_HWID:
+    if _CACHED_RAW_HWID and not any('FALLBACK' in p for p in _CACHED_RAW_HWID.split('|')):
         return _CACHED_RAW_HWID
 
     # 1. Đọc nhanh từ Registry Cache (0.01ms)
@@ -398,8 +480,10 @@ def get_hardware_raw_components():
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\AMS_MovieShorts\Security", 0, winreg.KEY_READ) as key:
                 val, _ = winreg.QueryValueEx(key, "HardwareAnchor")
                 if val and len(val.split('|')) == 3:
-                    _CACHED_RAW_HWID = val
-                    return _CACHED_RAW_HWID
+                    parts = val.split('|')
+                    if not any('FALLBACK' in p for p in parts):
+                        _CACHED_RAW_HWID = val
+                        return _CACHED_RAW_HWID
     except Exception:
         pass
 
@@ -408,22 +492,63 @@ def get_hardware_raw_components():
     board_str = ""
 
     if os.name == 'nt':
+        import winreg
+
+        # Thử lấy nhanh bằng PowerShell CimInstance (ưu tiên cao nhất)
         try:
-            # Lấy đồng thời cả 3 thông số trong 1 lệnh PowerShell duy nhất
             ps_cmd = "$u=(Get-CimInstance Win32_ComputerSystemProduct).UUID; $c=(Get-CimInstance Win32_Processor).ProcessorId; $b=(Get-CimInstance Win32_BaseBoard).SerialNumber; \"$u|$c|$b\""
-            res = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, creationflags=0x08000000 if os.name == 'nt' else 0)
+            res = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, creationflags=0x08000000)
             if res.returncode == 0 and res.stdout.strip():
                 parts = res.stdout.strip().split('|')
-                if len(parts) >= 1: uuid_str = parts[0].strip()
-                if len(parts) >= 2: cpu_str = parts[1].strip()
-                if len(parts) >= 3: board_str = parts[2].strip()
+                if len(parts) >= 1 and parts[0].strip(): uuid_str = parts[0].strip()
+                if len(parts) >= 2 and parts[1].strip(): cpu_str = parts[1].strip()
+                if len(parts) >= 3 and parts[2].strip(): board_str = parts[2].strip()
         except Exception:
             pass
 
+        # Fallback 1: Đọc trực tiếp từ Windows Registry (tức thời <0.01ms, không bị chặn bởi PowerShell hay Antivirus)
+        if not uuid_str:
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0, winreg.KEY_READ) as k:
+                    guid_val, _ = winreg.QueryValueEx(k, "MachineGuid")
+                    if guid_val and str(guid_val).strip():
+                        uuid_str = str(guid_val).strip()
+            except Exception:
+                pass
+
+        if not cpu_str:
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0", 0, winreg.KEY_READ) as k:
+                    for field in ["ProcessorNameString", "Identifier", "VendorIdentifier"]:
+                        try:
+                            val, _ = winreg.QueryValueEx(k, field)
+                            if val and str(val).strip():
+                                cpu_str = str(val).strip()
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        if not board_str:
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\BIOS", 0, winreg.KEY_READ) as k:
+                    for field in ["BaseBoardProduct", "BaseBoardSerialNumber", "SystemSerialNumber"]:
+                        try:
+                            val, _ = winreg.QueryValueEx(k, field)
+                            if val and str(val).strip() and str(val).strip().lower() not in ("none", "default string", "to be filled by o.e.m."):
+                                board_str = str(val).strip()
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        # Fallback 2: WMIC nếu vẫn còn thiếu
         if not uuid_str:
             try:
                 cmd = ['wmic', 'csproduct', 'get', 'uuid']
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3, creationflags=0x08000000 if os.name == 'nt' else 0)
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3, creationflags=0x08000000)
                 lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and 'UUID' not in l.upper()]
                 if lines: uuid_str = lines[0]
             except Exception:
@@ -441,15 +566,16 @@ def get_hardware_raw_components():
 
     _CACHED_RAW_HWID = f"{uuid_str.upper()}|{cpu_str.upper()}|{board_str.upper()}"
 
-    # Lưu vào Registry Cache để lần sau đọc trong 0.01ms
-    try:
-        if os.name == 'nt':
-            import winreg
-            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\AMS_MovieShorts\Security")
-            winreg.SetValueEx(key, "HardwareAnchor", 0, winreg.REG_SZ, _CACHED_RAW_HWID)
-            winreg.CloseKey(key)
-    except Exception:
-        pass
+    # Chỉ lưu vào Registry Cache nếu không chứa chuỗi FALLBACK
+    if not any('FALLBACK' in p for p in (uuid_str, cpu_str, board_str)):
+        try:
+            if os.name == 'nt':
+                import winreg
+                key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\AMS_MovieShorts\Security")
+                winreg.SetValueEx(key, "HardwareAnchor", 0, winreg.REG_SZ, _CACHED_RAW_HWID)
+                winreg.CloseKey(key)
+        except Exception:
+            pass
 
     return _CACHED_RAW_HWID
 
@@ -654,19 +780,9 @@ def save_token_quota_stats(stats):
 
 def check_token_quota():
     """
-    Kiểm tra xem người dùng đã vượt quá hạn mức 1,000,000 token gửi đi (Prompt)
-    hoặc 1,000,000 token nhận về (Completion) hay chưa.
+    Kiểm tra hạn mức token.
+    Đã gỡ bỏ toàn bộ giới hạn token: Không giới hạn (Unlimited Token).
     """
-    stats = load_token_quota_stats()
-    prompt_used = stats.get("prompt_tokens", 0)
-    completion_used = stats.get("completion_tokens", 0)
-
-    if prompt_used >= MAX_PROMPT_TOKENS:
-        return False, f"⚠️ Bạn đã đạt giới hạn tối đa 1,000,000 Token gửi đi (Prompt: {prompt_used:,} / 1,000,000). Vui lòng liên hệ Admin để nâng cấp thêm Token!"
-
-    if completion_used >= MAX_COMPLETION_TOKENS:
-        return False, f"⚠️ Bạn đã đạt giới hạn tối đa 1,000,000 Token nhận về (Completion: {completion_used:,} / 1,000,000). Vui lòng liên hệ Admin để nâng cấp thêm Token!"
-
     return True, "OK"
 
 
@@ -841,7 +957,7 @@ def schedule_background_cloud_sync():
         return False
 
 
-def get_current_license_status(force_cloud_sync=False):
+def _get_current_license_status_raw(force_cloud_sync=False):
     """
     Trả về thông tin bản quyền hiện tại của máy tính trong < 1ms.
     Tự động tính toán số ngày / giờ còn lại và trạng thái hợp lệ.
@@ -1058,6 +1174,15 @@ def get_current_license_status(force_cloud_sync=False):
             "features": PACKAGE_TIERS["unlicensed"]["features"],
             "can_activate_trial": can_trial
         }
+
+
+def get_current_license_status(force_cloud_sync=False):
+    """
+    Trả về thông tin bản quyền và trạng thái cam kết bản quyền đa tầng.
+    """
+    status = _get_current_license_status_raw(force_cloud_sync=force_cloud_sync)
+    status["disclaimer_accepted"] = is_disclaimer_accepted()
+    return status
 
 
 def check_permission(feature_name):

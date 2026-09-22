@@ -1,0 +1,7 @@
+1
+00:00:00,000 --> 00:00:04,000
+Phu de thu nghiem
+
+2
+00:00:05,000 --> 00:00:10,000
+Kiem tra toc do xuat phim

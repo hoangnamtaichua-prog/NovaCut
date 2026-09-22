@@ -399,6 +399,7 @@ class BatchQueueManager:
     # =========================================================================
     def _worker_loop(self):
         logger.info("Batch Queue Worker started.")
+        batch_started_at = time.time()
         while self.is_running:
             if self.stop_requested:
                 break
@@ -443,6 +444,41 @@ class BatchQueueManager:
                 self.broadcast('task_finished', next_task.to_dict())
                 self.broadcast('queue_updated', self.get_state())
 
+                # Gửi thông báo Telegram cho từng video (thành công hoặc thất bại)
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled and notifier.notify_per_video:
+                        task_duration = (next_task.finished_at - next_task.started_at) if (next_task.finished_at and next_task.started_at) else None
+                        curr_idx = next((i + 1 for i, t in enumerate(self.tasks) if t.id == next_task.id), 1)
+                        tot_count = len(self.tasks)
+                        task_title = next_task.title or (os.path.basename(next_task.file_path) if next_task.file_path else next_task.source_url)
+                        task_user_id = getattr(next_task, 'user_id', None)
+                        if next_task.status == 'completed':
+                            notifier.notify_video_success(
+                                video_title=task_title,
+                                output_path=next_task.output_path,
+                                duration_sec=task_duration,
+                                current_index=curr_idx,
+                                total_count=tot_count,
+                                preset_name=getattr(next_task, 'preset', ''),
+                                task_id=next_task.id,
+                                user_id=task_user_id,
+                            )
+                        elif next_task.status == 'failed':
+                            notifier.notify_video_failure(
+                                video_title=task_title,
+                                error_message=next_task.error_message,
+                                duration_sec=task_duration,
+                                current_index=curr_idx,
+                                total_count=tot_count,
+                                preset_name=getattr(next_task, 'preset', ''),
+                                task_id=next_task.id,
+                                user_id=task_user_id,
+                            )
+                except Exception as te:
+                    logger.warning(f"Lỗi thông báo Telegram video {next_task.id}: {te}")
+
             time.sleep(1.0)
 
         with self._state_lock:
@@ -450,6 +486,42 @@ class BatchQueueManager:
             self.is_paused = False
             self.current_task_id = None
             self.save_state()
+
+        # Gửi thông báo Telegram khi hoàn tất toàn bộ batch hoặc khi bị hủy
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_batch_done:
+                st = self.get_state()
+                stats = st.get('stats', {})
+                tot = stats.get('total', 0)
+                comp = stats.get('completed', 0)
+                fail = stats.get('failed', 0)
+                batch_user_id = getattr(self.tasks[0], 'user_id', None) if self.tasks else None
+                if self.stop_requested:
+                    notifier.notify_batch_cancelled(
+                        total_count=tot,
+                        completed_count=comp,
+                        failed_count=fail,
+                        start_time=batch_started_at,
+                        end_time=time.time(),
+                        batch_id=f"batch_{int(batch_started_at)}",
+                        user_id=batch_user_id,
+                    )
+                elif tot > 0:
+                    notifier.notify_batch_completed(
+                        total_count=tot,
+                        success_count=comp,
+                        failed_count=fail,
+                        cancelled_count=stats.get('pending', 0),
+                        start_time=batch_started_at,
+                        end_time=time.time(),
+                        output_dir=self.default_output_dir,
+                        batch_id=f"batch_{int(batch_started_at)}",
+                        user_id=batch_user_id,
+                    )
+        except Exception as te:
+            logger.warning(f"Lỗi thông báo Telegram hoàn tất batch: {te}")
 
         self.broadcast('queue_finished', self.get_state())
 
@@ -536,7 +608,11 @@ class BatchQueueManager:
         # -------------------------------------------------------------
         preset = task.preset or 'review'
         config = task.preset_config or {}
-        output_dir = config.get('output_dir') or self.default_output_dir
+        output_dir = config.get('output_dir')
+        if config.get('save_to_source_dir') and local_video_path and os.path.isfile(local_video_path):
+            output_dir = os.path.dirname(os.path.abspath(local_video_path))
+        if not output_dir:
+            output_dir = self.default_output_dir
         os.makedirs(output_dir, exist_ok=True)
 
         base_name = os.path.splitext(os.path.basename(local_video_path))[0]
@@ -561,6 +637,24 @@ class BatchQueueManager:
         task.status = 'completed'
         task.progress = 100
         task.current_step_text = f"✅ Hoàn thành xuất sắc: {os.path.basename(final_output_path)}"
+
+        try:
+            from export_history import get_export_history_service
+            service = get_export_history_service()
+            service.record_export(
+                output_path=final_output_path,
+                source_tool='batch_queue',
+                source_kind='batch_queue',
+                export_run_id=f"batch_{task.id}",
+                job_id=task.id,
+                params={
+                    'preset': preset,
+                    'input_video': local_video_path,
+                    'task_name': getattr(task, 'name', os.path.basename(final_output_path))
+                }
+            )
+        except Exception as he:
+            logger.error(f"[ExportHistory] Error recording batch queue export: {he}")
 
     # =========================================================================
     # MEDIA & SUBTITLE HELPERS
@@ -704,7 +798,8 @@ class BatchQueueManager:
             'bgm': config.get('bgm', {'enabled': bgm_vol > 0, 'volume': bgm_vol}),
             'review_style': config.get('review_style', 'dramatic'),
             'custom_style_prompt': config.get('custom_style_prompt', ''),
-            'temp_dir': job_temp_dir
+            'temp_dir': job_temp_dir,
+            'skip_history_recording': True
         }
 
         update_progress(65, "Đang tạo giọng đọc TTS & cắt ghép phân cảnh...")
@@ -766,9 +861,10 @@ class BatchQueueManager:
             'output_name': os.path.basename(output_path),
             'aspect_ratio': config.get('aspect_ratio', 'original'),
             'auto_subtitles': bool(config.get('auto_subtitles', True)),
-            'remove_original_vocals': bool(config.get('remove_original_vocals', True)),
+            'remove_original_vocals': bool(config.get('remove_original_vocals', False)),
             'bgm': config.get('bgm', {'enabled': False}),
-            'temp_dir': job_temp_dir
+            'temp_dir': job_temp_dir,
+            'skip_history_recording': True
         }
 
         update_progress(50, "Đang xử lý lồng tiếng AI Narration...")

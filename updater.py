@@ -471,21 +471,9 @@ def apply_patch_zip(zip_path, target_version=""):
 
 
 def restart_application():
-    """Khởi động lại ứng dụng một cách êm ái sau khi cập nhật."""
-    def _restart():
-        time.sleep(1.2)
-        try:
-            if getattr(sys, 'frozen', False):
-                # Ứng dụng đã đóng gói EXE
-                subprocess.Popen([sys.executable] + sys.argv[1:])
-            else:
-                # Chạy từ mã nguồn Python
-                subprocess.Popen([sys.executable, os.path.join(ROOT_DIR, 'web_app.py')])
-        except Exception as e:
-            print(f"Lỗi khởi động lại app: {e}")
-        os._exit(0)
-
-    threading.Thread(target=_restart, daemon=True).start()
+    """Đã gỡ bỏ tính năng tự động chạy lại python web_app.py theo yêu cầu của người dùng."""
+    print("[NovaCut] Tự động khởi động lại (Auto-Restart) đã được vô hiệu hóa hoàn toàn.")
+    return True
 
 
 _UPDATE_THREAD_LOCK = threading.Lock()
@@ -573,10 +561,7 @@ def perform_auto_update_async(download_url_or_file_id, target_version, expected_
             # 3. Hoàn thành
             _update_progress_state["status"] = "completed"
             _update_progress_state["percent"] = 100
-            _update_progress_state["message"] = f"🎉 Cập nhật lên v{target_version} thành công! Đang tự động khởi động lại..."
-            
-            # 4. Tự động khởi động lại sau 1.5 giây
-            restart_application()
+            _update_progress_state["message"] = f"🎉 Cập nhật lên v{target_version} thành công! Bạn có thể tiếp tục sử dụng bình thường."
 
         except Exception as e:
             _update_progress_state["is_updating"] = False
@@ -592,3 +577,17 @@ def perform_auto_update_async(download_url_or_file_id, target_version, expected_
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
     return thread
+
+
+def restart_application():
+    """Khởi động lại ứng dụng một cách an toàn."""
+    def _do_restart():
+        time.sleep(0.8)
+        import sys, subprocess
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([sys.executable] + sys.argv[1:])
+        else:
+            subprocess.Popen([sys.executable, os.path.join(ROOT_DIR, 'web_app.py')])
+        os._exit(0)
+    threading.Thread(target=_do_restart, daemon=True).start()
+

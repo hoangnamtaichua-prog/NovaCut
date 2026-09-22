@@ -788,11 +788,12 @@ export class VideoStudioSuite {
         this.hideTransformBox = hideTransformBox;
 
         container.addEventListener('mouseenter', () => {
-            if (window.isDrawingRegion || (document.getElementById('videoOverlay')?.style.display === 'block')) return;
+            if (window.isDrawingRegion || window.isEditingBlurBox || window.isEditingSubBox || window.isDraggingAnyBox || container.classList.contains('is-editing-blur') || container.classList.contains('is-editing-sub') || container.classList.contains('is-drawing-region') || container.classList.contains('is-editing-overlay') || (document.getElementById('videoOverlay')?.style.display === 'block')) return;
             showTransformBox();
         });
         container.addEventListener('click', (e) => {
-            if (window.isDrawingRegion || (document.getElementById('videoOverlay')?.style.display === 'block')) return;
+            if (window.isDrawingRegion || window.isEditingBlurBox || window.isEditingSubBox || window.isDraggingAnyBox || container.classList.contains('is-editing-blur') || container.classList.contains('is-editing-sub') || container.classList.contains('is-drawing-region') || container.classList.contains('is-editing-overlay') || (document.getElementById('videoOverlay')?.style.display === 'block')) return;
+            if (e.target.closest('.sub-preview-box') || e.target.closest('.blur-adjust-box') || e.target.closest('.ocr-draw-box') || e.target.closest('.box-resize-handle') || e.target.closest('.video-logo-overlay') || e.target.closest('.logo-resize-handle') || e.target.closest('.overlay-interactive-box') || e.target.closest('.overlay-adjust-badge') || e.target.closest('#videoOverlayLayersContainer')) return;
             if (!e.target.closest('.studio-docked-toolbar') && !e.target.closest('.player-controls')) {
                 showTransformBox();
             }
@@ -803,22 +804,14 @@ export class VideoStudioSuite {
             if (window.isDrawingRegion || (document.getElementById('videoOverlay')?.style.display === 'block')) return;
             if (this.state.isTransformBoxVisible || e.ctrlKey || e.altKey) {
                 e.preventDefault();
-                showTransformBox();
-                const factor = e.deltaY < 0 ? 1.08 : 0.92;
+                const delta = e.deltaY;
+                const factor = delta < 0 ? 1.05 : 0.95;
                 let newZoom = (this.state.zoom || 1.0) * factor;
                 newZoom = Math.max(0.15, Math.min(5.0, Math.round(newZoom * 100) / 100));
 
                 this.state.zoom = newZoom;
                 this.applyTransforms();
                 this.updateTransformBadge(true);
-                this.notifyChange();
-
-                if (badgeTimeout) clearTimeout(badgeTimeout);
-                badgeTimeout = setTimeout(() => {
-                    if (this.transformBadgeEl && !isInteracting) {
-                        this.transformBadgeEl.classList.remove('visible');
-                    }
-                }, 2000);
             }
         }, { passive: false });
 
@@ -833,10 +826,10 @@ export class VideoStudioSuite {
         });
 
         const getCenterScreenCoords = () => {
-            const rect = (this.canvasFrame || container).getBoundingClientRect();
+            const rect = frame.getBoundingClientRect();
             return {
-                x: rect.left + (rect.width / 2) + (this.state.panX || 0),
-                y: rect.top + (rect.height / 2) + (this.state.panY || 0)
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
             };
         };
 
@@ -916,6 +909,29 @@ export class VideoStudioSuite {
             frame.addEventListener('mousedown', (e) => {
                 if (e.button !== 0) return;
                 if (e.target.closest('.capcut-anchor-corner') || e.target.closest('.capcut-anchor-edge') || e.target.closest('.capcut-anchor-rotate-wrap')) return;
+
+                // Kiểm tra xem chuột có đang nhấn vào overlay tương tác (OCR, Blur, Subtitle, Logo, Custom Overlays) không
+                const under = document.elementsFromPoint ? document.elementsFromPoint(e.clientX, e.clientY) : [];
+                const isOverlayClick = under.some(el => 
+                    el !== frame && el !== container && (
+                        el.closest?.('.ocr-draw-box') || 
+                        el.closest?.('.blur-adjust-box') || 
+                        el.closest?.('.box-resize-handle') || 
+                        el.closest?.('.sub-preview-box') ||
+                        el.closest?.('.delogo-preview-overlay') ||
+                        el.closest?.('#dynamicBlurOverlay') ||
+                        el.closest?.('#reviewDynamicBlurOverlay') ||
+                        el.closest?.('#videoLogoOverlay') ||
+                        el.closest?.('#reviewVideoLogoOverlay') ||
+                        el.closest?.('.overlay-interactive-box') ||
+                        el.closest?.('.overlay-adjust-badge') ||
+                        el.closest?.('#videoOverlayLayersContainer')
+                    )
+                );
+                if (isOverlayClick || window.isDraggingAnyBox) {
+                    return;
+                }
+
                 e.stopPropagation();
                 e.preventDefault();
 
@@ -927,6 +943,57 @@ export class VideoStudioSuite {
                 startPanY = this.state.panY || 0;
 
                 this.updateTransformBadge(true);
+            });
+
+            // Khi di chuột qua overlay tương tác, nhường quyền hover cho overlay
+            frame.addEventListener('mousemove', (e) => {
+                if (isInteracting) return;
+                const under = document.elementsFromPoint ? document.elementsFromPoint(e.clientX, e.clientY) : [];
+                const isOverInteractive = under.some(el => 
+                    el !== frame && el !== container && (
+                        el.closest?.('.ocr-draw-box') || 
+                        el.closest?.('.blur-adjust-box') || 
+                        el.closest?.('.box-resize-handle') || 
+                        el.closest?.('.sub-preview-box') ||
+                        el.closest?.('.delogo-preview-overlay') ||
+                        el.closest?.('#dynamicBlurOverlay') ||
+                        el.closest?.('#reviewDynamicBlurOverlay') ||
+                        el.closest?.('#videoLogoOverlay') ||
+                        el.closest?.('#reviewVideoLogoOverlay') ||
+                        el.closest?.('.overlay-interactive-box') ||
+                        el.closest?.('.overlay-adjust-badge') ||
+                        el.closest?.('#videoOverlayLayersContainer')
+                    )
+                );
+                if (isOverInteractive || window.isDraggingAnyBox) {
+                    frame.style.pointerEvents = 'none';
+                }
+            });
+
+            container.addEventListener('mousemove', (e) => {
+                if (isInteracting) return;
+                if (frame && frame.style.pointerEvents === 'none') {
+                    const under = document.elementsFromPoint ? document.elementsFromPoint(e.clientX, e.clientY) : [];
+                    const isOverInteractive = under.some(el => 
+                        el !== frame && el !== container && (
+                            el.closest?.('.ocr-draw-box') || 
+                            el.closest?.('.blur-adjust-box') || 
+                            el.closest?.('.box-resize-handle') || 
+                            el.closest?.('.sub-preview-box') ||
+                            el.closest?.('.delogo-preview-overlay') ||
+                            el.closest?.('#dynamicBlurOverlay') ||
+                            el.closest?.('#reviewDynamicBlurOverlay') ||
+                            el.closest?.('#videoLogoOverlay') ||
+                            el.closest?.('#reviewVideoLogoOverlay') ||
+                            el.closest?.('.overlay-interactive-box') ||
+                            el.closest?.('.overlay-adjust-badge') ||
+                            el.closest?.('#videoOverlayLayersContainer')
+                        )
+                    );
+                    if (!isOverInteractive && !window.isDraggingAnyBox) {
+                        frame.style.pointerEvents = '';
+                    }
+                }
             });
 
             // Double click reset

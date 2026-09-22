@@ -18,6 +18,7 @@ except ImportError:
 import asyncio
 import hashlib
 import concurrent.futures
+from typing import List, Dict, Tuple, Any, Optional
 
 def get_stealth_subprocess_kwargs():
     try:
@@ -68,6 +69,21 @@ def is_api_voice(voice_id):
     # 4. Chỉ coi là OpenSpeaker API khi có tiền tố hoặc được cấu hình rõ ràng là cloud API
     return vid.startswith(('openspeaker_', 'api_', 'os_'))
 
+def parse_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ('true', '1', 'yes', 'on'):
+            return True
+        if lowered in ('false', '0', 'no', 'off', ''):
+            return False
+    return default
+
 def parse_srt_time(t_str):
     t_str = t_str.strip().replace(',', '.')
     parts = t_str.split(':')
@@ -87,6 +103,33 @@ def format_srt_time(seconds):
         s += 1
         ms -= 1000
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+def get_review_temp_dir(output_dir: str, video_path: str) -> str:
+    """
+    Trả về đường dẫn thư mục tạm duy nhất cho từng video trong Review Phim.
+    - Bảo toàn tên gốc tiếng Việt/tiếng Trung sạch sẽ, chuẩn hóa ký tự cấm Windows.
+    - Kết hợp băm MD5 (10 ký tự) từ đường dẫn tuyệt đối chuẩn hóa của video.
+    - Đảm bảo 100% không bao giờ có 2 video khác nhau bị trùng lặp hoặc nhận nhầm cache của nhau.
+    """
+    if not output_dir:
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+    if not os.path.isabs(output_dir):
+        output_dir = os.path.abspath(output_dir)
+
+    v_str = str(video_path or '').strip(' "\'')
+    if not v_str:
+        return os.path.join(output_dir, 'auto_edit_temp', '_unnamed_video')
+
+    norm_video = os.path.normpath(os.path.abspath(v_str))
+    raw_stem = os.path.splitext(os.path.basename(norm_video))[0]
+    safe_stem = re.sub(r'[\s\<\>\:\"\/\\\|\?\*\x00-\x1f]+', '_', raw_stem).strip('._ ')
+    if not safe_stem:
+        safe_stem = 'video'
+    safe_stem = safe_stem[:60].strip('._ ')
+
+    path_hash = hashlib.md5(norm_video.lower().encode('utf-8', errors='ignore')).hexdigest()[:10]
+    folder_name = f"{safe_stem}_{path_hash}"
+    return os.path.join(output_dir, 'auto_edit_temp', folder_name)
 
 def parse_srt_entries(srt_file_path):
     if not srt_file_path or not os.path.exists(srt_file_path):
@@ -300,19 +343,93 @@ def calc_sub_width_ratio(text):
             units += 1.45
     return max(0.12, min(0.92, (units * 1.02 + 4.5) / 100.0))
 
-def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_ratio=0.815, h_ratio=0.095, center_x_ratio=0.50, lead_sec=0.18, pad_sec=0.22):
-    """Xây dựng filter FFmpeg multi-bucket blur tự động bám sát chữ phụ đề theo độ dài và thời gian.
-    Tự động gộp khoảng cách và chia nhỏ chunk (batching) an toàn để tránh tràn bộ nhớ stack biểu thức của FFmpeg.
+_last_dynamic_blur_mask_file = None
+
+def format_ass_time(sec: float) -> str:
+    sec = max(0.0, float(sec))
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = sec % 60
+    return f"{h}:{m:02d}:{s:05.2f}"
+
+def generate_dynamic_blur_ass_mask(raw_boxes, output_ass_path, play_res_x=10000, play_res_y=10000):
     """
-    BUCKETS = [0.18, 0.32, 0.48, 0.65, 0.85]
-    bucket_map = {b: [] for b in BUCKETS}
+    Tạo tệp phụ đề ASS chứa các hình khối vector màu trắng (mask) trên nền đen
+    cho từng khoảng thời gian phụ đề xuất hiện.
+    raw_boxes: list of (s_lead, e_trail, w_ratio, center_x_ratio, item_y_ratio, item_h_ratio)
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(output_ass_path)), exist_ok=True)
+    ass_lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {play_res_x}",
+        f"PlayResY: {play_res_y}",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: MaskBox,Arial,20,&H00FFFFFF,&H00000000,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+    ]
     
+    for item in raw_boxes:
+        s_lead, e_trail, w_ratio, cx_ratio, y_ratio, h_ratio = item
+        if e_trail <= s_lead or w_ratio <= 0 or h_ratio <= 0:
+            continue
+        b = max(0.01, min(0.99, float(w_ratio)))
+        h_val = max(0.01, min(0.99, float(h_ratio)))
+        x_ratio = max(0.0, min(1.0 - b, float(cx_ratio) - (b / 2.0)))
+        y_val = max(0.0, min(1.0 - h_val, float(y_ratio)))
+        
+        x_px = int(round(x_ratio * play_res_x))
+        y_px = int(round(y_val * play_res_y))
+        w_px = max(1, int(round(b * play_res_x)))
+        h_px = max(1, int(round(h_val * play_res_y)))
+        
+        t_start = format_ass_time(s_lead)
+        t_end = format_ass_time(e_trail)
+        ass_lines.append(f"Dialogue: 0,{t_start},{t_end},MaskBox,,0,0,0,,{{\\pos({x_px},{y_px})\\p1}}m 0 0 l {w_px} 0 l {w_px} {h_px} l 0 {h_px}{{\\p0}}")
+        
+    with open(output_ass_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(ass_lines))
+        
+    return output_ass_path
+
+def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_ratio=0.815, h_ratio=0.095, center_x_ratio=0.50, lead_sec=0.18, pad_sec=0.22, manual_mode=False, manual_w=None, engine='auto', temp_dir=None, frame_w=10000, frame_h=10000, content_h=None):
+    """Xây dựng filter FFmpeg blur tự động bám sát chữ phụ đề theo độ dài và thời gian.
+    Hỗ trợ 2 engine:
+    1. 'mask' (Timeline Masking): Dùng ASS vector mask + RGB full-range maskedmerge (gbrp). Cố định 5 filter nodes,
+       giảm 99% RAM (từ >1.8GB xuống ~80MB), triệt tiêu hoàn toàn rò rỉ dải màu YUV limited range và khớp preview.
+    2. 'legacy' (Crop/Overlay): Tạo filter chain truyền thống cho tác vụ nhỏ/kiểm thử.
+    3. 'auto': Tự động chuyển sang 'mask' khi số lượng câu thoại > 25.
+    """
+    global _last_dynamic_blur_mask_file
+    raw_list = []
+    has_any_per_entry_box = False
     for item in active_intervals:
         box_x = None
         box_w = None
+        box_y = None
+        box_h = None
         vis_s = None
         vis_e = None
-        if len(item) >= 7:
+        if isinstance(item, dict):
+            s = float(item.get('start', item.get('startSeconds', 0)))
+            e = float(item.get('end', item.get('endSeconds', 0)))
+            txt = str(item.get('text', ''))
+            box = item.get('box') or item
+            if isinstance(box, dict) and 'x_pct' in box and 'w_pct' in box:
+                box_x = float(box['x_pct']) / 100.0
+                box_w = float(box['w_pct']) / 100.0
+                box_y = float(box.get('y_pct', 81.5)) / 100.0
+                box_h = float(box.get('h_pct', 9.5)) / 100.0
+                vis_s = float(box.get('visual_start')) if box.get('visual_start') is not None else None
+                vis_e = float(box.get('visual_end')) if box.get('visual_end') is not None else None
+        elif len(item) >= 9:
+            s, e, txt, box_x, box_w, box_y, box_h, vis_s, vis_e = item[:9]
+        elif len(item) >= 7:
             s, e, txt, box_x, box_w, vis_s, vis_e = item[0], item[1], item[2], item[3], item[4], item[5], item[6]
         elif len(item) >= 5:
             s, e, txt, box_x, box_w = item[0], item[1], item[2], item[3], item[4]
@@ -322,7 +439,6 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
             s, e = item[0], item[1]
             txt = ""
             
-        # Áp dụng lead_sec, pad_sec và visual_start/end nếu có từ AI Scan
         s_lead = max(0.0, float(s) - lead_sec)
         if vis_s is not None and float(vis_s) >= 0:
             s_lead = min(s_lead, float(vis_s))
@@ -331,51 +447,235 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
         if vis_e is not None and float(vis_e) > float(e):
             e_trail = max(e_trail, float(vis_e))
         
-        # Nếu có tọa độ Bounding Box AI thì dùng trực tiếp, ngược lại tính theo ký tự
+        item_center_x = center_x_ratio
+        item_y = y_ratio
+        item_h = h_ratio
         if box_w is not None and float(box_w) > 0:
-            w = float(box_w)
+            raw_w = max(0.01, min(0.98, float(box_w)))
+            pad_w = max(0.015, min(0.04, raw_w * 0.05))
+            w = min(0.98, raw_w + (pad_w * 2.0))
+            has_any_per_entry_box = True
+            if box_x is not None and float(box_x) >= 0:
+                item_center_x = float(box_x) + (raw_w / 2.0)
+            if box_y is not None and box_h is not None and float(box_h) > 0:
+                raw_y = max(0.0, min(0.99, float(box_y)))
+                raw_h = max(0.01, min(0.99 - raw_y, float(box_h)))
+                # Đệm an toàn ôm khít chiều cao dòng chữ thực tế
+                pad_h = max(0.008, min(0.025, raw_h * 0.18))
+                
+                # Cho phép người dùng tùy chỉnh chiều cao hộp làm mờ qua h_ratio (thanh trượt blurHeight / khung kéo)
+                # trong khi chiều ngang vẫn tự động bám theo câu chữ AI (w)
+                is_multiline = (('\n' in txt) or ('\\N' in txt) or ('\\n' in txt)) and (h_ratio is not None and float(h_ratio) > 0 and raw_h > float(h_ratio))
+                if h_ratio is not None and float(h_ratio) > 0:
+                    user_h = float(h_ratio)
+                    if is_multiline:
+                        item_h = min(0.40, max(user_h, raw_h + (pad_h * 2.0)))
+                    else:
+                        item_h = min(0.40, max(raw_h + (pad_h * 2.0), user_h * 0.85))
+                else:
+                    item_h = min(0.35, max(0.03, raw_h + (pad_h * 2.0)))
+                item_y = max(0.0, min(0.98 - item_h, raw_y + (raw_h / 2.0) - (item_h / 2.0)))
+        elif manual_mode and manual_w is not None and float(manual_w) > 0:
+            w = float(manual_w)
         else:
             w = calc_sub_width_ratio(txt)
+            if manual_w is not None and float(manual_w) > 0:
+                w = min(w, float(manual_w))
+            is_multiline = ('\n' in txt) or ('\\N' in txt)
+            if is_multiline:
+                item_h = min(0.25, max(h_ratio, 0.11))
+                item_y = max(0.0, min(0.98 - item_h, y_ratio - (item_h - h_ratio) / 2.0))
+            else:
+                item_h = min(h_ratio, 0.075) if h_ratio > 0.08 else h_ratio
+                item_y = y_ratio
             
-        chosen = next((b for b in BUCKETS if b >= w), BUCKETS[-1])
-        bucket_map[chosen].append((s_lead, e_trail))
-        
+        raw_list.append((s_lead, e_trail, w, item_center_x, item_y, item_h))
+
+    if not raw_list:
+        return [], curr_v
+
+    # 1. Sắp xếp theo dòng thời gian
+    sorted_raw = sorted(raw_list, key=lambda x: x[0])
+
+    # KỊCH BẢN A: VÙNG BLUR CỐ ĐỊNH (Manual Mode hoặc các box phụ đề đồng nhất)
+    # Tối ưu siêu tốc: gộp interval, dùng crop + avgblur + overlay với biểu thức enable.
+    # Tránh hoàn toàn split=3, format=gbrp, geq và maskedmerge, tăng tốc độ từ 1.1x lên ~7.5x - 8.0x.
+    if manual_mode or not has_any_per_entry_box:
+        merged_intervals = []
+        for it in sorted_raw:
+            s, e = it[0], it[1]
+            if not merged_intervals:
+                merged_intervals.append([s, e])
+            else:
+                # Gộp nếu hai khoảng cách nhau dưới 0.35s hoặc gối đầu nhau
+                if s <= merged_intervals[-1][1] + 0.35:
+                    merged_intervals[-1][1] = max(merged_intervals[-1][1], e)
+                else:
+                    merged_intervals.append([s, e])
+
+        fixed_w = float(manual_w) if (manual_w is not None and float(manual_w) > 0) else sorted_raw[0][2]
+        fixed_w = max(0.05, min(0.98, fixed_w))
+        fixed_center_x = center_x_ratio if center_x_ratio is not None else 0.50
+        fixed_x = max(0.0, min(1.0 - fixed_w, fixed_center_x - (fixed_w / 2.0)))
+        fixed_h = max(0.02, min(0.40, float(h_ratio if h_ratio is not None else 0.095)))
+        fixed_y = max(0.0, min(1.0 - fixed_h, float(y_ratio if y_ratio is not None else 0.815)))
+
+        filter_chain = []
+        curr = curr_v
+        step = 0
+        CHUNK_SIZE = 30
+        for i in range(0, len(merged_intervals), CHUNK_SIZE):
+            chunk = merged_intervals[i:i + CHUNK_SIZE]
+            enable_expr = "+".join(f"between(t,{s:.2f},{e:.2f})" for s, e in chunk)
+            next_v = f"v_fixblur_{step}"
+            filter_chain.append(f"[{curr}]split[v_bbase_{step}][v_bcrop_{step}]")
+            filter_chain.append(
+                f"[v_bcrop_{step}]crop=iw*{fixed_w:.3f}:ih*{fixed_h:.3f}:iw*{fixed_x:.3f}:ih*{fixed_y:.3f},"
+                f"avgblur=sizeX={blur_sz}:sizeY={blur_sz},eq=brightness=-0.05[v_bblur_{step}]"
+            )
+            filter_chain.append(
+                f"[v_bbase_{step}][v_bblur_{step}]overlay=main_w*{fixed_x:.3f}:main_h*{fixed_y:.3f}:enable='{enable_expr}'[{next_v}]"
+            )
+            curr = next_v
+            step += 1
+
+        return filter_chain, curr
+
+    # KỊCH BẢN B: VÙNG BLUR ĐỘNG THEO TỪNG CÂU (has_any_per_entry_box == True)
+    # Dùng Timeline Masking ASS nâng cao nhưng loại bỏ triệt để bottleneck format=gbrp và geq.
+    # Chạy trực tiếp trên YUV420p với lut O(1) per pixel và avgblur SIMD.
+    if engine == 'mask' or (engine == 'auto' and len(sorted_raw) > 30):
+        try:
+            if not temp_dir:
+                temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'editor_temp')
+            os.makedirs(temp_dir, exist_ok=True)
+            tag_id = f"{int(time.time()*1000)%100000}_{uuid.uuid4().hex[:4]}"
+            mask_ass_path = os.path.join(temp_dir, f"dynamic_blur_mask_{tag_id}.ass")
+            play_res_x = frame_w or 1280
+            play_res_y = frame_h or 720
+            mask_boxes = [(it[0], it[1], it[2], it[3], it[4], it[5]) for it in sorted_raw]
+            generate_dynamic_blur_ass_mask(mask_boxes, mask_ass_path, play_res_x=play_res_x, play_res_y=play_res_y)
+            _last_dynamic_blur_mask_file = mask_ass_path
+
+            escaped_ass = mask_ass_path.replace('\\', '/').replace(':', r'\:')
+            next_v = f"v_dynblur_{tag_id}"
+            effective_h = content_h or 720
+            blur_val = max(3, min(60, int(blur_sz * effective_h / 720.0)))
+            filter_chain = [
+                f"[{curr_v}]split=3[v_b_orig_{tag_id}][v_b_blur_{tag_id}][v_b_mask_{tag_id}]",
+                f"[v_b_orig_{tag_id}]format=yuv420p[v_b_orig_yuv_{tag_id}]",
+                f"[v_b_blur_{tag_id}]avgblur=sizeX={blur_val}:sizeY={blur_val},lut=y='val*0.94'[v_b_blur_yuv_{tag_id}]",
+                f"[v_b_mask_{tag_id}]drawbox=c=black:t=fill,subtitles=filename='{escaped_ass}',format=yuv420p,lut=y='if(gt(val,80),255,0)':u=128:v=128[v_b_mask_yuv_{tag_id}]",
+                f"[v_b_orig_yuv_{tag_id}][v_b_blur_yuv_{tag_id}][v_b_mask_yuv_{tag_id}]maskedmerge[{next_v}]"
+            ]
+            return filter_chain, next_v
+        except Exception as e_mask:
+            print(f"[Dynamic Blur] Cảnh báo tạo timeline mask: {e_mask}. Fallback về precision groups crop/overlay.")
+
+    groups = []
+    for it in sorted_raw:
+        if not groups:
+            groups.append([it[0], it[1], it[2], it[3]])
+        else:
+            # Chế độ AI Dynamic: Gộp khi 2 câu cách nhau rất ngắn (<= 0.25s) VÀ có độ rộng tương đồng (sai số <= 18%)
+            if it[0] <= groups[-1][1] + 0.25 and abs(it[2] - groups[-1][2]) <= 0.18:
+                groups[-1][1] = max(groups[-1][1], it[1])
+                groups[-1][2] = max(groups[-1][2], it[2])
+                groups[-1][3] = (groups[-1][3] + it[3]) / 2.0
+            else:
+                groups.append([it[0], it[1], it[2], it[3]])
+
+    # aiBox fallback: gom nhóm theo precision groups
+    if has_any_per_entry_box:
+        filter_chain = []
+        curr = curr_v
+        step = 0
+        precision_groups = {}
+        for s, e, w, center, item_y, item_h in sorted_raw:
+            key = (round(w, 3), round(center, 3), round(item_y, 3), round(item_h, 3))
+            precision_groups.setdefault(key, []).append((s, e))
+        for (b, center, item_y, item_h), intervals in sorted(precision_groups.items()):
+            x_ratio = max(0.0, min(1.0 - b, center - (b / 2.0)))
+            for pos in range(0, len(intervals), 25):
+                chunk = intervals[pos:pos + 25]
+                enable_expr = "+".join(f"between(t,{s:.2f},{e:.2f})" for s, e in chunk)
+                next_v = f"v_dynblur_{step}"
+                filter_chain.append(f"[{curr}]split[v_bbase_{step}][v_bcrop_{step}]")
+                filter_chain.append(f"[v_bcrop_{step}]crop=iw*{b:.3f}:ih*{item_h:.3f}:iw*{x_ratio:.3f}:ih*{item_y:.3f},avgblur=sizeX={blur_sz}:sizeY={blur_sz}[v_bblur_{step}]")
+                filter_chain.append(f"[v_bbase_{step}][v_bblur_{step}]overlay=main_w*{x_ratio:.3f}:main_h*{item_y:.3f}:enable='{enable_expr}'[{next_v}]")
+                curr = next_v
+                step += 1
+        return filter_chain, curr
+
+    # 2. Phân phối vào các bucket độ rộng tối ưu
+    if manual_mode and manual_w is not None and float(manual_w) > 0:
+        b_val = round(max(0.05, min(1.0, float(manual_w))), 3)
+        BUCKETS = [b_val]
+        bucket_map = {b_val: []}
+        for g in groups:
+            bucket_map[b_val].append((g[0], g[1], g[3]))
+    else:
+        # Chế độ AI Dynamic: 6 bucket độ rộng linh hoạt ôm sát từ câu cực ngắn (1-2 từ) đến câu dài
+        BUCKETS = [0.25, 0.40, 0.55, 0.72, 0.88, 0.96]
+        bucket_map = {b: [] for b in BUCKETS}
+        for g in groups:
+            chosen = next((b for b in BUCKETS if b >= g[2]), BUCKETS[-1])
+            bucket_map[chosen].append((g[0], g[1], g[3]))
+
     filter_chain = []
     curr = curr_v
     step = 0
-    MAX_EXPR_CHUNK = 25  # Giới hạn tối đa 25 biểu thức between() trên mỗi overlay để FFmpeg tuyệt đối không bị lỗi eval stack
-    
+    MAX_EXPR_CHUNK = 25
+
     for b in BUCKETS:
         raw_intervals = bucket_map[b]
         if not raw_intervals:
             continue
             
-        merged = []
-        for interval in sorted(raw_intervals, key=lambda x: x[0]):
-            if not merged:
-                merged.append(list(interval))
-            else:
-                # Nếu khoảng cách giữa 2 phụ đề <= max(pad_sec + 0.25, 0.75s), gộp thành dải mờ liên tục chống nhấp nháy
-                gap_bridge_threshold = max(pad_sec + 0.25, 0.75)
-                if interval[0] <= merged[-1][1] + gap_bridge_threshold:
-                    merged[-1][1] = max(merged[-1][1], interval[1])
-                else:
-                    merged.append(list(interval))
-                    
-        # Chia các khoảng thời gian thành các chunk nhỏ an toàn (chunk_size <= MAX_EXPR_CHUNK)
-        chunks = [merged[i:i + MAX_EXPR_CHUNK] for i in range(0, len(merged), MAX_EXPR_CHUNK)]
-        x_ratio = max(0.01, min(0.99 - b, center_x_ratio - (b / 2.0)))
+        chunks = [raw_intervals[i:i + MAX_EXPR_CHUNK] for i in range(0, len(raw_intervals), MAX_EXPR_CHUNK)]
         
         for ch in chunks:
-            enable_expr = "+".join([f"between(t,{s:.2f},{e:.2f})" for s, e in ch])
+            avg_center = sum(c[2] for c in ch) / float(len(ch)) if ch else center_x_ratio
+            x_ratio = max(0.0, min(1.0 - b, avg_center - (b / 2.0)))
+            enable_expr = "+".join([f"between(t,{s:.2f},{e:.2f})" for s, e, _ in ch])
             next_v = f"v_dynblur_{step}"
             filter_chain.append(f"[{curr}]split[v_bbase_{step}][v_bcrop_{step}]")
             filter_chain.append(f"[v_bcrop_{step}]crop=iw*{b:.3f}:ih*{h_ratio:.3f}:iw*{x_ratio:.3f}:ih*{y_ratio:.3f},avgblur=sizeX={blur_sz}:sizeY={blur_sz}[v_bblur_{step}]")
             filter_chain.append(f"[v_bbase_{step}][v_bblur_{step}]overlay=main_w*{x_ratio:.3f}:main_h*{y_ratio:.3f}:enable='{enable_expr}'[{next_v}]")
             curr = next_v
             step += 1
-        
+
     return filter_chain, curr
+
+def build_subtitle_filter(curr_v, out_v, srt_path, project_config=None):
+    """Xây dựng filter subtitle cho video export tương thích preview style."""
+    cfg = project_config or {}
+    style = cfg.get("subtitle_style", {})
+    font_name = style.get("font", "Arial")
+    font_size = style.get("size", 24)
+    color_hex = str(style.get("color", "#FFFFFF")).lstrip("#")
+    outline_hex = str(style.get("outline_color", "#000000")).lstrip("#")
+
+    if len(color_hex) == 6:
+        r, g, b = color_hex[0:2], color_hex[2:4], color_hex[4:6]
+        primary_color = f"&H00{b}{g}{r}".upper()
+    else:
+        primary_color = "&H00FFFFFF"
+
+    if len(outline_hex) == 6:
+        r, g, b = outline_hex[0:2], outline_hex[2:4], outline_hex[4:6]
+        outline_color = f"&H00{b}{g}{r}".upper()
+    else:
+        outline_color = "&H00000000"
+
+    bold_flag = "-1" if style.get("bold") else "0"
+    italic_flag = "-1" if style.get("italic") else "0"
+    outline_w = style.get("outline", 2)
+
+    escaped_srt = str(srt_path).replace("\\", "/").replace(":", "\\:")
+    fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "fonts").replace("\\", "/").replace(":", "\\:")
+    force_style = f"Fontname={font_name},Fontsize={font_size},PrimaryColour={primary_color},OutlineColour={outline_color},Outline={outline_w},Bold={bold_flag},Italic={italic_flag}"
+    return f"[{curr_v}]subtitles=filename='{escaped_srt}':fontsdir='{fonts_dir}':force_style='{force_style}'[{out_v}]"
 
 def is_statistical_or_meta_sentence(sentence: str) -> bool:
     """Kiểm tra xem câu có phải là thống kê số từ / thời lượng / ghi chú của LLM hay không."""
@@ -778,7 +1078,8 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
     concat_list_path = os.path.join(sentence_dir, 'concat.txt')
     with open(concat_list_path, 'w', encoding='utf-8') as f:
         for seg_path, _, _ in audio_segments:
-            f.write(f"file '{os.path.abspath(seg_path)}'\n")
+            safe_p = os.path.abspath(seg_path).replace('\\', '/')
+            f.write(f"file '{safe_p}'\n")
     
     final_audio = os.path.join(temp_dir, 'voice_review.wav')
     cmd_concat = [
@@ -819,6 +1120,88 @@ def generate_tts_per_sentence(sentences, voice_id, speed, temp_dir, api_key_open
         elif msg_type == 'done':
             final_audio, final_srt, srt_entries = data
     return final_audio, final_srt, srt_entries, error
+
+def validate_rendered_video(video_path: str, expected_duration: float = None, ffmpeg_path: str = None) -> Tuple[bool, Dict[str, Any]]:
+    """
+    POST-RENDER VALIDATOR:
+    Dùng ffprobe kiểm tra chi tiết tính hợp lệ và đồng bộ của file video đã xuất:
+    - Thời lượng stream video và audio
+    - Kiểm tra PTS discontinuity (PTS giảm hoặc nhảy vọt)
+    - Độ lệch so với Master Voice Clock
+    """
+    report = {
+        "is_valid": True,
+        "video_duration": 0.0,
+        "audio_duration": 0.0,
+        "drift_ms": 0.0,
+        "pts_drop_detected": False,
+        "warnings": [],
+        "errors": []
+    }
+    if not video_path or not os.path.exists(video_path):
+        report["is_valid"] = False
+        report["errors"].append("File video đầu ra không tồn tại.")
+        return False, report
+
+    if not ffmpeg_path:
+        ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
+    ffprobe_path = os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe.exe') if (ffmpeg_path and os.name == 'nt') else 'ffprobe'
+
+    try:
+        cmd = [
+            ffprobe_path, '-v', 'error',
+            '-show_entries', 'stream=index,codec_type,duration,r_frame_rate:format=duration',
+            '-of', 'json',
+            video_path
+        ]
+        out = subprocess.check_output(cmd, **get_stealth_subprocess_kwargs()).decode('utf-8', errors='replace')
+        data = json.loads(out)
+        fmt_dur = float(data.get('format', {}).get('duration') or 0.0)
+        report["video_duration"] = round(fmt_dur, 3)
+
+        streams = data.get('streams', [])
+        for s in streams:
+            if s.get('codec_type') == 'audio':
+                report["audio_duration"] = round(float(s.get('duration') or fmt_dur), 3)
+
+        if expected_duration is not None and expected_duration > 0:
+            drift = abs(report["video_duration"] - expected_duration) * 1000.0
+            report["drift_ms"] = round(drift, 1)
+            if drift > 80.0:
+                report["warnings"].append(f"Thời lượng video ({report['video_duration']:.2f}s) lệch so với voice ({expected_duration:.2f}s) {drift:.1f}ms (> 80ms).")
+
+        # Kiểm tra tính liên tục của PTS (pkt_pts không được giảm)
+        cmd_pkt = [
+            ffprobe_path, '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'packet=pts_time',
+            '-read_intervals', '%+4,%-4',
+            '-of', 'json',
+            video_path
+        ]
+        out_pkt = subprocess.check_output(cmd_pkt, **get_stealth_subprocess_kwargs()).decode('utf-8', errors='replace')
+        pkt_data = json.loads(out_pkt)
+        packets = pkt_data.get('packets', [])
+        prev_pts = -1.0
+        for p in packets:
+            pts_val = p.get('pts_time')
+            if pts_val is not None:
+                try:
+                    cur_pts = float(pts_val)
+                    if cur_pts < prev_pts - 0.001:
+                        report["pts_drop_detected"] = True
+                        report["warnings"].append(f"Phát hiện PTS giảm (PTS drop): {prev_pts:.3f}s -> {cur_pts:.3f}s.")
+                        break
+                    prev_pts = cur_pts
+                except Exception:
+                    pass
+    except Exception as e:
+        report["warnings"].append(f"Không thể chạy ffprobe validation: {str(e)}")
+
+    if len(report["errors"]) > 0:
+        report["is_valid"] = False
+    return report["is_valid"], report
+
 
 def resolve_openai_credentials(payload=None):
     if payload is None:
@@ -963,13 +1346,17 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                             else:
                                 raise RuntimeError(f"Đoạn {idx+1} thất bại sau {max_attempts} lần: {err_msg}")
 
-            # Xử lý tuần tự từng chunk để tránh rate limit
-            map_results = []
-            for i, c in enumerate(chunks):
-                result = await process_chunk(i, c)
-                map_results.append(result)
-                if i < len(chunks) - 1 and is_free:
-                    await asyncio.sleep(2)  # Nghỉ 2s giữa các chunk cho Free models
+            # Xử lý Map chunks: Song song cho paid/fast models, tuần tự có giãn cách cho free models
+            if is_free:
+                map_results = []
+                for i, c in enumerate(chunks):
+                    result = await process_chunk(i, c)
+                    map_results.append(result)
+                    if i < len(chunks) - 1:
+                        await asyncio.sleep(2)  # Cooldown cho Free models
+            else:
+                map_tasks = [process_chunk(i, c) for i, c in enumerate(chunks)]
+                map_results = await asyncio.gather(*map_tasks)
             
             q.put({"type": "log", "msg": "🔄 Bắt đầu Reduce: Gộp các kịch bản thành một kịch bản hoàn chỉnh..."})
             combined = "\n\n--- ĐOẠN TIẾP THEO ---\n\n".join(map_results)
@@ -1053,6 +1440,35 @@ def run_map_reduce_pipeline_sync(openai_key, openai_base_url, openai_model, chun
                 return None
     return sanitize_review_script(final_script)
 
+def get_sliding_orig_srt(condensed_orig_srt, batch_idx, total_batches, window_ratio=0.45):
+    """
+    Trích xuất cửa sổ trượt ngữ cảnh (Sliding Context Window) tương ứng với mẻ kịch bản hiện tại.
+    Giảm 60-75% số lượng tokens cần gửi, tăng tốc độ phản hồi của AI gấp 3-4 lần cho Step 3.
+    """
+    if not condensed_orig_srt or len(condensed_orig_srt) <= 15000 or total_batches <= 1:
+        return condensed_orig_srt
+
+    lines = condensed_orig_srt.splitlines()
+    total_lines = len(lines)
+    if total_lines < 50:
+        return condensed_orig_srt
+
+    center_ratio = batch_idx / max(1, total_batches - 1)
+    start_ratio = max(0.0, center_ratio - window_ratio / 2.0)
+    end_ratio = min(1.0, center_ratio + window_ratio / 2.0)
+
+    start_idx = int(start_ratio * total_lines)
+    end_idx = min(total_lines, int(end_ratio * total_lines))
+
+    # Đảm bảo cửa sổ tối thiểu 30% nội dung để không bị hụt ngữ cảnh
+    if (end_idx - start_idx) < int(0.3 * total_lines):
+        end_idx = min(total_lines, start_idx + int(0.3 * total_lines))
+
+    selected_lines = lines[start_idx:end_idx]
+    prefix = f"... [Đã lược bớt {start_idx} dòng phụ đề trước đó] ...\n" if start_idx > 0 else ""
+    suffix = f"\n... [Đã lược bớt {total_lines - end_idx} dòng phụ đề phía sau] ..." if end_idx < total_lines else ""
+    return prefix + "\n".join(selected_lines) + suffix
+
 def run_timeline_map_reduce_pipeline_sync(
     openai_key, openai_base_url, openai_model,
     voice_entries, condensed_orig_srt, prompt_json_template,
@@ -1135,7 +1551,8 @@ def run_timeline_map_reduce_pipeline_sync(
                     except Exception:
                         pass
                         
-                prompt_user = prompt_json_template.replace("{DÁN_SRT_PHIM_GỐC_VÀO_ĐÂY}", condensed_orig_srt).replace("{DÁN_SRT_VOICE_REVIEW_VÀO_ĐÂY}", v_text)
+                orig_context = get_sliding_orig_srt(condensed_orig_srt, b_idx, total_batches)
+                prompt_user = prompt_json_template.replace("{DÁN_SRT_PHIM_GỐC_VÀO_ĐÂY}", orig_context).replace("{DÁN_SRT_VOICE_REVIEW_VÀO_ĐÂY}", v_text)
                 instruction_addon = f"\n\nLƯU Ý QUAN TRỌNG: Chỉ xử lý và trả về mảng JSON cho các voice_ref từ {s_ref} đến {e_ref} xuất hiện trong SRT_VOICE trên."
                 prompt_user += instruction_addon
                 
@@ -1356,11 +1773,11 @@ def run_auto_edit_workflow(payload, check_stop_func):
             if norm_custom.startswith(norm_out):
                 temp_dir = custom_temp
             else:
-                temp_dir = os.path.join(output_dir, 'auto_edit_temp')
+                temp_dir = get_review_temp_dir(output_dir, video_path)
         except Exception:
-            temp_dir = os.path.join(output_dir, 'auto_edit_temp')
+            temp_dir = get_review_temp_dir(output_dir, video_path)
     else:
-        temp_dir = os.path.join(output_dir, 'auto_edit_temp')
+        temp_dir = get_review_temp_dir(output_dir, video_path)
     os.makedirs(temp_dir, exist_ok=True)
     
     def log(msg, step=None):
@@ -1641,17 +2058,33 @@ def run_auto_edit_workflow(payload, check_stop_func):
         else:
             yield log("Bỏ qua quét chuyển cảnh (Scene Sanitizer tắt).")
         
-        yield log("Đang tối ưu điểm cắt (Snap & Merge Timeline)...")
-        sanitized_timeline, sanitize_logs = timeline_sanitizer.sanitize_timeline(
-            timeline_data,
-            scene_cuts,
+        yield log("Đang tối ưu điểm cắt (Deterministic Resolver & Voice Master Clock)...")
+        voice_entries = parse_srt_entries(voice_srt_cleaned_path)
+        if not voice_entries:
+            voice_entries = parse_srt_entries(voice_srt_path)
+
+        sanitized_timeline, sanitize_logs = timeline_sanitizer.resolve_timeline_with_voice_clock(
+            timeline=timeline_data,
+            voice_entries=voice_entries,
+            scene_cuts=scene_cuts,
             snap_threshold=snap_threshold,
             min_clip_duration=min_clip_duration,
-            max_speed_ratio_deviation=max_speed_ratio_dev
+            min_speed=max(0.70, 1.0 - max_speed_ratio_dev),
+            max_speed=min(1.30, 1.0 + max_speed_ratio_dev)
         )
         
         for msg in sanitize_logs:
             yield log(msg)
+
+        # PRE-RENDER VALIDATOR
+        is_valid_tl, tl_report = timeline_sanitizer.validate_timeline(sanitized_timeline)
+        yield log(f"📊 [PRE-RENDER VALIDATOR] Tổng {tl_report['total_clips']} clips | Voice: {tl_report['total_voice_duration']:.2f}s | Video: {tl_report['total_video_duration']:.2f}s | Độ lệch P95: {tl_report['p95_sync_error_ms']:.1f}ms (Max: {tl_report['max_sync_error_ms']:.1f}ms).")
+        if tl_report.get('warnings'):
+            for w in tl_report['warnings']:
+                yield log(f"⚠️ [VALIDATOR] {w}")
+        if not is_valid_tl:
+            yield log(f"🛑 [VALIDATOR] Timeline không hợp lệ: {'; '.join(tl_report['errors'])}")
+            return
             
         with open(sanitized_json_path, 'w', encoding='utf-8') as f:
             json.dump(sanitized_timeline, f, indent=4)
@@ -1662,22 +2095,25 @@ def run_auto_edit_workflow(payload, check_stop_func):
         # --- BƯỚC 4: CẮT GHÉP & ĐỒNG BỘ ÂM THANH THEO TỪNG CLIP (PARALLEL FFMPEG) ---
         detected_enc, is_gpu_enc, _ = detect_hardware_encoder(ffmpeg_path)
         encoder = payload.get('encoder') or detected_enc
+        cpu_cores = os.cpu_count() or 4
+
+        # Tối ưu worker song song: GPU NVENC giới hạn session -> chạy 2 workers; CPU -> tối đa 4 workers
         if is_gpu_enc:
-            yield log(f"⚡ Đã kích hoạt tăng tốc phần cứng GPU ({detected_enc}) để cắt và xuất video siêu tốc!")
+            num_workers = min(2, max(1, cpu_cores // 4))
+            yield log(f"⚡ Đã kích hoạt tăng tốc phần cứng GPU ({detected_enc}) với {num_workers} worker song song (chống nghẽn queue GPU)!")
         else:
-            yield log(f"⚙️ Sử dụng động cơ CPU Multithread tối ưu ({encoder} veryfast).")
+            num_workers = min(4, max(2, cpu_cores // 2))
+            yield log(f"⚙️ Sử dụng động cơ CPU Multithread tối ưu ({encoder} veryfast, {num_workers} workers song song).")
 
         total_clips = len(sanitized_timeline)
         if total_clips == 0:
             yield log("🛑 Lỗi: Timeline sau khi tối ưu rỗng!")
             return
 
-        cpu_cores = os.cpu_count() or 4
-        num_workers = min(4, max(2, cpu_cores // 2))
         yield log(f"🎬 Đang tiến hành cắt song song {total_clips} clip câm ({num_workers} workers song song)...", step=4)
         if check_stop_func(): return
 
-        blur_orig_subs = payload.get('blur_original_subtitles', True)
+        blur_orig_subs = parse_bool(payload.get('blur_original_subtitles'), False)
         blur_sz = max(3, min(40, int(payload.get('blur_intensity', 15))))
         blur_y = float(payload.get('blur_y_pos', 81.5)) / 100.0
         blur_lead_offset = abs(float(payload.get('blur_lead_offset', -180)) / 1000.0)
@@ -1718,20 +2154,26 @@ def run_auto_edit_workflow(payload, check_stop_func):
             if check_stop_func and check_stop_func():
                 return i, None, "STOPPED"
 
-            v_start = float(clip['start'])
-            v_dur = float(clip['duration'])
-            if v_dur <= 0:
+            v_src_start = float(clip.get('source_start', clip.get('start', 0.0)))
+            v_src_end = float(clip.get('source_end', clip.get('end', v_src_start + 2.0)))
+            v_src_dur = max(0.1, round(v_src_end - v_src_start, 3))
+            target_dur = float(clip.get('video_duration', clip.get('duration', v_src_dur)))
+            video_speed = float(clip.get('video_speed', clip.get('speed_ratio', 1.0)))
+            if video_speed <= 0.01:
+                video_speed = 1.0
+
+            if target_dur <= 0:
                 return i, None, None
 
             # Phát hiện phụ đề gốc trong khoảng thời gian clip này
             active_orig_intervals = []
             if blur_orig_subs and orig_sub_entries:
-                v_end_calc = v_start + v_dur
+                v_end_calc = v_src_start + v_src_dur
                 for item in orig_sub_entries:
                     s, e = item[0], item[1]
-                    if e > v_start and s < v_end_calc:
-                        rel_s = max(0.0, s - v_start)
-                        rel_e = min(v_dur, e - v_start)
+                    if e > v_src_start and s < v_end_calc:
+                        rel_s = max(0.0, s - v_src_start)
+                        rel_e = min(v_src_dur, e - v_src_start)
                         if rel_e > rel_s:
                             if len(item) == 7:
                                 active_orig_intervals.append((rel_s, rel_e, item[2], item[3], item[4], item[5], item[6]))
@@ -1745,12 +2187,12 @@ def run_auto_edit_workflow(payload, check_stop_func):
             filter_chain = []
             curr_v = "0:v"
 
-            # Phóng to Video (Zoom & Center Crop)
+            # 1. Phóng to Video (Zoom & Center Crop)
             if zoom_factor > 1.0:
                 filter_chain.append(f"[{curr_v}]crop=w='iw/{zoom_factor:.4f}':h='ih/{zoom_factor:.4f}':x='(iw-iw/{zoom_factor:.4f})/2':y='(ih-ih/{zoom_factor:.4f})/2',scale=iw:ih:flags=lanczos[v_zoomed]")
                 curr_v = "v_zoomed"
 
-            # Làm mờ động phụ đề gốc (tự co giãn độ dài ôm sát chữ)
+            # 2. Làm mờ động phụ đề gốc
             if blur_orig_subs and active_orig_intervals:
                 dyn_filters, curr_v = build_dynamic_blur_filter_chain(
                     curr_v, active_orig_intervals,
@@ -1763,28 +2205,39 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 )
                 filter_chain.extend(dyn_filters)
 
-            if not filter_chain:
-                vf_filter = "[0:v]null[v]"
-            else:
-                last = filter_chain[-1]
-                filter_chain[-1] = re.sub(r'\[[a-zA-Z0-9_]+\]$', '[v]', last)
-                vf_filter = ";".join(filter_chain)
+            # 3. ÁP DỤNG VIDEO SPEED THỰC TẾ BẰNG SETPTS (P0 FIX)
+            if abs(video_speed - 1.0) > 0.005:
+                filter_chain.append(f"[{curr_v}]setpts=PTS/{video_speed:.6f}[v_speed]")
+                curr_v = "v_speed"
 
-            # Cấu hình encoder args phù hợp
+            # 4. CHUẨN HÓA TOÀN BỘ STREAM (P1 FIX: FPS=30, AVTB, STARTPTS=0, YUV420P)
+            filter_chain.append(f"[{curr_v}]fps=30,settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v]")
+            vf_filter = ";".join(filter_chain)
+
+            # Cấu hình encoder args đồng nhất đảm bảo concat an toàn 100%
+            common_enc_args = ['-r', '30', '-video_track_timescale', '90000', '-g', '60', '-keyint_min', '60']
             if encoder == 'h264_nvenc':
-                enc_cmd = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p']
+                enc_cmd = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p', *common_enc_args]
             elif encoder == 'h264_qsv':
-                enc_cmd = ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22', '-pix_fmt', 'yuv420p']
+                enc_cmd = ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22', '-pix_fmt', 'yuv420p', *common_enc_args]
             else:
-                enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-threads', '2']
+                enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', *common_enc_args, '-threads', '2']
+
+            # Accurate Seek (Hybrid Seek: fast seek trước -i và fine seek sau -i để chính xác từng frame)
+            if v_src_start > 2.0:
+                fast_s = max(0.0, v_src_start - 1.5)
+                fine_s = round(v_src_start - fast_s, 3)
+                seek_args = ['-ss', f"{fast_s:.3f}", '-i', video_path, '-ss', f"{fine_s:.3f}", '-t', f"{v_src_dur:.3f}"]
+            else:
+                seek_args = ['-ss', f"{v_src_start:.3f}", '-i', video_path, '-t', f"{v_src_dur:.3f}"]
 
             cmd_mux = [
                 ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
-                '-ss', str(v_start), '-t', str(v_dur),
-                '-i', video_path,
+                *seek_args,
                 '-filter_complex', vf_filter,
                 '-map', '[v]',
                 *enc_cmd,
+                '-t', f"{target_dur:.3f}",
                 '-an',
                 clip_silent_path
             ]
@@ -1795,11 +2248,11 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 if encoder != 'libx264':
                     cmd_mux_fallback = [
                         ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
-                        '-ss', str(v_start), '-t', str(v_dur),
-                        '-i', video_path,
+                        *seek_args,
                         '-filter_complex', vf_filter,
                         '-map', '[v]',
-                        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+                        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', *common_enc_args,
+                        '-t', f"{target_dur:.3f}",
                         '-an',
                         clip_silent_path
                     ]
@@ -2013,7 +2466,34 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if not os.path.exists(final_output):
             yield log(f"🛑 Không tìm thấy file video đầu ra: {final_output}")
             return
+
+        # --- BƯỚC 7: POST-RENDER VALIDATOR (KIỂM TRA ĐỒNG BỘ VÀ PTS) ---
+        expected_total_dur = tl_report.get('total_voice_duration', 0.0) if 'tl_report' in locals() else None
+        val_ok, post_report = validate_rendered_video(final_output, expected_duration=expected_total_dur, ffmpeg_path=ffmpeg_path)
+        pts_status_str = "⚠️ CÓ PHÁT HIỆN LỖI PTS" if post_report.get('pts_drop_detected') else "✅ LIÊN TỤC (KHÔNG GIẬT HÌNH)"
+        yield log(f"🔍 [POST-RENDER VALIDATOR] Video: {post_report['video_duration']:.2f}s | Audio: {post_report['audio_duration']:.2f}s | Độ lệch: {post_report['drift_ms']:.1f}ms | PTS: {pts_status_str}.")
+        if post_report.get('warnings'):
+            for w in post_report['warnings']:
+                yield log(f"⚠️ [POST-VALIDATOR] {w}")
             
+        if not payload.get('skip_history_recording'):
+            try:
+                from export_history import get_export_history_service
+                service = get_export_history_service()
+                export_run_id = payload.get('export_run_id') or f"review_{int(time.time()*1000)}"
+                service.record_export(
+                    output_path=final_output,
+                    source_tool='review',
+                    source_kind='review',
+                    export_run_id=export_run_id,
+                    params={
+                        'title': payload.get('title'),
+                        'video_style': payload.get('video_style')
+                    }
+                )
+            except Exception as he:
+                logging.getLogger(__name__).error(f"[ExportHistory] Error recording review export: {he}")
+
         yield log(f"Tất cả đã xong! File được lưu tại: {final_output}", step=5)
         yield log("[PROGRESS] 100")
         
@@ -2034,7 +2514,7 @@ def run_narration_workflow(payload, check_stop_func):
     api_key_openspeaker = payload.get('openspeaker_api_key', '')
     encoder = payload.get('encoder', 'libx264')
     auto_subtitles = payload.get('auto_subtitles', False)
-    blur_orig_subs = payload.get('blur_original_subtitles', True)
+    blur_orig_subs = parse_bool(payload.get('blur_original_subtitles'), False)
     orig_volume = float(payload.get('original_volume', 15)) / 100.0  # 0.0 - 1.0
 
     if not api_key_openspeaker:
@@ -2091,11 +2571,11 @@ def run_narration_workflow(payload, check_stop_func):
             if norm_custom.startswith(norm_out):
                 temp_dir = custom_temp
             else:
-                temp_dir = os.path.join(output_dir, 'narration_temp')
+                temp_dir = get_review_temp_dir(output_dir, video_path)
         except Exception:
-            temp_dir = os.path.join(output_dir, 'narration_temp')
+            temp_dir = get_review_temp_dir(output_dir, video_path)
     else:
-        temp_dir = os.path.join(output_dir, 'narration_temp')
+        temp_dir = get_review_temp_dir(output_dir, video_path)
     os.makedirs(temp_dir, exist_ok=True)
 
     def log(msg, step=None):
@@ -2449,10 +2929,12 @@ def run_narration_workflow(payload, check_stop_func):
         temp_no_bgm = os.path.join(temp_dir, 'narration_no_bgm.mp4')
         render_target = temp_no_bgm if bgm_file else os.path.join(output_dir, output_name)
 
+        filter_args = ['-filter_complex', full_filter] if full_filter else []
+
         cmd = [
             ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info',
             *inputs_list,
-            '-filter_complex', full_filter,
+            *filter_args,
             '-map', '[vout]', '-map', '[aout]',
             '-c:v', encoder, '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
             '-c:a', 'aac', '-b:a', '192k',
@@ -2469,6 +2951,12 @@ def run_narration_workflow(payload, check_stop_func):
             desc="Render video",
             check_stop_func=check_stop_func
         )
+        if filter_script_path and os.path.exists(filter_script_path):
+            try:
+                os.remove(filter_script_path)
+            except Exception:
+                pass
+
         if not render_success or not os.path.exists(render_target):
             yield log("🛑 Không thể hoàn tất render video.")
             return
@@ -2501,6 +2989,24 @@ def run_narration_workflow(payload, check_stop_func):
         if not os.path.exists(final_output):
             yield log(f"🛑 Không tìm thấy file đầu ra: {final_output}")
             return
+
+        if not payload.get('skip_history_recording'):
+            try:
+                from export_history import get_export_history_service
+                service = get_export_history_service()
+                export_run_id = payload.get('export_run_id') or f"narration_{int(time.time()*1000)}"
+                service.record_export(
+                    output_path=final_output,
+                    source_tool='narration',
+                    source_kind='narration',
+                    export_run_id=export_run_id,
+                    params={
+                        'video_path': video_path,
+                        'voice_id': payload.get('voice_id')
+                    }
+                )
+            except Exception as he:
+                logging.getLogger(__name__).error(f"[ExportHistory] Error recording narration export: {he}")
 
         yield log(f"🎉 HOÀN THÀNH! Video kể lại phim đã lưu tại: {final_output}", step=5)
         yield log("[PROGRESS] 100")

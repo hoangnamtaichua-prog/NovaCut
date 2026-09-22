@@ -13,12 +13,15 @@ import re
 import sys
 import json
 import time
+import random
+import hashlib
 import requests
 import subprocess
 import yt_dlp
 import ffmpeg_installer
 import concurrent.futures
 import threading
+
 
 def get_app_root_dir():
     """Xác định chính xác tuyệt đối thư mục gốc của ứng dụng NovaCut."""
@@ -43,6 +46,110 @@ def get_ffmpeg_dir():
     if os.path.exists(os.path.join(bin_dir, 'ffmpeg.exe')):
         return bin_dir
     return None
+
+
+def probe_video_specs(file_path):
+    """
+    Phân tích chi tiết thông số kỹ thuật của file video/audio bằng ffprobe:
+    - Độ phân giải thực tế (width x height)
+    - Tên mức chuẩn (1080p Full HD, 4K Ultra HD, 720p HD, v.v.)
+    - Tỉ lệ khung hình (16:9 Ngang, 9:16 Dọc TikTok, v.v.)
+    - Tốc độ khung hình (FPS)
+    - Codec video (H.264, HEVC, VP9, AV1...) & Codec audio (AAC, MP3...)
+    - Thời lượng (giây) & Dung lượng file (MB)
+    - Chuỗi tóm tắt thông số trực quan
+    """
+    if not file_path or not os.path.exists(file_path):
+        return None
+    try:
+        ffmpeg_path = ffmpeg_installer.get_ffmpeg_path()
+        ffprobe = ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe') if ffmpeg_path else 'ffprobe'
+        cmd = [
+            ffprobe, '-v', 'error',
+            '-show_entries', 'format=duration,size,bit_rate:stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate',
+            '-of', 'json', file_path
+        ]
+        kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs() if hasattr(ffmpeg_installer, 'get_stealth_subprocess_kwargs') else {}
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15, **kwargs)
+        if res.returncode != 0:
+            return None
+        data = json.loads(res.stdout)
+        streams = data.get('streams', [])
+        fmt = data.get('format', {})
+
+        v_stream = next((s for s in streams if s.get('codec_type') == 'video'), None)
+        a_stream = next((s for s in streams if s.get('codec_type') == 'audio'), None)
+
+        file_size = int(fmt.get('size') or os.path.getsize(file_path) or 0)
+        size_mb = f"{file_size / (1024*1024):.1f} MB"
+        duration = float(fmt.get('duration') or 0.0)
+
+        if not v_stream:
+            acodec = a_stream.get('codec_name', 'audio').upper() if a_stream else 'AUDIO'
+            return {
+                'is_video': False,
+                'is_audio': True,
+                'acodec': acodec,
+                'duration': round(duration, 2),
+                'file_size': size_mb,
+                'summary': f"Âm thanh {acodec} • {size_mb}"
+            }
+
+        w = int(v_stream.get('width') or 0)
+        h = int(v_stream.get('height') or 0)
+        vcodec = v_stream.get('codec_name', 'video').upper()
+        acodec = a_stream.get('codec_name', '').upper() if a_stream else None
+
+        fps = 0.0
+        fps_str = v_stream.get('r_frame_rate') or v_stream.get('avg_frame_rate') or '0/0'
+        if '/' in fps_str:
+            num, den = fps_str.split('/')
+            if float(den) > 0:
+                fps = round(float(num) / float(den), 2)
+        fps_disp = int(fps) if fps.is_integer() else fps
+
+        min_dim = min(w, h) if w > 0 and h > 0 else 0
+        max_dim = max(w, h) if w > 0 and h > 0 else 0
+
+        if max_dim >= 3840 or min_dim >= 2160:
+            res_label = '4K Ultra HD'
+        elif max_dim >= 2560 or min_dim >= 1440:
+            res_label = '2K QHD'
+        elif max_dim >= 1920 or min_dim >= 1080:
+            res_label = '1080p Full HD'
+        elif max_dim >= 1280 or min_dim >= 720:
+            res_label = '720p HD'
+        elif min_dim >= 480:
+            res_label = '480p SD'
+        elif min_dim >= 360:
+            res_label = '360p'
+        else:
+            res_label = f'{min_dim}p' if min_dim > 0 else 'SD'
+
+        is_vertical = h > w if w > 0 and h > 0 else False
+        ratio_str = '9:16 (Dọc)' if is_vertical else ('16:9 (Ngang)' if abs(w / max(1, h) - 16 / 9) < 0.05 else f'{w}:{h}')
+
+        summary = f"{w}x{h} ({res_label}) • {fps_disp} FPS • {vcodec} • {ratio_str} • {size_mb}"
+
+        return {
+            'is_video': True,
+            'is_audio': False,
+            'width': w,
+            'height': h,
+            'resolution': f"{w}x{h}",
+            'resolution_label': res_label,
+            'fps': fps_disp,
+            'aspect_ratio': ratio_str,
+            'is_vertical': is_vertical,
+            'vcodec': vcodec,
+            'acodec': acodec,
+            'duration': round(duration, 2),
+            'file_size': size_mb,
+            'summary': summary
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
 
 # =========================================================================
 # 1. URL PARSER & CANONICALIZER (document.md Section 6)
@@ -102,19 +209,59 @@ def is_douyin_url(url):
         return False
     return any(domain in url.lower() for domain in ['douyin.com', 'iesdouyin.com', 'v.douyin.com'])
 
-def sanitize_filename(name, max_len=90):
+def is_bilibili_url(url):
+    """Kiểm tra xem URL có phải thuộc nền tảng Bilibili không"""
+    if not url:
+        return False
+    u = url.lower()
+    return any(domain in u for domain in ['bilibili.com', 'b23.tv'])
+
+def sanitize_filename_windows(name, max_len=120):
     r"""
-    Vệ sinh tên file theo chuẩn Section 28 (loại bỏ / \ : * ? " < > |)
+    Vệ sinh tên file theo chuẩn Windows (loại bỏ \ / : * ? " < > | và ký tự điều khiển).
+    Bảo tồn trọn vẹn Unicode (tiếng Việt, tiếng Trung, v.v.), không cắt cụt quá sớm.
     """
     if not name:
         return 'video'
-    # Loại bỏ ký tự cấm của hệ điều hành
-    clean = re.sub(r'[\\/*?:"<>|]', '', name).strip()
-    # Rút gọn khoảng trắng
+    # Loại bỏ ký tự cấm của Windows
+    clean = re.sub(r'[\\/*?:"<>|\r\n\t]', '', str(name)).strip()
+    # Windows không cho phép file kết thúc bằng '.' hoặc khoảng trắng
+    clean = clean.rstrip('. ')
     clean = re.sub(r'\s+', ' ', clean).strip()
     if len(clean) > max_len:
-        clean = clean[:max_len].strip()
+        clean = clean[:max_len].rstrip('. ')
     return clean or 'video'
+
+def sanitize_filename(name, max_len=120):
+    r"""Alias tương thích cho sanitize_filename_windows."""
+    return sanitize_filename_windows(name, max_len=max_len)
+
+def resolve_unique_filename(dir_path, base_title, ext='mp4', prefix_index=None):
+    """
+    Tạo tên file an toàn cho Windows không bị trùng tên (collision handling):
+    - Dùng prefix_index nếu được chỉ định: 001_{title}.mp4
+    - Nếu trùng tên: {stem} (2).mp4, {stem} (3).mp4 theo quy ước Windows.
+    - Trả về: (final_path, file_stem)
+    """
+    safe_title = sanitize_filename_windows(base_title)
+    if prefix_index is not None:
+        file_stem = f"{prefix_index:03d}_{safe_title}"
+    else:
+        file_stem = safe_title
+        
+    ext_clean = ext.lstrip('.')
+    candidate = os.path.join(dir_path, f"{file_stem}.{ext_clean}")
+    if not os.path.exists(candidate):
+        return candidate, file_stem
+        
+    counter = 2
+    while True:
+        collision_stem = f"{file_stem} ({counter})"
+        candidate = os.path.join(dir_path, f"{collision_stem}.{ext_clean}")
+        if not os.path.exists(candidate):
+            return candidate, collision_stem
+        counter += 1
+
 
 def _find_aweme_detail_in_json(data, target_video_id=None):
     """
@@ -281,103 +428,319 @@ def _is_ad_or_guide_url(url):
 # =========================================================================
 _DOUYIN_RESOLVE_CACHE = {}
 
+def _is_clean_douyin_url(u):
+    if not u:
+        return False
+    u_lower = str(u).lower()
+    return not ('playwm' in u_lower or 'watermark' in u_lower or '_wm.' in u_lower or '/wm/' in u_lower)
+
+def resolve_douyin_variants(detail, aweme_id=None):
+    """
+    Trích xuất và xếp hạng toàn bộ các biến thể (variants) của video Douyin từ metadata:
+    - Nguồn dữ liệu:
+      1. video.bit_rate: danh sách biến thể bitrate, gear_name, quality_type, fps.
+      2. video.download_addr: link tải do Douyin cấp.
+      3. video.play_addr & video.play_addr_h264: stream xem trực tuyến.
+    - Tiêu chuẩn đánh giá:
+      * is_clean: True nếu nguồn không chứa watermark ('playwm', 'watermark', v.v.).
+      * Độ phân giải (height x width).
+      * Bitrate thực tế.
+      * FPS (tốc độ khung hình).
+    - Xếp hạng từ cao xuống thấp: (is_clean, height * width, bitrate, fps).
+    """
+    if not detail or not isinstance(detail, dict):
+        return []
+
+    video = detail.get('video') or {}
+    candidates = []
+    seen_urls = set()
+
+    v_w = int(video.get('width') or 0)
+    v_h = int(video.get('height') or 0)
+    is_vertical = (v_h >= v_w) if (v_w > 0 and v_h > 0) else True
+
+    # 1. Khai thác từ video.bit_rate (chứa profile bitrate và độ phân giải cao nhất)
+    bit_rate_list = video.get('bit_rate', []) or []
+    for br in bit_rate_list:
+        if not isinstance(br, dict):
+            continue
+        gear = str(br.get('gear_name', '')).lower()
+        q_type = int(br.get('quality_type', 0) or 0)
+        w = int(br.get('width') or v_w or 0)
+        h = int(br.get('height') or v_h or 0)
+        br_val = int(br.get('bit_rate', 0) or 0)
+        fps = float(br.get('fps') or 30.0)
+        is_h265 = br.get('is_h265', 0)
+        codec = 'hevc' if is_h265 else 'h264'
+
+        # Xác định độ phân giải chuẩn từ gear hoặc quality_type nếu chưa đủ thông tin
+        if '1080' in gear or q_type == 1080:
+            target_q = 1080
+            w, h = (1080, 1920) if is_vertical else (1920, 1080)
+        elif '720' in gear or q_type == 720:
+            target_q = 720
+            w, h = (720, 1280) if is_vertical else (1280, 720)
+        elif '540' in gear or q_type == 540:
+            target_q = 540
+            w, h = (540, 960) if is_vertical else (960, 540)
+        elif '480' in gear or q_type == 480:
+            target_q = 480
+            w, h = (480, 854) if is_vertical else (854, 480)
+        else:
+            target_q = min(w, h) if (w > 0 and h > 0) else (q_type or 720)
+            if not (w > 0 and h > 0):
+                w, h = (720, 1280) if is_vertical else (1280, 720)
+
+        play_addr_obj = br.get('play_addr') or {}
+        raw_urls = play_addr_obj.get('url_list', []) or []
+        valid_urls = [u for u in raw_urls if u and not _is_ad_or_guide_url(u)]
+        if not valid_urls:
+            continue
+
+        clean_urls = [u for u in valid_urls if _is_clean_douyin_url(u)]
+        if clean_urls:
+            is_clean = True
+            primary = clean_urls[0]
+            backups = [u for u in clean_urls[1:]] + [u for u in valid_urls if u not in clean_urls]
+        else:
+            is_clean = False
+            replaced_urls = [u.replace('playwm', 'play') for u in valid_urls]
+            primary = replaced_urls[0]
+            backups = replaced_urls[1:]
+
+        q_num = min(w, h) if (w > 0 and h > 0) else target_q
+        lbl = f"{q_num}p"
+        if q_num >= 2160: lbl += " (4K Ultra HD)"
+        elif q_num >= 1440: lbl += " (2K QHD)"
+        elif q_num >= 1080: lbl += " (Full HD)"
+        elif q_num >= 720: lbl += " (HD)"
+        if is_clean: lbl += " [Bản sạch]"
+
+        candidates.append({
+            'url': primary,
+            'backup_urls': backups,
+            'width': w,
+            'height': h,
+            'fps': fps,
+            'bitrate': br_val,
+            'codec': codec,
+            'quality_type': q_num,
+            'quality': f"{q_num}p",
+            'label': lbl,
+            'is_clean': is_clean,
+            'source': 'bit_rate'
+        })
+        for u in valid_urls:
+            seen_urls.add(u)
+
+    # 2. Khai thác từ download_addr (nguồn tải chính thức của Douyin)
+    download_addr = video.get('download_addr') or {}
+    dl_urls = [u for u in download_addr.get('url_list', []) if u and not _is_ad_or_guide_url(u)]
+    if dl_urls:
+        w = int(download_addr.get('width') or v_w or 0)
+        h = int(download_addr.get('height') or v_h or 0)
+        if not (w > 0 and h > 0):
+            w, h = (1080, 1920) if is_vertical else (1920, 1080)
+        q_num = min(w, h)
+        is_clean = all(_is_clean_douyin_url(u) for u in dl_urls)
+        candidates.append({
+            'url': dl_urls[0],
+            'backup_urls': dl_urls[1:],
+            'width': w,
+            'height': h,
+            'fps': 30.0,
+            'bitrate': 2000000,
+            'codec': 'h264',
+            'quality_type': q_num,
+            'quality': f"{q_num}p",
+            'label': f"{q_num}p (Tải trực tiếp Douyin)",
+            'is_clean': is_clean,
+            'source': 'download_addr'
+        })
+        for u in dl_urls:
+            seen_urls.add(u)
+
+    # 3. Khai thác từ play_addr và play_addr_h264
+    for src_name, addr_obj in [('play_addr', video.get('play_addr')), ('play_addr_h264', video.get('play_addr_h264'))]:
+        if not addr_obj or not isinstance(addr_obj, dict):
+            continue
+        urls = [u for u in addr_obj.get('url_list', []) if u and not _is_ad_or_guide_url(u)]
+        if not urls:
+            continue
+        new_urls = [u for u in urls if u not in seen_urls]
+        if not new_urls:
+            continue
+        w = int(addr_obj.get('width') or v_w or 0)
+        h = int(addr_obj.get('height') or v_h or 0)
+        if not (w > 0 and h > 0):
+            w, h = (720, 1280) if is_vertical else (1280, 720)
+        q_num = min(w, h)
+        clean_urls = [u for u in new_urls if _is_clean_douyin_url(u)]
+        if clean_urls:
+            is_clean = True
+            primary = clean_urls[0]
+            backups = [u for u in clean_urls[1:]] + [u for u in new_urls if u not in clean_urls]
+        else:
+            is_clean = False
+            replaced_urls = [u.replace('playwm', 'play') for u in new_urls]
+            primary = replaced_urls[0]
+            backups = replaced_urls[1:]
+        candidates.append({
+            'url': primary,
+            'backup_urls': backups,
+            'width': w,
+            'height': h,
+            'fps': 30.0,
+            'bitrate': 1200000,
+            'codec': 'h264',
+            'quality_type': q_num,
+            'quality': f"{q_num}p",
+            'label': f"{q_num}p ({src_name})",
+            'is_clean': is_clean,
+            'source': src_name
+        })
+        for u in new_urls:
+            seen_urls.add(u)
+
+    # Sắp xếp ưu tiên: Bản sạch -> Độ phân giải cao nhất -> Bitrate cao nhất -> FPS
+    candidates.sort(
+        key=lambda v: (
+            1 if v.get('is_clean') else 0,
+            (v.get('height') or 0) * (v.get('width') or 0),
+            v.get('bitrate') or 0,
+            v.get('fps') or 0
+        ),
+        reverse=True
+    )
+    return candidates
+
+def refresh_douyin_url(aweme_id):
+    """
+    Làm mới liên kết tải Douyin khi URL bị 403 hoặc 410 (hết hạn).
+    Gọi API Douyin web aweme_detail để lấy danh sách URL mới nhất.
+    """
+    if not aweme_id or str(aweme_id).lower() in ['unknown_id', 'video', 'none', '']:
+        return []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Referer': f'https://www.douyin.com/video/{aweme_id}',
+        'Accept': 'application/json, text/plain, */*'
+    }
+    api_urls = [
+        f"https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id={aweme_id}",
+        f"https://www.iesdouyin.com/aweme/v1/web/aweme/detail/?aweme_id={aweme_id}"
+    ]
+    for api_url in api_urls:
+        try:
+            resp = requests.get(api_url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                detail = data.get('aweme_detail')
+                if detail:
+                    variants = resolve_douyin_variants(detail, aweme_id=aweme_id)
+                    if variants:
+                        fresh_urls = []
+                        for v in variants:
+                            u = v.get('url')
+                            if u and u not in fresh_urls:
+                                fresh_urls.append(u)
+                            for bu in v.get('backup_urls', []):
+                                if bu and bu not in fresh_urls:
+                                    fresh_urls.append(bu)
+                        if fresh_urls:
+                            return fresh_urls
+        except Exception:
+            pass
+
+    try:
+        ssr_info = resolve_douyin_media(f"https://www.douyin.com/video/{aweme_id}", use_cache=False)
+        if ssr_info and ssr_info.get('video_urls'):
+            return ssr_info['video_urls']
+    except Exception:
+        pass
+    return []
+
 def _format_single_douyin_detail(detail, video_id=None, page_title='', target_url=''):
     """
-    Format 1 video detail Douyin thành cấu trúc chuẩn Section 8.
+    Format 1 video detail Douyin thành cấu trúc chuẩn Section 8 sử dụng resolve_douyin_variants.
     """
     if not detail:
         return None
     aweme_id = str(detail.get('aweme_id') or detail.get('id') or video_id or 'unknown_id')
     title = detail.get('desc') or page_title or 'Video Douyin'
     title = re.sub(r' - 抖音$', '', title).strip()
-    safe_title = sanitize_filename(title)
-    
+    safe_title = sanitize_filename_windows(title)
+
     author = detail.get('author', {}).get('nickname', 'Tác giả Douyin')
     duration = round((detail.get('duration', 0) or 0) / 1000.0, 1)
     video = detail.get('video', {})
     cover = video.get('cover', {}).get('url_list', [''])[0] or video.get('origin_cover', {}).get('url_list', [''])[0]
     height = video.get('height', 1080)
     width = video.get('width', 1920)
-    
+
+    variants = resolve_douyin_variants(detail, aweme_id=aweme_id)
+
     resolutions = []
     format_url_map = {}
-    bit_rate_list = video.get('bit_rate', []) or []
-    sorted_bitrates = sorted(bit_rate_list, key=lambda x: (x.get('quality_type', 0) or 0, x.get('bit_rate', 0) or 0), reverse=True)
-    
+    url_list = []
     seen_heights = set()
-    for br in sorted_bitrates:
-        gear = str(br.get('gear_name', ''))
-        q_type = br.get('quality_type')
-        h = br.get('height') or height or 1080
-        if '1080' in gear or q_type == 1080: h = 1080
-        elif '720' in gear or q_type == 720: h = 720
-        elif '540' in gear or q_type == 540: h = 540
-        elif '480' in gear or q_type == 480: h = 480
-        
-        br_urls = br.get('play_addr', {}).get('url_list', []) or []
-        clean_br_urls = [u.replace('playwm', 'play') for u in br_urls if u and not _is_ad_or_guide_url(u)]
-        
-        if clean_br_urls:
-            lbl = f"{h}p"
-            if h >= 2160: lbl += " (4K Ultra HD)"
-            elif h >= 1440: lbl += " (2K QHD)"
-            elif h >= 1080: lbl += " (Full HD)"
-            elif h >= 720: lbl += " (HD)"
-            
+    is_clean = False
+
+    if variants:
+        is_clean = variants[0].get('is_clean', False)
+        for v in variants:
+            h = v.get('height') or height
             fmt_id = str(h)
+            v_urls = [v.get('url')] + [bu for bu in v.get('backup_urls', []) if bu != v.get('url')]
+            v_urls = [u for u in v_urls if u]
+            for u in v_urls:
+                if u not in url_list:
+                    url_list.append(u)
+
             if fmt_id not in seen_heights:
                 seen_heights.add(fmt_id)
                 resolutions.append({
                     'format_id': fmt_id,
-                    'label': lbl,
+                    'label': v.get('label') or f"{h}p",
                     'height': h,
-                    'ext': 'mp4'
+                    'ext': 'mp4',
+                    'is_clean': v.get('is_clean', False)
                 })
-                format_url_map[fmt_id] = clean_br_urls
+                format_url_map[fmt_id] = v_urls
 
-    url_list = []
-    for u in video.get('play_addr', {}).get('url_list', []):
-        u_clean = u.replace('playwm', 'play')
-        if u_clean and u_clean not in url_list and not _is_ad_or_guide_url(u_clean):
-            url_list.append(u_clean)
-            
-    for u in video.get('download_addr', {}).get('url_list', []):
-        if u and u not in url_list and not _is_ad_or_guide_url(u):
-            url_list.append(u)
-            
-    for u in video.get('play_addr_h264', {}).get('url_list', []):
-        if u and u not in url_list and not _is_ad_or_guide_url(u):
-            url_list.append(u)
-
-    if not url_list:
-        for br_urls in format_url_map.values():
-            for u in br_urls:
-                if u not in url_list:
-                    url_list.append(u)
-
-    if not url_list:
-        return None
-
-    if resolutions:
-        best_fmt = resolutions[0]
-        best_urls = format_url_map.get(best_fmt['format_id'], url_list)
+        best_v = variants[0]
+        best_urls = [best_v.get('url')] + [bu for bu in best_v.get('backup_urls', []) if bu != best_v.get('url')]
+        best_urls = [u for u in best_urls if u]
+        clean_tag = " (Bản sạch không logo)" if is_clean else " (Bản có logo gốc)"
         resolutions.insert(0, {
             'format_id': 'best',
-            'label': f"Chất lượng cao nhất ({best_fmt['label']})",
-            'height': best_fmt['height'],
-            'ext': 'mp4'
+            'label': f"Chất lượng cao nhất ({best_v.get('label', f'{height}p')}){clean_tag}",
+            'height': best_v.get('height', height),
+            'ext': 'mp4',
+            'is_clean': is_clean
         })
         format_url_map['best'] = best_urls
     else:
+        # Fallback truyền thống nếu không trích xuất được variant
+        for u in video.get('play_addr', {}).get('url_list', []):
+            u_clean = u.replace('playwm', 'play')
+            if u_clean and u_clean not in url_list and not _is_ad_or_guide_url(u_clean):
+                url_list.append(u_clean)
+        for u in video.get('download_addr', {}).get('url_list', []):
+            if u and u not in url_list and not _is_ad_or_guide_url(u):
+                url_list.append(u)
         lbl = f"{height}p"
         if height >= 1080: lbl += " (Full HD)"
         elif height >= 720: lbl += " (HD)"
         resolutions = [
-            {'format_id': 'best', 'label': 'Chất lượng cao nhất (Gốc)', 'height': 9999, 'ext': 'mp4'},
-            {'format_id': str(height), 'label': lbl, 'height': height, 'ext': 'mp4'}
+            {'format_id': 'best', 'label': 'Chất lượng cao nhất (Gốc)', 'height': 9999, 'ext': 'mp4', 'is_clean': False},
+            {'format_id': str(height), 'label': lbl, 'height': height, 'ext': 'mp4', 'is_clean': False}
         ]
         format_url_map['best'] = url_list
         format_url_map[str(height)] = url_list
+
+    if not url_list:
+        return None
 
     return {
         'success': True,
@@ -394,6 +757,8 @@ def _format_single_douyin_detail(detail, video_id=None, page_title='', target_ur
         'video_urls': url_list,
         'resolutions': resolutions,
         'format_url_map': format_url_map,
+        'variants': variants,
+        'is_clean': is_clean,
         'raw_detail': detail
     }
 
@@ -783,228 +1148,700 @@ def resolve_douyin_media(url, use_cache=True):
 # =========================================================================
 # 3. STREAM DOWNLOAD MANAGER VỚI RANGE RESUME & RETRY (Section 9 & 27)
 # =========================================================================
-def download_stream_with_resume(video_urls, output_path, is_audio=False, progress_callback=None, max_retries=3, num_threads=4):
-    """
-    Tải stream đa luồng (Multi-Connection Range Downloader - chuẩn IDM 4-6 luồng)
-    với tự động fallback đơn luồng, hỗ trợ HTTP Range Resume và Exponential Backoff Retry.
-    """
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Referer': 'https://www.douyin.com/',
-        'Accept': '*/*',
-    }
-    
-    part_path = output_path + '.part'
-    backoff_delays = [1, 2, 4]
-    
-    # 1. Thử qua từng URL để thăm dò kích thước và hỗ trợ Range
-    selected_url = None
-    total_file_size = 0
-    accept_ranges = False
-    
-    session = requests.Session()
-    
-    for v_url in video_urls:
-        try:
-            r_head = session.head(v_url, headers=headers, allow_redirects=True, timeout=8)
-            if r_head.status_code in [200, 206]:
-                selected_url = v_url
-                total_file_size = int(r_head.headers.get('content-length', 0))
-                accept_ranges = 'bytes' in r_head.headers.get('accept-ranges', '').lower() or r_head.status_code == 206
-                break
-        except Exception:
-            pass
-        # Nếu HEAD bị chặn, thử GET 2 bytes
-        try:
-            r_test = session.get(v_url, headers={**headers, 'Range': 'bytes=0-1'}, stream=True, timeout=8)
-            if r_test.status_code == 206:
-                selected_url = v_url
-                accept_ranges = True
-                cr = r_test.headers.get('content-range', '')
-                if '/' in cr:
-                    total_file_size = int(cr.split('/')[-1])
-                break
-            elif r_test.status_code == 200:
-                selected_url = v_url
-                total_file_size = int(r_test.headers.get('content-length', 0))
-                break
-        except Exception:
-            pass
-            
-    if not selected_url and video_urls:
-        selected_url = video_urls[0]
 
-    success = False
-    
-    # 2. Nếu server hỗ trợ Range và dung lượng > 2MB -> TẢI ĐA LUỒNG SIÊU TỐC (IDM Standard)
-    if accept_ranges and total_file_size > 2 * 1024 * 1024:
-        threads_count = min(num_threads, 6)
-        chunk_size_per_thread = total_file_size // threads_count
-        ranges = []
-        for i in range(threads_count):
-            start = i * chunk_size_per_thread
-            end = total_file_size - 1 if i == threads_count - 1 else (start + chunk_size_per_thread - 1)
-            ranges.append((i, start, end))
-            
-        temp_files = [f"{part_path}.part{i}" for i in range(threads_count)]
-        downloaded_bytes = [0] * threads_count
-        lock = threading.Lock()
-        t0 = time.time()
-        last_cb_time = t0
-        
-        def _download_range(idx, start_byte, end_byte):
-            nonlocal last_cb_time
-            req_h = headers.copy()
-            req_h['Range'] = f"bytes={start_byte}-{end_byte}"
-            temp_f = temp_files[idx]
-            
-            with requests.get(selected_url, headers=req_h, stream=True, timeout=25) as r:
-                r.raise_for_status()
-                with open(temp_f, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*512):
-                        if chunk:
-                            f.write(chunk)
-                            with lock:
-                                downloaded_bytes[idx] += len(chunk)
-                                total_dl = sum(downloaded_bytes)
-                                now = time.time()
-                                if progress_callback and (now - last_cb_time >= 0.15 or total_dl >= total_file_size):
-                                    last_cb_time = now
-                                    pct = round((total_dl / total_file_size) * 100, 1) if total_file_size > 0 else 0
-                                    el = now - t0
-                                    spd = (total_dl / el) if el > 0 else 0
-                                    spd_str = f"{spd / (1024*1024):.1f} MB/s" if spd else "-- MB/s"
-                                    rem = max(0, total_file_size - total_dl)
-                                    eta = int(rem / spd) if spd > 0 else 0
-                                    progress_callback({
-                                        'status': 'downloading',
-                                        'downloaded_bytes': total_dl,
-                                        'total_bytes': total_file_size,
-                                        'percent': pct,
-                                        'speed': spd_str,
-                                        'eta': f"{eta}s" if eta else "--"
-                                    })
-                                    
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=threads_count) as executor:
-                futures = [executor.submit(_download_range, r[0], r[1], r[2]) for r in ranges]
-                concurrent.futures.wait(futures)
-                for f in futures:
-                    f.result()
-                    
-            # Ghép nối các file part thành part_path chính thức
-            with open(part_path, 'wb') as out_f:
-                for temp_f in temp_files:
-                    if os.path.exists(temp_f):
-                        with open(temp_f, 'rb') as in_f:
-                            while True:
-                                b = in_f.read(1024 * 1024 * 2)
-                                if not b:
-                                    break
-                                out_f.write(b)
-                        try:
-                            os.remove(temp_f)
-                        except Exception:
-                            pass
-            success = True
-        except Exception:
-            for temp_f in temp_files:
-                if os.path.exists(temp_f):
-                    try: os.remove(temp_f)
-                    except Exception: pass
-            success = False
 
-    # 3. Fallback: Đơn luồng nếu Range không hỗ trợ hoặc tải đa luồng gặp lỗi
-    if not success:
-        downloaded_total = 0
-        if os.path.exists(part_path):
-            downloaded_total = os.path.getsize(part_path)
-            
-        for attempt in range(max_retries):
-            for v_url in ([selected_url] if selected_url else []) + [u for u in video_urls if u != selected_url]:
+class ResumableRangeDownloader:
+    """
+    Unified Multi-Connection Range Downloader (Chuẩn IDM 4-6 luồng) bền bỉ cho Douyin và video dài:
+    1. Bắt buộc kiểm tra HTTP 206 và header Content-Range cho từng part.
+    2. Nếu server trả về HTTP 200 cho Range request, hủy ngay đa luồng và chuyển sang tải đơn luồng (chống nhân đôi/hỏng file).
+    3. Ghi manifest JSON (.download_manifest.json) lưu ETag, dung lượng và trạng thái từng part để resume chính xác.
+    4. Tự động refresh URL khi gặp lỗi HTTP 403 / 410 bằng aweme_id.
+    5. Exponential backoff với jitter ngẫu nhiên khi retry lỗi mạng.
+    6. Hỗ trợ giới hạn tổng kết nối qua connection_semaphore.
+    7. Stream dữ liệu theo chunk (128KB - 256KB) trực tiếp ra đĩa, không nạp toàn bộ file vào RAM.
+    8. Xác thực toàn vẹn container bằng ffprobe sau khi tải xong.
+    """
+    def __init__(self, urls=None, output_path=None, num_threads=4, num_connections=None,
+                 connection_semaphore=None, connection_pool=None, progress_callback=None,
+                 cancel_event=None, max_retries=4, aweme_id=None, backup_urls=None,
+                 refresh_url_cb=None, is_audio=False, url=None, chunk_size_threshold=None, **kwargs):
+        target_urls = urls if urls is not None else url
+        if isinstance(target_urls, list):
+            self.urls = [u for u in target_urls if u]
+        elif target_urls:
+            self.urls = [target_urls]
+        else:
+            self.urls = []
+
+        if backup_urls and isinstance(backup_urls, list):
+            for bu in backup_urls:
+                if bu and bu not in self.urls:
+                    self.urls.append(bu)
+
+        self.output_path = os.path.abspath(output_path)
+        self.part_path = self.output_path + '.part'
+        self.manifest_path = self.output_path + '.download_manifest.json'
+        threads = num_connections if num_connections is not None else num_threads
+        self.num_threads = max(1, min(int(threads or 4), 6))
+
+        sem = connection_semaphore
+        if sem is None and connection_pool is not None:
+            sem = getattr(connection_pool, 'semaphore', connection_pool)
+        self.semaphore = sem
+
+        self.progress_callback = progress_callback
+        self.cancel_event = cancel_event or threading.Event()
+        self.max_retries = max(1, int(max_retries or 4))
+        self.aweme_id = aweme_id
+        self.refresh_url_cb = refresh_url_cb or refresh_douyin_url
+        self.is_audio = is_audio
+        self.chunk_size_threshold = chunk_size_threshold if chunk_size_threshold is not None else 2 * 1024 * 1024
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Referer': 'https://www.douyin.com/',
+            'Accept': '*/*'
+        }
+        self.session = requests.Session()
+
+    def download(self):
+        """Hàm giao diện tải trả về đường dẫn file đã lưu"""
+        res = self.execute()
+        if isinstance(res, tuple):
+            return res[0]
+        return res
+
+    def _notify_progress(self, downloaded_bytes, total_bytes, start_time, last_cb_state, force=False):
+        now = time.time()
+        if not self.progress_callback:
+            return
+        last_time = last_cb_state.get('time', 0)
+        if not force and (now - last_time < 0.15) and (downloaded_bytes < total_bytes):
+            return
+        last_cb_state['time'] = now
+
+        pct = round((downloaded_bytes / total_bytes) * 100, 1) if total_bytes > 0 else 0
+        elapsed = now - start_time
+        speed = (downloaded_bytes / elapsed) if elapsed > 0 else 0
+        speed_str = f"{speed / (1024 * 1024):.1f} MB/s" if speed > 0 else "-- MB/s"
+        rem = max(0, total_bytes - downloaded_bytes)
+        eta = int(rem / speed) if speed > 0 else 0
+
+        self.progress_callback({
+            'status': 'downloading',
+            'downloaded_bytes': downloaded_bytes,
+            'total_bytes': total_bytes,
+            'percent': pct,
+            'speed': speed_str,
+            'eta': f"{eta}s" if eta else "--"
+        })
+
+    def probe_stream(self):
+        """
+        Thăm dò URL khả dụng, kích thước file và khả năng hỗ trợ HTTP Range (206).
+        """
+        selected_url = None
+        total_file_size = 0
+        accept_ranges = False
+        etag = None
+
+        candidate_urls = list(self.urls)
+        for attempt in range(2):
+            for v_url in candidate_urls:
+                if self.cancel_event.is_set():
+                    return None, 0, False, None
+                # Thử HEAD request
                 try:
-                    req_headers = headers.copy()
-                    if downloaded_total > 0:
-                        req_headers['Range'] = f"bytes={downloaded_total}-"
-                        
-                    with requests.get(v_url, headers=req_headers, stream=True, timeout=25) as r:
-                        if r.status_code == 206:
-                            content_range = r.headers.get('content-range', '')
-                            m = re.search(r'/(\d+)', content_range)
-                            total_file_size = int(m.group(1)) if m else (downloaded_total + int(r.headers.get('content-length', 0)))
-                            mode = 'ab'
-                        elif r.status_code == 200:
-                            total_file_size = int(r.headers.get('content-length', 0))
-                            downloaded_total = 0
-                            mode = 'wb'
-                        else:
-                            continue
-                            
-                        start_time = time.time()
-                        last_update = start_time
-                        
-                        with open(part_path, mode) as f:
-                            for chunk in r.iter_content(chunk_size=1024*1024):
-                                if chunk:
-                                    f.write(chunk)
-                                    downloaded_total += len(chunk)
-                                    now = time.time()
-                                    if progress_callback and (now - last_update >= 0.2 or (total_file_size and downloaded_total == total_file_size)):
-                                        last_update = now
-                                        percent = round((downloaded_total / total_file_size) * 100, 1) if total_file_size > 0 else 0
-                                        elapsed = now - start_time
-                                        speed = (downloaded_total - (downloaded_total if mode == 'wb' else 0)) / elapsed if elapsed > 0 else 0
-                                        speed_str = f"{speed / (1024*1024):.1f} MB/s" if speed else "-- MB/s"
-                                        remaining = max(0, total_file_size - downloaded_total)
-                                        eta = int(remaining / speed) if speed > 0 else 0
-                                        
-                                        progress_callback({
-                                            'status': 'downloading',
-                                            'downloaded_bytes': downloaded_total,
-                                            'total_bytes': total_file_size,
-                                            'percent': percent,
-                                            'speed': speed_str,
-                                            'eta': f"{eta}s" if eta else "--"
-                                        })
-                                        
-                        if (total_file_size > 0 and downloaded_total >= total_file_size) or (downloaded_total > 1024*100 and total_file_size == 0):
-                            success = True
+                    r_head = self.session.head(v_url, headers=self.headers, allow_redirects=True, timeout=8)
+                    if r_head.status_code in [200, 206]:
+                        selected_url = v_url
+                        total_file_size = int(r_head.headers.get('content-length', 0))
+                        etag = r_head.headers.get('etag', '').strip('"')
+                        accept_ranges = ('bytes' in r_head.headers.get('accept-ranges', '').lower()) or (r_head.status_code == 206)
+                        break
+                    elif r_head.status_code in [403, 410] and self.aweme_id and self.refresh_url_cb:
+                        fresh = self.refresh_url_cb(self.aweme_id)
+                        if fresh:
+                            for fu in fresh:
+                                if fu not in candidate_urls:
+                                    candidate_urls.append(fu)
+                except Exception:
+                    pass
+
+                # Nếu HEAD không ra hoặc bị chặn, probe GET 2 bytes (Range 0-1)
+                try:
+                    test_h = self.headers.copy()
+                    test_h['Range'] = 'bytes=0-1'
+                    with self.session.get(v_url, headers=test_h, stream=True, timeout=8) as r_test:
+                        if r_test.status_code == 206:
+                            selected_url = v_url
+                            accept_ranges = True
+                            etag = r_test.headers.get('etag', '').strip('"')
+                            cr = r_test.headers.get('content-range', '')
+                            if '/' in cr:
+                                total_file_size = int(cr.split('/')[-1])
                             break
-                except (requests.RequestException, IOError):
-                    time.sleep(backoff_delays[min(attempt, len(backoff_delays)-1)])
+                        elif r_test.status_code == 200:
+                            selected_url = v_url
+                            accept_ranges = False
+                            total_file_size = int(r_test.headers.get('content-length', 0))
+                            break
+                except Exception:
+                    pass
+
+            if selected_url:
+                break
+            # Nếu chưa tìm được URL sống và có aweme_id, refresh và thử lại vòng 2
+            if self.aweme_id and self.refresh_url_cb and attempt == 0:
+                fresh = self.refresh_url_cb(self.aweme_id)
+                if fresh:
+                    candidate_urls = fresh
+
+        if not selected_url and candidate_urls:
+            selected_url = candidate_urls[0]
+
+        return selected_url, total_file_size, accept_ranges, etag
+
+    def _load_or_create_manifest(self, total_bytes, etag, selected_url, num_parts):
+        manifest = None
+        if os.path.exists(self.manifest_path):
+            try:
+                with open(self.manifest_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if (data.get('total_bytes') == total_bytes and
+                    len(data.get('parts', [])) == num_parts):
+                    manifest = data
+            except Exception:
+                manifest = None
+
+        if not manifest:
+            chunk_size = total_bytes // num_parts
+            parts = []
+            for i in range(num_parts):
+                start = i * chunk_size
+                end = total_bytes - 1 if i == num_parts - 1 else (start + chunk_size - 1)
+                p_file = f"{self.part_path}.part{i}"
+                # Nếu file part cũ đã tồn tại trên đĩa, đồng bộ số byte
+                existing_bytes = os.path.getsize(p_file) if os.path.exists(p_file) else 0
+                expected_len = end - start + 1
+                completed = (existing_bytes >= expected_len)
+                parts.append({
+                    'index': i,
+                    'start': start,
+                    'end': end,
+                    'downloaded': min(existing_bytes, expected_len),
+                    'completed': completed,
+                    'file': p_file
+                })
+            manifest = {
+                'version': 1,
+                'url': selected_url,
+                'aweme_id': self.aweme_id,
+                'total_bytes': total_bytes,
+                'etag': etag,
+                'num_parts': num_parts,
+                'parts': parts
+            }
+            self._save_manifest(manifest)
+        else:
+            # Đồng bộ lại kích thước thực tế trên đĩa
+            for p in manifest.get('parts', []):
+                p_file = p.get('file')
+                if p_file and os.path.exists(p_file):
+                    cur_size = os.path.getsize(p_file)
+                    expected_len = p['end'] - p['start'] + 1
+                    p['downloaded'] = min(cur_size, expected_len)
+                    p['completed'] = (cur_size >= expected_len)
+                else:
+                    p['downloaded'] = 0
+                    p['completed'] = False
+
+        return manifest
+
+    def _save_manifest(self, manifest):
+        try:
+            tmp_path = self.manifest_path + '.tmp'
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+            if os.path.exists(tmp_path):
+                os.replace(tmp_path, self.manifest_path)
+        except Exception:
+            pass
+
+    def _download_part(self, part_idx, manifest, shared_state, lock, start_time, last_cb_state):
+        part = manifest['parts'][part_idx]
+        if part.get('completed'):
+            return True
+
+        p_file = part['file']
+        expected_len = part['end'] - part['start'] + 1
+        cur_downloaded = os.path.getsize(p_file) if os.path.exists(p_file) else 0
+
+        if cur_downloaded >= expected_len:
+            part['completed'] = True
+            part['downloaded'] = expected_len
+            return True
+
+        req_start = part['start'] + cur_downloaded
+        req_end = part['end']
+
+        for attempt in range(self.max_retries):
+            if self.cancel_event.is_set():
+                return False
+            if shared_state.get('fallback_to_single'):
+                return False
+
+            # Điều tiết kết nối qua semaphore nếu có
+            sem = self.semaphore
+            if sem:
+                sem.acquire()
+
+            try:
+                cur_url = shared_state.get('current_url') or manifest.get('url')
+                req_h = self.headers.copy()
+                req_h['Range'] = f"bytes={req_start}-{req_end}"
+
+                resp = self.session.get(cur_url, headers=req_h, stream=True, timeout=25)
+
+                # KIỂM TRA QUAN TRỌNG: Server PHẢI trả về 206 Partial Content
+                if resp.status_code == 200:
+                    resp.close()
+                    with lock:
+                        shared_state['fallback_to_single'] = True
+                    return False
+
+                if resp.status_code in [403, 410]:
+                    resp.close()
+                    if self.aweme_id and self.refresh_url_cb:
+                        fresh = self.refresh_url_cb(self.aweme_id)
+                        if fresh:
+                            with lock:
+                                shared_state['current_url'] = fresh[0]
+                    delay = min(8, (2 ** attempt)) + random.uniform(0.1, 0.4)
+                    time.sleep(delay)
                     continue
+
+                if resp.status_code != 206:
+                    resp.close()
+                    delay = min(8, (2 ** attempt)) + random.uniform(0.1, 0.4)
+                    time.sleep(delay)
+                    continue
+
+                # Xác thực Content-Range header
+                cr = resp.headers.get('content-range', '')
+                if cr and not cr.startswith(f"bytes {req_start}-"):
+                    # Range không khớp với yêu cầu
+                    resp.close()
+                    with lock:
+                        shared_state['fallback_to_single'] = True
+                    return False
+
+                open_mode = 'ab' if cur_downloaded > 0 else 'wb'
+                with open(p_file, open_mode) as pf:
+                    for chunk in resp.iter_content(chunk_size=128 * 1024):
+                        if self.cancel_event.is_set() or shared_state.get('fallback_to_single'):
+                            resp.close()
+                            return False
+                        if chunk:
+                            pf.write(chunk)
+                            cur_downloaded += len(chunk)
+                            part['downloaded'] = cur_downloaded
+                            with lock:
+                                shared_state['total_downloaded'] += len(chunk)
+                                tot_dl = shared_state['total_downloaded']
+                            self._notify_progress(tot_dl, manifest['total_bytes'], start_time, last_cb_state)
+
+                if cur_downloaded >= expected_len:
+                    part['completed'] = True
+                    part['downloaded'] = expected_len
+                    with lock:
+                        self._save_manifest(manifest)
+                    return True
+                else:
+                    req_start = part['start'] + cur_downloaded
+
+            except Exception:
+                delay = min(8, (2 ** attempt)) + random.uniform(0.1, 0.5)
+                time.sleep(delay)
+            finally:
+                if sem:
+                    try: sem.release()
+                    except Exception: pass
+
+        return False
+
+    def _execute_multipart(self, selected_url, total_file_size, etag):
+        manifest = self._load_or_create_manifest(total_file_size, etag, selected_url, self.num_threads)
+        start_time = time.time()
+        last_cb_state = {'time': start_time}
+        lock = threading.Lock()
+
+        # Tính tổng số byte đã có từ các part hoàn thành trước đó
+        initial_downloaded = sum(p.get('downloaded', 0) for p in manifest.get('parts', []))
+        shared_state = {
+            'fallback_to_single': False,
+            'current_url': selected_url,
+            'total_downloaded': initial_downloaded
+        }
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            futures = [
+                executor.submit(
+                    self._download_part,
+                    i, manifest, shared_state, lock, start_time, last_cb_state
+                )
+                for i in range(self.num_threads)
+            ]
+            concurrent.futures.wait(futures)
+
+        if shared_state.get('fallback_to_single') or self.cancel_event.is_set():
+            # Xóa các part tải dở và manifest khi fallback
+            for p in manifest.get('parts', []):
+                pf = p.get('file')
+                if pf and os.path.exists(pf):
+                    try: os.remove(pf)
+                    except Exception: pass
+            if os.path.exists(self.manifest_path):
+                try: os.remove(self.manifest_path)
+                except Exception: pass
+            return False
+
+        # Kiểm tra tính toàn vẹn của tất cả các part
+        for p in manifest.get('parts', []):
+            pf = p.get('file')
+            expected_len = p['end'] - p['start'] + 1
+            if not pf or not os.path.exists(pf) or os.path.getsize(pf) != expected_len:
+                return False
+
+        # Ghép nối các part thành file tạm
+        assembling_file = self.output_path + '.assembling'
+        with open(assembling_file, 'wb') as out_f:
+            for p in manifest['parts']:
+                with open(p['file'], 'rb') as in_f:
+                    while True:
+                        buf = in_f.read(1024 * 1024 * 2)
+                        if not buf:
+                            break
+                        out_f.write(buf)
+
+        # Kiểm tra dung lượng sau ghép nối
+        if os.path.getsize(assembling_file) != total_file_size:
+            if os.path.exists(assembling_file):
+                try: os.remove(assembling_file)
+                except Exception: pass
+            return False
+
+        # Dọn dẹp part files và manifest
+        for p in manifest['parts']:
+            if os.path.exists(p['file']):
+                try: os.remove(p['file'])
+                except Exception: pass
+        if os.path.exists(self.manifest_path):
+            try: os.remove(self.manifest_path)
+            except Exception: pass
+
+        if os.path.exists(self.output_path):
+            try: os.remove(self.output_path)
+            except Exception: pass
+        os.rename(assembling_file, self.output_path)
+        self._notify_progress(total_file_size, total_file_size, start_time, last_cb_state, force=True)
+        return True
+
+    def _execute_single_part(self, selected_url, total_file_size):
+        """
+        Tải đơn luồng an toàn với stream trực tiếp ra đĩa và HTTP Range Resume.
+        Dùng khi server trả về HTTP 200 hoặc không hỗ trợ Range đa kết nối.
+        """
+        downloaded_total = 0
+        if os.path.exists(self.part_path):
+            downloaded_total = os.path.getsize(self.part_path)
+
+        cur_url = selected_url
+        start_time = time.time()
+        last_cb_state = {'time': start_time}
+        success = False
+
+        for attempt in range(self.max_retries):
+            if self.cancel_event.is_set():
+                return False
+
+            sem = self.semaphore
+            if sem: sem.acquire()
+
+            try:
+                req_h = self.headers.copy()
+                if downloaded_total > 0:
+                    req_h['Range'] = f"bytes={downloaded_total}-"
+
+                with self.session.get(cur_url, headers=req_h, stream=True, timeout=25) as r:
+                    if r.status_code == 206:
+                        cr = r.headers.get('content-range', '')
+                        m = re.search(r'/(\d+)', cr)
+                        if m:
+                            total_file_size = int(m.group(1))
+                        mode = 'ab'
+                    elif r.status_code == 200:
+                        total_file_size = int(r.headers.get('content-length', 0))
+                        downloaded_total = 0
+                        mode = 'wb'
+                    elif r.status_code in [403, 410]:
+                        if self.aweme_id and self.refresh_url_cb:
+                            fresh = self.refresh_url_cb(self.aweme_id)
+                            if fresh:
+                                cur_url = fresh[0]
+                        delay = min(8, (2 ** attempt)) + random.uniform(0.1, 0.4)
+                        time.sleep(delay)
+                        continue
+                    else:
+                        delay = min(8, (2 ** attempt)) + random.uniform(0.1, 0.4)
+                        time.sleep(delay)
+                        continue
+
+                    with open(self.part_path, mode) as f:
+                        for chunk in r.iter_content(chunk_size=128 * 1024):
+                            if self.cancel_event.is_set():
+                                return False
+                            if chunk:
+                                f.write(chunk)
+                                downloaded_total += len(chunk)
+                                self._notify_progress(downloaded_total, total_file_size, start_time, last_cb_state)
+
+                    if (total_file_size > 0 and downloaded_total >= total_file_size) or (downloaded_total > 1024 * 100 and total_file_size == 0):
+                        success = True
+                        break
+            except Exception:
+                delay = min(8, (2 ** attempt)) + random.uniform(0.1, 0.5)
+                time.sleep(delay)
+            finally:
+                if sem:
+                    try: sem.release()
+                    except Exception: pass
+
             if success:
                 break
 
-    if not success or not os.path.exists(part_path):
-        raise Exception('Không thể tải luồng video từ máy chủ Douyin sau nhiều lần thử lại.')
-        
-    # Xử lý âm thanh nếu yêu cầu Audio MP3 (Section 13)
-    if is_audio:
-        if progress_callback:
-            progress_callback({
-                'status': 'processing',
-                'message': 'Đang chuyển đổi âm thanh sang MP3 bằng FFmpeg...'
-            })
-        ffmpeg_dir = get_ffmpeg_dir()
-        ffmpeg_exe = os.path.join(ffmpeg_dir, 'ffmpeg.exe') if ffmpeg_dir else 'ffmpeg'
-        cmd = [ffmpeg_exe, '-y', '-i', part_path, '-vn', '-ab', '192k', output_path]
-        subprocess.run(cmd, capture_output=True, check=True, creationflags=0x08000000 if os.name == 'nt' else 0)
-        if os.path.exists(part_path):
-            try:
-                os.remove(part_path)
-            except Exception:
-                pass
+        if not success or not os.path.exists(self.part_path):
+            return False
+
+        if os.path.exists(self.output_path):
+            try: os.remove(self.output_path)
+            except Exception: pass
+        os.rename(self.part_path, self.output_path)
+        self._notify_progress(total_file_size or downloaded_total, total_file_size or downloaded_total, start_time, last_cb_state, force=True)
+        return True
+
+    def execute(self):
+        """
+        Khởi chạy tiến trình tải với đầy đủ cơ chế đa luồng -> fallback đơn luồng -> hậu kiểm ffprobe.
+        """
+        selected_url, total_file_size, accept_ranges, etag = self.probe_stream()
+        if not selected_url:
+            raise Exception('Không tìm thấy URL tải video khả dụng hoặc link Douyin đã hết hạn.')
+
+        success = False
+        # Nếu hỗ trợ Range và file vượt ngưỡng, ưu tiên tải đa luồng
+        if accept_ranges and total_file_size > self.chunk_size_threshold:
+            success = self._execute_multipart(selected_url, total_file_size, etag)
+
+        # Fallback về đơn luồng nếu đa luồng không áp dụng được hoặc bị lỗi giữa chừng
+        if not success:
+            success = self._execute_single_part(selected_url, total_file_size)
+
+        if not success or not os.path.exists(self.output_path):
+            raise Exception('Không thể tải video Douyin sau nhiều lần thử lại.')
+
+        # Xử lý trích xuất Audio MP3 nếu được yêu cầu
+        if self.is_audio:
+            if self.progress_callback:
+                self.progress_callback({
+                    'status': 'processing',
+                    'message': 'Đang chuyển đổi âm thanh sang MP3 bằng FFmpeg...'
+                })
+            temp_vid = self.output_path + '.temp.mp4'
+            if os.path.exists(temp_vid):
+                try: os.remove(temp_vid)
+                except Exception: pass
+            os.rename(self.output_path, temp_vid)
+
+            ffmpeg_dir = get_ffmpeg_dir()
+            ffmpeg_exe = os.path.join(ffmpeg_dir, 'ffmpeg.exe') if ffmpeg_dir else 'ffmpeg'
+            cmd = [ffmpeg_exe, '-y', '-i', temp_vid, '-vn', '-ab', '192k', self.output_path]
+            kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs() if hasattr(ffmpeg_installer, 'get_stealth_subprocess_kwargs') else {}
+            subprocess.run(cmd, capture_output=True, check=True, **kwargs)
+            if os.path.exists(temp_vid):
+                try: os.remove(temp_vid)
+                except Exception: pass
+
+        # Xác thực container qua ffprobe
+        specs = probe_video_specs(self.output_path)
+        return self.output_path, specs
+
+
+def download_stream_with_resume(video_urls, output_path, is_audio=False, progress_callback=None,
+                                max_retries=4, num_threads=4, connection_semaphore=None,
+                                cancel_event=None, aweme_id=None, refresh_url_cb=None):
+    """
+    Hàm giao diện tải stream thống nhất chuẩn Section 9 & 27.
+    Ủy quyền trực tiếp cho ResumableRangeDownloader.
+    """
+    downloader = ResumableRangeDownloader(
+        urls=video_urls,
+        output_path=output_path,
+        num_threads=num_threads,
+        connection_semaphore=connection_semaphore,
+        progress_callback=progress_callback,
+        cancel_event=cancel_event,
+        max_retries=max_retries,
+        aweme_id=aweme_id,
+        refresh_url_cb=refresh_url_cb,
+        is_audio=is_audio
+    )
+    final_path, _ = downloader.execute()
+    return final_path
+
+
+# =========================================================================
+# 3.1 EPISODE STITCHING / CONCAT ENGINE (Section 5)
+# =========================================================================
+def merge_collection_episodes(file_list, output_path, merge_mode="auto", progress_callback=None):
+    """
+    Ghép nhiều tập video thành 1 video dài hoàn chỉnh (Section 5):
+    - Kiểm tra tính tương thích qua ffprobe: codec, resolution, fps.
+    - Nếu tương thích và merge_mode == "auto" | "copy":
+      Sử dụng FFmpeg Concat Demuxer (-c copy) ghép siêu tốc không nén lại.
+    - Nếu không tương thích hoặc merge_mode == "reencode":
+      Sử dụng filter_complex concat chuẩn hóa kích thước, encode qua NVENC hoặc libx264.
+    - Giữ nguyên các tệp tập gốc ban đầu.
+    """
+    if not file_list or not isinstance(file_list, list):
+        raise ValueError("Danh sách file cần ghép rỗng.")
+
+    valid_files = [os.path.abspath(f) for f in file_list if f and os.path.exists(f) and os.path.getsize(f) > 1000]
+    if not valid_files:
+        raise ValueError("Không tìm thấy file video hợp lệ nào để ghép.")
+
+    if len(valid_files) == 1:
+        # Nếu chỉ có 1 file, copy trực tiếp sang output_path nếu khác vị trí
+        if os.path.abspath(valid_files[0]) != os.path.abspath(output_path):
+            import shutil
+            shutil.copy2(valid_files[0], output_path)
         return output_path
-        
-    # Đổi tên nguyên tử từ .part sang file chính thức
-    if os.path.exists(output_path):
+
+    if progress_callback:
+        progress_callback({'status': 'probing', 'message': f'Đang kiểm tra thông số {len(valid_files)} video...'})
+
+    ffmpeg_dir = get_ffmpeg_dir()
+    ffmpeg_exe = os.path.join(ffmpeg_dir, 'ffmpeg.exe') if ffmpeg_dir else 'ffmpeg'
+    kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs() if hasattr(ffmpeg_installer, 'get_stealth_subprocess_kwargs') else {}
+
+    # 1. Thu thập thông số kỹ thuật từng file
+    specs = []
+    for f in valid_files:
+        sp = probe_video_specs(f)
+        if not sp or not sp.get('is_video'):
+            raise Exception(f"File không phải video hợp lệ: {os.path.basename(f)}")
+        specs.append(sp)
+
+    first_spec = specs[0]
+    w0 = first_spec.get('width', 0)
+    h0 = first_spec.get('height', 0)
+    vcodec0 = first_spec.get('vcodec', '')
+    acodec0 = first_spec.get('acodec', '')
+    fps0 = first_spec.get('fps', 0.0)
+
+    # Đánh giá tính tương thích để chọn stream copy hay re-encode
+    is_compatible = True
+    for sp in specs[1:]:
+        same_dim = (sp.get('width') == w0 and sp.get('height') == h0)
+        same_vcodec = (sp.get('vcodec') == vcodec0)
+        same_acodec = (sp.get('acodec') == acodec0)
+        fps_diff = abs((sp.get('fps') or 0.0) - fps0)
+        if not (same_dim and same_vcodec and same_acodec and fps_diff < 1.0):
+            is_compatible = False
+            break
+
+    use_copy = is_compatible and (merge_mode in ["auto", "copy"])
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    temp_concat_list = os.path.join(os.path.dirname(output_path), f"concat_list_{int(time.time())}.txt")
+
+    if use_copy:
+        # --- CHIẾN LƯỢC 1: FFmpeg Concat Demuxer (Stream Copy siêu tốc) ---
+        if progress_callback:
+            progress_callback({'status': 'merging', 'mode': 'copy', 'message': f'Đang ghép siêu tốc {len(valid_files)} tập (Stream Copy)...'})
+
         try:
-            os.remove(output_path)
+            with open(temp_concat_list, 'w', encoding='utf-8') as f:
+                for vf in valid_files:
+                    norm_path = vf.replace('\\', '/')
+                    f.write(f"file '{norm_path}'\n")
+
+            cmd = [
+                ffmpeg_exe, '-y',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', temp_concat_list,
+                '-c', 'copy',
+                output_path
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=600, **kwargs)
+            if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                if os.path.exists(temp_concat_list):
+                    try: os.remove(temp_concat_list)
+                    except Exception: pass
+                return output_path
         except Exception:
             pass
-    os.rename(part_path, output_path)
+
+    # --- CHIẾN LƯỢC 2: Filter Complex Concat (Re-encode chuẩn hóa) ---
+    if progress_callback:
+        progress_callback({'status': 'merging', 'mode': 'reencode', 'message': f'Đang chuẩn hóa và ghép {len(valid_files)} tập (Re-encode)...'})
+
+    target_w = w0 if w0 > 0 else 1920
+    target_h = h0 if h0 > 0 else 1080
+
+    cmd = [ffmpeg_exe, '-y']
+    for vf in valid_files:
+        cmd.extend(['-i', vf])
+
+    filter_chunks = []
+    concat_inputs = ""
+    for idx in range(len(valid_files)):
+        filter_chunks.append(
+            f"[{idx}:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{idx}];"
+            f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{idx}]"
+        )
+        concat_inputs += f"[v{idx}][a{idx}]"
+
+    filter_complex = ";".join(filter_chunks) + f";{concat_inputs}concat=n={len(valid_files)}:v=1:a=1[outv][outa]"
+
+    cmd.extend([
+        '-filter_complex', filter_complex,
+        '-map', '[outv]',
+        '-map', '[outa]',
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '22',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        output_path
+    ])
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1200, **kwargs)
+        if res.returncode != 0:
+            raise Exception(f"FFmpeg ghép video thất bại: {res.stderr[-400:] if res.stderr else 'Lỗi không xác định'}")
+    finally:
+        if os.path.exists(temp_concat_list):
+            try: os.remove(temp_concat_list)
+            except Exception: pass
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+        raise Exception("Không thể tạo file ghép sau khi xử lý.")
+
     return output_path
+
 
 # =========================================================================
 # 4. CHUNG CHO CÁC NỀN TẢNG KHÁC (YouTube, TikTok, Bilibili, Facebook...)
@@ -1019,6 +1856,13 @@ def get_common_ydl_opts():
         'no_warnings': True,
         'windowsfilenames': True,
         'socket_timeout': 30,
+        'http_chunk_size': 10485760,  # 10MB chunking chống YouTube drop kết nối & IncompleteRead (bytes read, more expected)
+        'retries': 20,  # Thử lại tối đa 20 lần khi rớt mạng
+        'fragment_retries': 20,  # Thử lại từng phân đoạn khi mạng ngắt
+        'file_access_retries': 5,
+        'continuedl': True,  # Tự động tải nối tiếp từ mốc byte đã nhận (HTTP Range Resume)
+        'buffersize': 1024 * 32,
+        'nocheckcertificate': True,
         'js_runtimes': {'node': {}},
         'remote_components': {'ejs': 'github'},
         'extractor_args': {
@@ -1052,7 +1896,15 @@ def extract_video_info(url):
     if is_douyin_url(clean_url):
         return resolve_douyin_media(clean_url)
 
-    # 2. Các nền tảng khác -> Dùng yt-dlp
+    # 2. Nền tảng Bilibili -> Dùng BBDown Engine chuyên biệt
+    if is_bilibili_url(clean_url):
+        try:
+            import bilibili_downloader
+            return bilibili_downloader.extract_bilibili_info(clean_url)
+        except Exception as e:
+            return {'error': f"Lỗi phân tích Bilibili: {str(e)}"}
+
+    # 3. Các nền tảng khác -> Dùng yt-dlp
     ydl_opts = get_common_ydl_opts()
     ydl_opts['skip_download'] = True
     ydl_opts['extract_flat'] = False
@@ -1159,28 +2011,35 @@ def download_media(url, format_id='best', is_audio=False, output_dir=None, progr
             
         title = resolved_info.get('title', 'douyin_video')
         video_id = resolved_info.get('video_id', 'video')
-        safe_title = sanitize_filename(title, max_len=70)
         ext = 'mp3' if is_audio else 'mp4'
         
-        # Đặt tên file chuẩn Section 28: {sanitized_title} [{video_id}].mp4
-        final_filename = os.path.join(output_dir, f"{safe_title} [{video_id}].{ext}")
-        
-        counter = 1
-        base_path, _ = os.path.splitext(final_filename)
-        while os.path.exists(final_filename):
-            final_filename = f"{base_path}_{counter}.{ext}"
-            counter += 1
+        # Đặt tên file Windows an toàn, giữ nguyên tiêu đề gốc và xử lý collision (2), (3)
+        base_name = f"{title} [{video_id}]" if video_id and video_id != 'video' else title
+        final_filename, _ = resolve_unique_filename(output_dir, base_name, ext=ext)
             
         download_stream_with_resume(
             video_urls=target_video_urls,
             output_path=final_filename,
             is_audio=is_audio,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            aweme_id=video_id
         )
         return final_filename, resolved_info
 
 
-    # 2. Xử lý chuẩn bằng yt-dlp cho các nền tảng khác
+    # 2. Nếu là Bilibili, sử dụng BBDown Engine chuyên biệt
+    if is_bilibili_url(clean_url):
+        import bilibili_downloader
+        return bilibili_downloader.download_bilibili_media(
+            url=clean_url,
+            format_id=format_id,
+            is_audio=is_audio,
+            output_dir=output_dir,
+            progress_callback=progress_callback,
+            info=info
+        )
+
+    # 3. Xử lý chuẩn bằng yt-dlp cho các nền tảng khác
     downloaded_file = {'path': None}
 
     def hook(d):
@@ -1216,6 +2075,16 @@ def download_media(url, format_id='best', is_audio=False, output_dir=None, progr
     ydl_opts = get_common_ydl_opts()
     ydl_opts['outtmpl'] = os.path.join(output_dir, '%(title).120B [%(id)s].%(ext)s')
     ydl_opts['progress_hooks'] = [hook]
+
+    def pp_hook(d):
+        if progress_callback:
+            status = d.get('status')
+            if status == 'started':
+                progress_callback({
+                    'status': 'processing',
+                    'message': 'Đang đóng gói và ghép nối video bằng FFmpeg...'
+                })
+    ydl_opts['postprocessor_hooks'] = [pp_hook]
 
     if is_audio:
         ydl_opts['format'] = 'bestaudio/best'
@@ -1257,5 +2126,7 @@ def download_media(url, format_id='best', is_audio=False, output_dir=None, progr
             raise Exception('Không thể tải video (HTTP 403). Video có thể bị giới hạn vùng hoặc yêu cầu đăng nhập.')
         elif 'Video unavailable' in err_msg or 'unavailable' in err_msg.lower():
             raise Exception('Video không khả dụng. Video có thể đã bị xóa hoặc bị giới hạn. Vui lòng thử video khác.')
+        elif 'bytes read' in err_msg or 'more expected' in err_msg or 'incompleteread' in err_msg.lower():
+            raise Exception('Kết nối mạng bị gián đoạn giữa chừng khi tải từ máy chủ (Incomplete Read). Vui lòng kiểm tra lại đường truyền mạng hoặc thử lại!')
         else:
             raise Exception(f'Lỗi tải video: {err_msg}')

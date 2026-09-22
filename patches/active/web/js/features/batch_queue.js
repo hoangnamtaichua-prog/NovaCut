@@ -98,28 +98,38 @@ function setupIngestionUI() {
     if (btnSelectFiles) {
         btnSelectFiles.addEventListener('click', async () => {
             try {
-                const res = await fetch('/api/batch/select_files', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: 'Chọn nhiều file video để xử lý hàng loạt' })
-                });
-                const data = await res.json();
-                if (data.success && Array.isArray(data.files) && data.files.length > 0) {
-                    selectedLocalFiles = data.files;
+                let files = [];
+                if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.select_multiple_videos === 'function') {
+                    files = await window.pywebview.api.select_multiple_videos();
+                } else if (typeof window.selectFiles === 'function') {
+                    files = await window.selectFiles('video', 'Chọn nhiều file video để xử lý hàng loạt');
+                } else {
+                    const res = await fetch('/api/batch/select_files', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: 'Chọn nhiều file video để xử lý hàng loạt' })
+                    });
+                    const data = await res.json();
+                    if (data.success && Array.isArray(data.files) && data.files.length > 0) {
+                        files = data.files;
+                    }
+                }
+                if (Array.isArray(files) && files.length > 0) {
+                    selectedLocalFiles = files;
                     const folderInput = document.getElementById('batchFolderInputPath');
                     if (folderInput) folderInput.value = '';
                     const summary = document.getElementById('batchLocalFilesSummary');
                     if (summary) {
                         summary.style.display = 'block';
-                        summary.textContent = `🎬 Đã chọn ${data.files.length} file video trên máy`;
+                        summary.textContent = `🎬 Đã chọn ${files.length} file video trên máy`;
                     }
-                    window.showToast?.(`🎬 Đã chọn ${data.files.length} file video!`, 'success');
+                    window.showToast?.(`🎬 Đã chọn ${files.length} file video!`, 'success');
                     return;
                 }
             } catch (e) {
-                console.warn("Lỗi gọi native select_files:", e);
+                console.warn("Lỗi gọi select_files:", e);
             }
-            if (hiddenFileInput) hiddenFileInput.click();
+            if (!window.pywebview && hiddenFileInput) hiddenFileInput.click();
         });
     }
 
@@ -144,6 +154,27 @@ function setupIngestionUI() {
     // Select Output Dir
     const btnSelectOutputDir = document.getElementById('btnSelectBatchOutputDir');
     const outputDirInput = document.getElementById('batchOutputDirPath');
+    const chkQueueSaveToSource = document.getElementById('batchQueueSaveToSourceDir');
+
+    if (chkQueueSaveToSource && outputDirInput) {
+        chkQueueSaveToSource.addEventListener('change', () => {
+            if (chkQueueSaveToSource.checked) {
+                if (!outputDirInput.dataset.prevDir) outputDirInput.dataset.prevDir = outputDirInput.value || '';
+                outputDirInput.value = '[Tự động] Cùng thư mục video gốc';
+                if (btnSelectOutputDir) {
+                    btnSelectOutputDir.style.opacity = '0.5';
+                    btnSelectOutputDir.style.pointerEvents = 'none';
+                }
+            } else {
+                outputDirInput.value = outputDirInput.dataset.prevDir || '';
+                if (btnSelectOutputDir) {
+                    btnSelectOutputDir.style.opacity = '1';
+                    btnSelectOutputDir.style.pointerEvents = 'auto';
+                }
+            }
+        });
+    }
+
     if (btnSelectOutputDir && outputDirInput) {
         btnSelectOutputDir.addEventListener('click', async () => {
             if (window.selectDirectory) {
@@ -273,8 +304,26 @@ async function handleAddTasksToQueue() {
     }
 
     const preset = document.getElementById('batchSelectPreset')?.value || 'review';
-    const output_dir = (document.getElementById('batchOutputDirPath')?.value || '').trim();
-    let preset_config = { output_dir: output_dir || undefined };
+    const isSaveToSource = Boolean(document.getElementById('batchQueueSaveToSourceDir')?.checked);
+    let output_dir = (document.getElementById('batchOutputDirPath')?.value || '').trim();
+    if (output_dir.startsWith('[Tự động]')) output_dir = '';
+    let preset_config = { 
+        output_dir: output_dir || undefined,
+        save_to_source_dir: isSaveToSource 
+    };
+
+    if (isSaveToSource) {
+        items = items.map(it => {
+            if (it.path) {
+                const clean = String(it.path).trim().replace(/^["']|["']$/g, '');
+                const lastSlash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+                if (lastSlash > 0) {
+                    return { ...it, output_dir: clean.substring(0, lastSlash) };
+                }
+            }
+            return it;
+        });
+    }
 
     if (preset === 'review') {
         preset_config = {
@@ -293,7 +342,7 @@ async function handleAddTasksToQueue() {
             voice_id: document.getElementById('batchDubbingVoice')?.value || 'ngoc_huyen',
             voice_speed: 1.0,
             original_volume: parseFloat(document.getElementById('batchOriginalVolume')?.value || 5.0),
-            remove_original_vocals: document.getElementById('batchChkRemoveVocals')?.checked !== false,
+            remove_original_vocals: Boolean(document.getElementById('batchChkRemoveVocals')?.checked),
             auto_subtitles: document.getElementById('batchChkDubbingSubs')?.checked !== false,
             aspect_ratio: 'original'
         };

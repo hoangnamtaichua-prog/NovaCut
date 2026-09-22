@@ -1,0 +1,104 @@
+<USER_REQUEST>
+nếu dùng API của openspeker có nhanh hơn được không đẩy lên đa luồng như cách gửi API dịch
+đọc document của openspeaker đi xem tối đa lên được bao nhiêu# OpenSpeaker API Documentation
+
+Base URL: https://api.ai33.pro
+
+## Authentication
+
+External API endpoints use the `xi-api-key` header unless an endpoint explicitly says otherwise.
+
+```http
+xi-api-key: <YOUR_API_KEY>
+```
+
+v3 endpoints accept the same `xi-api-key` header, or `Authorization: <YOUR_API_KEY>` (raw key, no `Bearer` prefix).
+
+## Rate Limits
+
+Every authenticated API, including v3, returns the same rate-limit response headers:
+
+| Header | Meaning |
+|---|---|
+| `X-RateLimit-Limit` | Sustained token refill rate per second for the current workload |
+| `X-RateLimit-Burst` | Maximum token capacity for the current workload |
+| `X-RateLimit-Remaining` | Remaining tokens currently available |
+| `X-RateLimit-Scope` | Workload bucket: `create`, `poll`, `read`, `upload`, or `command` |
+| `Retry-After` | Seconds to wait before retrying; returned when the API responds with HTTP 429 |
+
+Task-detail polling costs 1 token; task-list polling costs 2 tokens. API keys and JWTs belonging to the same user share one quota because rate limiting is based on the authenticated user, not the credential.
+
+On HTTP 429, read `Retry-After`, wait that many seconds, then retry with exponential backoff and jitter. HTTP 503 with code `server_busy` is temporary server capacity pressure and should also be retried; it is not a user rate-limit violation.
+
+## Common Task Flow
+
+Most generation APIs are asynchronous. Create endpoints return `task_id`; poll `GET /v1/task/{task_id}` or pass `receive_url` for webhook delivery.
+Task detail and list responses include `text` limited to 1,000 Unicode characters, the original `text_length`, and `text_truncated`. Fetch `GET /v1/task/{task_id}/full` with the same authentication only when you need the complete text. This endpoint returns `{ id, text, text_length, text_tru
+<truncated 13399 bytes>
+
+    "model_parameters": {
+      "aspect_ratio": "16:9",
+      "resolution": "2K"
+    },
+    "assets": 2
+  }'
+```
+
+### Generate Image
+
+```bash
+curl -X POST "https://api.ai33.pro/v1i/task/generate-image" \
+  -H "xi-api-key: $API_KEY" \
+  -F 'prompt=A beautiful sunset over the ocean in watercolor style' \
+  -F 'model_id=bytedance-seedream-4.5' \
+  -F 'generations_count=1' \
+  -F 'model_parameters={"aspect_ratio":"16:9","resolution":"2K"}' \
+  -F 'receive_url=https://your-site.com/api/callback'
+```
+
+Reference images: send multiple `assets` fields. Use `@img1`, `@img2`, etc. in `prompt`; the number of `@img` references must match the number of uploaded `assets` files.
+
+Imagen task type is `imagen2`. Poll with `GET /v1/task/{task_id}` or list with `GET /v1/tasks?type=imagen2&page=1&limit=20`.
+
+## Typical Success Response Shape
+
+Create endpoints usually return:
+
+```json
+{
+  "success": true,
+  "task_id": "uuid_task_id",
+  "ec_remain_credits": "9500"
+}
+```
+
+Polling completed task example:
+
+```json
+{
+  "id": "uuid_task_id",
+  "created_at": "2026-06-15T00:00:00.000Z",
+  "status": "done",
+  "error_message": null,
+  "credit_cost": 3600,
+  "metadata": {
+    "audio_url": "https://example.com/output.mp3"
+  },
+  "progress": 100,
+  "type": "suno_music"
+}
+```
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-14T08:48:31+07:00.
+
+The user's current state is as follows:
+Active Document: d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\patches\active\routes\subtitles.py (LANGUAGE_PYTHON)
+Cursor is on line: 1
+Other open documents:
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\routes\state.py (LANGUAGE_PYTHON)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\scripts\test_ocr_sub_cache.py (LANGUAGE_PYTHON)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\api_keys.txt (LANGUAGE_PLAINTEXT)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\patches\active\routes\subtitles.py (LANGUAGE_PYTHON)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\patches\active\ai_dubbing.py (LANGUAGE_PYTHON)
+</ADDITIONAL_METADATA>

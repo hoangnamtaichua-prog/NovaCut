@@ -1,0 +1,26 @@
+{
+  "scope": "Synthetic PCM overlay only; three overlapping 10-second stereo clips; excludes disk I/O and TTS",
+  "sample_rate": 44100,
+  "channels": 2,
+  "numpy_version": "2.3.5",
+  "pcm_exact_equal": true,
+  "measurements": {
+    "legacy": {
+      "seconds": [
+        0.6055760999998938,
+        0.6002816000000166,
+        0.6122998000000734
+      ],
+      "median_seconds": 0.6055760999998938
+    },
+    "numpy": {
+      "seconds": [
+        0.011769100000037724,
+        0.012174599999980273,
+        0.01254190000008748
+      ],
+      "median_seconds": 0.012174599999980273
+    }
+  },
+  "median_speedup": 49.74094426107429
+}

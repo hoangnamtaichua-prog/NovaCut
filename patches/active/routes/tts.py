@@ -105,7 +105,20 @@ def get_voices():
             base_voices.append(v)
             seen_ids.add(v['id'])
     
-    # 3. Load cached OpenSpeaker voices (500+ voices)
+    # 3. Load full Microsoft Edge Neural TTS voices (100% Miễn phí, 300+ giọng toàn cầu)
+    edge_voices_path = os.path.join(ROOT_DIR, 'web', 'edge_voices.json')
+    if os.path.exists(edge_voices_path):
+        try:
+            with open(edge_voices_path, 'r', encoding='utf-8') as f:
+                edge_voices = json.load(f)
+                for ev in edge_voices:
+                    if isinstance(ev, dict) and ev.get('id') and ev['id'] not in seen_ids:
+                        base_voices.append(ev)
+                        seen_ids.add(ev['id'])
+        except Exception as e:
+            print("Error loading edge_voices.json:", e)
+
+    # 4. Load cached OpenSpeaker voices (500+ voices)
     openspeaker_path = VOICE_CACHE_FILE
     if not os.path.exists(openspeaker_path):
         openspeaker_path = os.path.join(ROOT_DIR, 'web', 'openspeaker_voices.json')
@@ -380,6 +393,67 @@ def generate_tts_preview():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+_timeline_preview_lock = threading.Lock()
+
+
+@tts_bp.route('/api/tts/timeline_preview', methods=['POST'])
+def generate_timeline_preview():
+    permission_error = _require_media_access()
+    if permission_error:
+        return permission_error
+    try:
+        import hashlib
+        import math
+        import ai_dubbing
+        data = request.get_json() or {}
+        subtitles = data.get('subtitles')
+        if not isinstance(subtitles, list) or not 0 < len(subtitles) <= 10000:
+            raise ValueError('Danh sách phụ đề phải có từ 1 đến 10.000 câu.')
+        normalized = []
+        for sub in subtitles:
+            text = str(sub.get('translation') or sub.get('text') or '').strip()
+            start = float(sub.get('startSeconds', 0))
+            end = float(sub.get('endSeconds', start + 3))
+            if not all(math.isfinite(v) and 0 <= v <= 86400 for v in (start, end)):
+                raise ValueError('Thời gian phụ đề không hợp lệ.')
+            if text:
+                normalized.append({'text': text, 'startSeconds': start, 'endSeconds': end})
+        if not normalized or sum(len(s['text']) for s in normalized) > 250000:
+            raise ValueError('Phụ đề rỗng hoặc vượt quá 250.000 ký tự.')
+        voice = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice_id') or 'local_ngoc_huyen'))[:100]
+        speed = _safe_speed(data.get('speed', 1))
+        identity = json.dumps([normalized, voice, speed], ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+        directory = os.path.join(ROOT_DIR, 'temp', 'timeline_preview', digest)
+        track = os.path.join(directory, 'dubbed_timeline.wav')
+        with _timeline_preview_lock:
+            if not os.path.isfile(track) or os.path.getsize(track) <= 1000:
+                key = ''
+                if os.path.isfile(API_KEYS_FILE):
+                    with open(API_KEYS_FILE, encoding='utf-8') as stream:
+                        for line in stream:
+                            if line.startswith('openSpeakerApiKey='):
+                                key = line.split('=', 1)[1].strip()
+                errors = []
+                output = None
+                for kind, message in ai_dubbing.build_dubbing_track_for_subtitles_generator(
+                        normalized, voice, speed, directory, open_speaker_key=key,
+                        max_workers=None):
+                    if kind == 'done':
+                        output = message
+                    elif 'Lỗi câu #' in message or 'LỖI' in message or 'Lỗi xử lý:' in message:
+                        errors.append(message)
+                if not output or errors:
+                    if os.path.isfile(track):
+                        os.remove(track)
+                    raise RuntimeError(errors[0] if errors else 'Không tạo được âm thanh nghe thử.')
+        return jsonify(success=True, audio_url='/api/file?path=' + urllib.parse.quote(track))
+    except (ValueError, TypeError, AttributeError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc)), 500
+
+
 @tts_bp.route('/api/tts/sentence_preview', methods=['POST'])
 def generate_sentence_preview():
     try:
@@ -422,6 +496,115 @@ def generate_sentence_preview():
         })
     except Exception as e:
         import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@tts_bp.route('/api/tts/batch_sentence_preview', methods=['POST'])
+def generate_batch_sentence_preview():
+    try:
+        permission_error = _require_media_access()
+        if permission_error:
+            return permission_error
+        data = request.json or {}
+        sentences = data.get('sentences', [])
+        voice_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice_id') or data.get('voice') or 'local_ngoc_huyen'))[:100]
+        speed = _safe_speed(data.get('speed', 1.0))
+
+        if not isinstance(sentences, list) or not sentences:
+            return jsonify({'success': False, 'error': 'Danh sách câu rỗng'}), 400
+
+        sentences = sentences[:30]
+
+        import hashlib
+        cache_dir = os.path.join(TTS_SAMPLE_DIR, 'tts_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+
+        results = []
+        to_synthesize = []
+
+        for item in sentences:
+            if isinstance(item, str):
+                item = {'text': item}
+            raw_text = str(item.get('text', '')).strip()
+            item_id = item.get('id', item.get('index'))
+            if not raw_text:
+                continue
+
+            hash_key = hashlib.md5(f"{voice_id}_{speed}_{raw_text}".encode('utf-8')).hexdigest()
+            cache_filename = f"{hash_key}.wav"
+            cache_path = os.path.join(cache_dir, cache_filename)
+
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 500:
+                results.append({
+                    'id': item_id,
+                    'text': raw_text,
+                    'audio_url': f'/api/file?path={urllib.parse.quote(cache_path)}',
+                    'cached': True,
+                    'success': True
+                })
+            else:
+                to_synthesize.append({
+                    'id': item_id,
+                    'text': raw_text,
+                    'cache_path': cache_path
+                })
+
+        if to_synthesize:
+            is_local = voice_id.startswith('local_')
+            if is_local:
+                import local_voice_engine
+                batch_items = [{'id': task['id'], 'text': task['text'], 'output_path': task['cache_path']} for task in to_synthesize]
+                b_results = local_voice_engine.synthesize_batch(batch_items, voice_id=voice_id, speed=speed, batch_size=8)
+                for task, res in zip(to_synthesize, b_results):
+                    if res.get('success') and os.path.exists(task['cache_path']) and os.path.getsize(task['cache_path']) > 100:
+                        results.append({
+                            'id': task['id'],
+                            'text': task['text'],
+                            'audio_url': f"/api/file?path={urllib.parse.quote(task['cache_path'])}",
+                            'cached': False,
+                            'success': True
+                        })
+                    else:
+                        results.append({
+                            'id': task['id'],
+                            'text': task['text'],
+                            'error': res.get('error', 'Lỗi tạo audio GPU'),
+                            'success': False
+                        })
+            else:
+                import ai_dubbing
+                from concurrent.futures import ThreadPoolExecutor
+
+                def _synth(task):
+                    try:
+                        ai_dubbing.synthesize_sentence(task['text'], voice_id, speed, task['cache_path'])
+                        return {
+                            'id': task['id'],
+                            'text': task['text'],
+                            'audio_url': f"/api/file?path={urllib.parse.quote(task['cache_path'])}",
+                            'cached': False,
+                            'success': True
+                        }
+                    except Exception as ex:
+                        return {
+                            'id': task['id'],
+                            'text': task['text'],
+                            'error': str(ex),
+                            'success': False
+                        }
+
+                max_workers = min(4, len(to_synthesize))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    synth_results = list(executor.map(_synth, to_synthesize))
+                    results.extend(synth_results)
+
+        return jsonify({
+            'success': True,
+            'results': results,
+            'total': len(results)
+        })
+    except Exception as e:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -516,46 +699,107 @@ def generate_tts_kokoro():
                 srt_f.write(srt_content)
         else:
             # Multi-sentence TTS with sentence-level timestamps & 0.5s silence pauses
-            temp_chunks = []
+            # Kích hoạt xử lý đa luồng song song (Multi-threading) tăng tốc độ tạo giọng
+            from concurrent.futures import ThreadPoolExecutor
+            
+            is_edge = voice_id.startswith('edge_')
+            req_threads = int(data.get('threads') or data.get('tts_threads') or 16)
+            max_workers = max(2, min(req_threads, 32 if is_edge else 16))
+            
+            speech_tasks = []
+            speech_idx = 1
+            for seg_type, val in segments:
+                if seg_type == 'speech':
+                    chunk_wav = os.path.join(output_dir, f"temp_chunk_{timestamp}_{speech_idx}.wav")
+                    speech_tasks.append((speech_idx, val, chunk_wav))
+                    speech_idx += 1
+
+            def _synth_worker(task):
+                idx, sentence_text, chunk_file = task
+                try:
+                    ai_dubbing.synthesize_sentence(sentence_text, voice_id, speed, chunk_file)
+                    return (idx, chunk_file, None)
+                except Exception as ex:
+                    return (idx, chunk_file, str(ex))
+
+            chunk_results = {}
+            if speech_tasks:
+                if voice_id.startswith('local_'):
+                    import local_voice_engine
+                    batch_items = [{'id': s_idx, 'text': val, 'output_path': c_file} for s_idx, val, c_file in speech_tasks]
+                    b_res = local_voice_engine.synthesize_batch(batch_items, voice_id=voice_id, speed=speed, batch_size=16)
+                    for item, r in zip(speech_tasks, b_res):
+                        chunk_results[item[0]] = (item[2], r.get('error') if not r.get('success') else None)
+                else:
+                    actual_workers = min(max_workers, len(speech_tasks))
+                    with ThreadPoolExecutor(max_workers=actual_workers) as pool:
+                        for s_idx, c_file, err in pool.map(_synth_worker, speech_tasks):
+                            chunk_results[s_idx] = (c_file, err)
+
+            # Xác định sample rate chuẩn từ chunk đầu tiên
+            target_sr = 48000 if voice_id.startswith('local_') else 24000
+            for s_idx in sorted(chunk_results.keys()):
+                cf, _ = chunk_results[s_idx]
+                if cf and os.path.exists(cf) and os.path.getsize(cf) > 100:
+                    try:
+                        with sf.SoundFile(cf) as sff:
+                            if sff.samplerate > 0:
+                                target_sr = sff.samplerate
+                                break
+                    except Exception:
+                        pass
+
             srt_blocks = []
             current_time = 0.0
             sentence_idx = 1
-            target_sr = 48000
-            
-            for seg_type, val in segments:
-                if seg_type == 'speech':
-                    chunk_wav = os.path.join(output_dir, f"temp_chunk_{timestamp}_{sentence_idx}.wav")
-                    ai_dubbing.synthesize_sentence(val, voice_id, speed, chunk_wav)
-                    
-                    data, sr = sf.read(chunk_wav)
-                    target_sr = sr
-                    if len(data.shape) > 1:
-                        data = data.mean(axis=1) # convert to mono
-                    dur = len(data) / float(target_sr)
-                    
-                    start_str = sec_to_srt_time(current_time)
-                    end_str = sec_to_srt_time(current_time + dur)
-                    srt_blocks.append(f"{sentence_idx}\n{start_str} --> {end_str}\n{val}\n")
-                    sentence_idx += 1
-                    
-                    temp_chunks.append(data.astype(np.float32))
-                    current_time += dur
-                    
-                    try: os.remove(chunk_wav)
-                    except: pass
-                    
-                elif seg_type == 'pause':
-                    pause_dur = float(val)
-                    if pause_dur > 0:
-                        pause_samples = int(target_sr * pause_dur)
-                        temp_chunks.append(np.zeros(pause_samples, dtype=np.float32))
-                        current_time += pause_dur
-            
-            # Combine all chunks
-            final_audio = np.concatenate(temp_chunks, axis=0) if temp_chunks else np.zeros(target_sr, dtype=np.float32)
-            sf.write(audio_path, final_audio, target_sr, subtype='PCM_16')
-            
-            duration = len(final_audio) / float(target_sr)
+            has_written_frames = False
+
+            # Ghi tuần tự theo khối (Stream-based chunk write) trực tiếp vào file đích
+            # Giữ mức RAM sử dụng luôn < 5MB, chống triệt để lỗi Out-Of-Memory và C-segfault trong libsndfile
+            with sf.SoundFile(audio_path, mode='w', samplerate=target_sr, channels=1, subtype='PCM_16') as out_f:
+                for seg_type, val in segments:
+                    if seg_type == 'speech':
+                        c_file, err = chunk_results.get(sentence_idx, (None, None))
+                        if c_file and os.path.exists(c_file) and os.path.getsize(c_file) > 100:
+                            try:
+                                data, sr = sf.read(c_file, dtype='float32')
+                                if len(data.shape) > 1:
+                                    data = data.mean(axis=1) # convert to mono
+                                # Nếu sample rate khác target_sr thì resample an toàn
+                                if sr != target_sr and len(data) > 0:
+                                    import scipy.signal
+                                    new_len = int(round(len(data) * target_sr / float(sr)))
+                                    data = scipy.signal.resample(data, new_len)
+                                
+                                dur = len(data) / float(target_sr)
+                                start_str = sec_to_srt_time(current_time)
+                                end_str = sec_to_srt_time(current_time + dur)
+                                srt_blocks.append(f"{sentence_idx}\n{start_str} --> {end_str}\n{val}\n")
+                                out_f.write(data)
+                                has_written_frames = True
+                                current_time += dur
+                            except Exception as read_err:
+                                print(f"[TTS] Lỗi đọc đoạn audio câu #{sentence_idx}: {read_err}")
+                            finally:
+                                try:
+                                    if os.path.exists(c_file):
+                                        os.remove(c_file)
+                                except Exception:
+                                    pass
+                        sentence_idx += 1
+                        
+                    elif seg_type == 'pause':
+                        pause_dur = float(val)
+                        if pause_dur > 0:
+                            pause_samples = int(target_sr * pause_dur)
+                            out_f.write(np.zeros(pause_samples, dtype=np.float32))
+                            current_time += pause_dur
+
+                if not has_written_frames:
+                    out_f.write(np.zeros(target_sr, dtype=np.float32))
+                    current_time = 1.0
+
+            duration = current_time
             srt_content = "\n".join(srt_blocks)
             with open(srt_path, 'w', encoding='utf-8') as srt_f:
                 srt_f.write(srt_content)

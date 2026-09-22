@@ -1,0 +1,104 @@
+MATCH: {if(e.eventType==="INSERT"||e.eventType==="DELETE")return!0;const t=e.old,n=e.new;return!t||!n?!1:(t.status??null)!==(n.status??null)||(t.deleted_at??null)!==(n.deleted_at??null)||(t.credit_cost??null)!==(n.credit_cost??null)}
+==================================================
+MATCH: {title:"Pricing",url:"/app/buy-credits",icon:S$}
+==================================================
+MATCH: {children:[e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund"),": ",e.credit_cost.toLocaleString()]}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"||e.status==="pending"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {children:"Calculate credits cost before generating an image."}
+==================================================
+MATCH: {
+  "id": "abc123",
+  "type": "imagen2",
+  "status": "doing",
+  "progress": 30,
+  "credit_cost": 1188,
+  "created_at": "2026-02-22T06:00:00.000Z"
+}
+==================================================
+MATCH: {
+  "id": "abc123",
+  "type": "imagen2",
+  "status": "error",
+  "error_message": "Image generation failed: ...",
+  "credit_cost": 1188
+}
+==================================================
+MATCH: {','    "audio_url": "https://example.com/default.m4a",','    "srt_url": "https://example.com/translated.srt",','    "replacement_voice_id": "elevenlabs_TX3LPaxmHKxFdv7VOQHJ",','    "replacement_credit_multiplier": 1.25,','    "replacement_status": "done",','    "replacement_audio_url": "https://example.com/replacement.mp3"',"  }
+==================================================
+MATCH: {
+    "audio_url": "https://example.com/default.m4a",
+    "srt_url": "https://example.com/translated.srt",
+    "replacement_voice_id": "elevenlabs_TX3LPaxmHKxFdv7VOQHJ",
+    "replacement_credit_multiplier": 1.25,
+    "replacement_status": "done",
+    "replacement_audio_url": "https://example.com/replacement.mp3"
+  }
+==================================================
+MATCH: {className:"font-semibold text-sm",children:"Credit Cost"}
+==================================================
+MATCH: {
+  "success": true,
+  "task_id": uuid_task_id,
+  "duration": 120.5,
+  "credit_cost": 5000,
+  "ec_remain_credits": "9500"
+}
+==================================================
+MATCH: {children:[e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund"),": ",e.credit_cost.toLocaleString()]}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {audioDurationSeconds:t,audioDurationMinutes:parseFloat(n.toFixed(2)),baseCredits:a,bufferCredits:s,totalCreditsNeeded:i,userChargeCredits:l,bufferPercentage:this.BUFFER_PERCENTAGE*100,chargeMultiplier:this.CHARGE_MULTIPLIER*100}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:i(It==="done"?"Credit cost":It==="doing"?"Credit frozen":"Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?i("Credit cost"):e.status==="doing"?i("Credit frozen"):i("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground",children:[R.credit_cost.toLocaleString()," credits"]}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:e.credit_cost.toLocaleString()}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground whitespace-nowrap",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================
+MATCH: {className:"text-xs",children:((ne=e.credit_cost)==null?void 0:ne.toLocaleString())||0}
+==================================================
+MATCH: {className:"text-xs text-muted-foreground",children:e.status==="done"?s("Credit cost"):e.status==="doing"?s("Credit frozen"):s("Credit refund")}
+==================================================

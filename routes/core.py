@@ -45,6 +45,53 @@ def _validated_media_path(raw_path):
         return None
     return path
 
+def find_media_on_system(raw_path):
+    if not raw_path:
+        return None
+    raw_clean = str(raw_path or '').strip('\'"')
+    target_name = os.path.basename(raw_clean)
+    if not target_name:
+        return None
+
+    from routes.security import _selected_roots, register_user_path, _selection_lock
+
+    search_dirs = []
+    with _selection_lock:
+        search_dirs.extend(list(_selected_roots))
+
+    common_locations = [
+        os.path.join(ROOT_DIR, 'movies'),
+        os.path.join(ROOT_DIR, 'downloads'),
+        os.path.join(USER_DATA_DIR, 'downloads'),
+        os.path.expanduser(r'~\Downloads'),
+        os.path.expanduser(r'~\Videos'),
+        os.path.expanduser(r'~\Desktop')
+    ]
+    for loc in common_locations:
+        if loc and os.path.exists(loc) and loc not in search_dirs:
+            search_dirs.append(loc)
+
+    for d in search_dirs:
+        try:
+            cand = os.path.join(d, target_name)
+            if os.path.isfile(cand):
+                norm_c = os.path.normpath(cand)
+                register_user_path(norm_c)
+                return norm_c
+            if os.path.isdir(d):
+                for sub in os.listdir(d):
+                    sub_p = os.path.join(d, sub)
+                    if os.path.isdir(sub_p):
+                        cand = os.path.join(sub_p, target_name)
+                        if os.path.isfile(cand):
+                            norm_c = os.path.normpath(cand)
+                            register_user_path(norm_c)
+                            return norm_c
+        except Exception:
+            continue
+
+    return None
+
 def _ps_literal(value):
     return "'" + str(value or '').replace("'", "''") + "'"
 
@@ -91,8 +138,32 @@ def serve_file():
 
 @core_bp.route('/samples/<path:filename>')
 def serve_samples(filename):
-    samples_dir = os.path.join(ROOT_DIR, 'web', 'samples')
-    return send_from_directory(samples_dir, filename)
+    # 1. Ưu tiên tìm trong web/samples tĩnh
+    web_samples_dir = os.path.join(ROOT_DIR, 'web', 'samples')
+    target = os.path.join(web_samples_dir, filename)
+    if os.path.exists(target):
+        return send_from_directory(web_samples_dir, filename)
+
+    # 2. Tìm trong USER_DATA_DIR/samples (nơi lưu các voice đã cache hoặc clone)
+    user_samples_dir = os.path.join(USER_DATA_DIR, 'samples')
+    user_target = os.path.join(user_samples_dir, filename)
+    if os.path.exists(user_target) and os.path.getsize(user_target) > 500:
+        return send_from_directory(user_samples_dir, filename)
+
+    # 3. Nếu là file mẫu giọng .wav chưa có sẵn, tự động sinh tức thì và lưu cache
+    if filename.endswith('.wav'):
+        voice_id = filename[:-4]
+        try:
+            import ai_dubbing
+            os.makedirs(user_samples_dir, exist_ok=True)
+            text = "Xin chào! Đây là bản nghe thử giọng đọc AI thuyết minh chuẩn phòng thu."
+            ai_dubbing.synthesize_sentence(text, voice_id, 1.0, user_target)
+            if os.path.exists(user_target) and os.path.getsize(user_target) > 500:
+                return send_from_directory(user_samples_dir, filename)
+        except Exception as e:
+            print(f"[serve_samples] Lỗi sinh mẫu giọng trực tiếp cho {voice_id}: {e}")
+
+    return send_from_directory(web_samples_dir, filename)
 
 @core_bp.route('/api/video')
 def stream_video():
@@ -104,13 +175,39 @@ def stream_video():
             register_user_path(clean_p)
             path = clean_p
         else:
-            return "Video not found", 404
+            resolved = find_media_on_system(raw)
+            if resolved and os.path.exists(resolved) and os.path.isfile(resolved):
+                register_user_path(resolved)
+                path = resolved
+            else:
+                return "Video not found", 404
         
     mime_type, _ = mimetypes.guess_type(path)
     if not mime_type:
         mime_type = 'video/mp4'
         
     return send_file(path, mimetype=mime_type, conditional=True)
+
+@core_bp.route('/api/resolve_media_path', methods=['GET', 'POST'])
+def resolve_media_path_api():
+    data = request.json if request.is_json else request.args
+    raw_path = data.get('path') or data.get('name') or data.get('filename', '')
+    if not raw_path:
+        return jsonify({'success': False, 'error': 'Chưa cung cấp đường dẫn'}), 400
+
+    clean_p = os.path.realpath(str(raw_path).strip('\'"'))
+    if os.path.exists(clean_p) and os.path.isfile(clean_p):
+        norm_p = os.path.normpath(clean_p)
+        register_user_path(norm_p)
+        return jsonify({'success': True, 'resolved_path': norm_p, 'exists': True})
+
+    resolved = find_media_on_system(raw_path)
+    if resolved and os.path.exists(resolved):
+        norm_p = os.path.normpath(resolved)
+        register_user_path(norm_p)
+        return jsonify({'success': True, 'resolved_path': norm_p, 'exists': True})
+
+    return jsonify({'success': False, 'error': 'Không tìm thấy file trên hệ thống'}), 404
 
 @core_bp.route('/api/image')
 def stream_image():
@@ -213,6 +310,8 @@ def select_folder_api():
         if not folder_path and sys.platform.startswith('win'):
             try:
                 ps_cmd = f"""
+                $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                [Console]::InputEncoding = [System.Text.Encoding]::UTF8
                 Add-Type -AssemblyName System.Windows.Forms
                 $f = New-Object System.Windows.Forms.FolderBrowserDialog
                 $f.Description = {_ps_literal(title)}
@@ -220,7 +319,7 @@ def select_folder_api():
                     $f.SelectedPath
                 }}
                 """
-                proc = subprocess.run(['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], capture_output=True, text=True, timeout=30, creationflags=0x08000000 if os.name == 'nt' else 0)
+                proc = subprocess.run(['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], capture_output=True, encoding='utf-8', errors='replace', timeout=30, creationflags=0x08000000 if os.name == 'nt' else 0)
                 folder_path = proc.stdout.strip()
             except Exception:
                 pass
@@ -258,6 +357,8 @@ def select_file_api():
         if not file_path and sys.platform.startswith('win'):
             try:
                 ps_cmd = f"""
+                $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                [Console]::InputEncoding = [System.Text.Encoding]::UTF8
                 Add-Type -AssemblyName System.Windows.Forms
                 $f = New-Object System.Windows.Forms.OpenFileDialog
                 $f.Title = {_ps_literal(title)}
@@ -265,7 +366,7 @@ def select_file_api():
                     $f.FileName
                 }}
                 """
-                proc = subprocess.run(['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], capture_output=True, text=True, timeout=30, creationflags=0x08000000 if os.name == 'nt' else 0)
+                proc = subprocess.run(['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], capture_output=True, encoding='utf-8', errors='replace', timeout=30, creationflags=0x08000000 if os.name == 'nt' else 0)
                 file_path = proc.stdout.strip()
             except Exception:
                 pass
@@ -281,6 +382,100 @@ def select_file_api():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@core_bp.route('/api/select_files', methods=['POST'])
+def select_files_api():
+    try:
+        data = request.json or {}
+        title = data.get('title', 'Chọn các file')
+        file_type = data.get('type', 'video')
+        filetypes = data.get('filetypes')
+
+        if not filetypes:
+            if file_type == 'video':
+                filetypes = [('Video Files', '*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v'), ('All Files', '*.*')]
+            elif file_type == 'srt':
+                filetypes = [('Subtitle Files', '*.srt;*.vtt;*.ass'), ('All Files', '*.*')]
+            elif file_type == 'audio':
+                filetypes = [('Audio Files', '*.mp3;*.wav;*.m4a;*.aac;*.flac'), ('All Files', '*.*')]
+            else:
+                filetypes = [('All Files', '*.*')]
+
+        file_paths = []
+        if sys.platform.startswith('win'):
+            try:
+                ps_filter = 'All Files (*.*)|*.*'
+                if file_type == 'video':
+                    ps_filter = 'Video Files (*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v)|*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v|All Files (*.*)|*.*'
+                elif file_type == 'srt':
+                    ps_filter = 'Subtitle Files (*.srt;*.vtt;*.ass)|*.srt;*.vtt;*.ass|All Files (*.*)|*.*'
+                elif file_type == 'audio':
+                    ps_filter = 'Audio Files (*.mp3;*.wav;*.m4a;*.aac;*.flac)|*.mp3;*.wav;*.m4a;*.aac;*.flac|All Files (*.*)|*.*'
+
+                ps_cmd = f"""
+                $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+                [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+                $form = New-Object System.Windows.Forms.Form
+                $form.TopMost = $true
+                $form.Width = 0
+                $form.Height = 0
+                $form.StartPosition = "CenterScreen"
+                $f = New-Object System.Windows.Forms.OpenFileDialog
+                $f.Title = {_ps_literal(title)}
+                $f.Filter = '{ps_filter}'
+                $f.Multiselect = $true
+                if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {{
+                    $f.FileNames | ForEach-Object {{ Write-Output $_ }}
+                }}
+                $form.Dispose()
+                """
+                proc = subprocess.run(
+                    ['powershell', '-STA', '-NoProfile', '-Command', ps_cmd],
+                    capture_output=True, encoding='utf-8', errors='replace', timeout=60,
+                    creationflags=0x08000000 if os.name == 'nt' else 0
+                )
+                lines = [l.strip() for l in proc.stdout.strip().splitlines() if l.strip()]
+                if lines:
+                    file_paths = lines
+            except Exception:
+                pass
+
+        if not file_paths:
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes('-topmost', True)
+                res = filedialog.askopenfilenames(title=title, filetypes=filetypes)
+                if res:
+                    if isinstance(res, (list, tuple)):
+                        file_paths = [str(x) for x in res if str(x).strip()]
+                    elif isinstance(res, str):
+                        try:
+                            file_paths = [str(x) for x in root.tk.splitlist(res) if str(x).strip()]
+                        except Exception:
+                            file_paths = [res.strip()] if res.strip() else []
+                root.destroy()
+            except Exception:
+                file_paths = []
+
+        valid_paths = []
+        for p in file_paths:
+            if p:
+                clean_p = str(p).strip().strip('"').strip("'")
+                if os.path.exists(clean_p):
+                    norm_p = os.path.normpath(clean_p)
+                    register_user_path(norm_p)
+                    valid_paths.append(norm_p)
+
+        if valid_paths:
+            return jsonify({'success': True, 'file_paths': valid_paths, 'files': valid_paths, 'paths': valid_paths, 'count': len(valid_paths)})
+        else:
+            return jsonify({'success': False, 'cancelled': True, 'message': 'Không có file nào được chọn'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @core_bp.route('/api/save_file_dialog', methods=['POST'])
 def save_file_dialog_api():
     try:
@@ -288,27 +483,13 @@ def save_file_dialog_api():
         title = data.get('title', 'Lưu file')
         default_name = data.get('default_name', 'subtitles_translated.srt')
         content = data.get('content', '')
-        defaultextension = data.get('defaultextension', os.path.splitext(default_name)[1] or '.srt')
         filetypes = data.get('filetypes')
-        filter_str = data.get('filter')
+        defaultextension = data.get('defaultextension', '.srt')
+        filter_str = data.get('filter_str', 'Subtitle Files (*.srt)|*.srt|All Files (*.*)|*.*')
 
         if not filetypes:
-            if defaultextension.lower() == '.amsproj':
-                filetypes = [("AI Movie Shorts Project", "*.amsproj"), ("JSON Project", "*.json"), ("All Files", "*.*")]
-                if not filter_str:
-                    filter_str = "AI Movie Shorts Project (*.amsproj)|*.amsproj|JSON Project (*.json)|*.json|All Files (*.*)|*.*"
-            elif defaultextension.lower() == '.srt':
-                filetypes = [("SubRip Subtitles", "*.srt"), ("All Files", "*.*")]
-                if not filter_str:
-                    filter_str = "SubRip Subtitles (*.srt)|*.srt|All Files (*.*)|*.*"
-            else:
-                filetypes = [("All Files", "*.*")]
-                if not filter_str:
-                    filter_str = "All Files (*.*)|*.*"
-        
-        if not filter_str:
-            filter_str = "All Files (*.*)|*.*"
-        
+            filetypes = [('Subtitle Files', '*.srt'), ('All Files', '*.*')]
+
         file_path = ""
         try:
             import tkinter as tk
@@ -329,6 +510,8 @@ def save_file_dialog_api():
         if not file_path and sys.platform.startswith('win'):
             try:
                 ps_cmd = f"""
+                $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                [Console]::InputEncoding = [System.Text.Encoding]::UTF8
                 Add-Type -AssemblyName System.Windows.Forms
                 $f = New-Object System.Windows.Forms.SaveFileDialog
                 $f.Title = {_ps_literal(title)}
@@ -338,7 +521,7 @@ def save_file_dialog_api():
                     $f.FileName
                 }}
                 """
-                proc = subprocess.run(['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], capture_output=True, text=True, timeout=30, creationflags=0x08000000 if os.name == 'nt' else 0)
+                proc = subprocess.run(['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd], capture_output=True, encoding='utf-8', errors='replace', timeout=30, creationflags=0x08000000 if os.name == 'nt' else 0)
                 file_path = proc.stdout.strip()
             except Exception:
                 pass
@@ -357,25 +540,51 @@ def save_file_dialog_api():
 
 @core_bp.route('/api/open_folder', methods=['POST'])
 def api_general_open_folder():
-    permission_error = _require_any_media_permission()
-    if permission_error:
-        return permission_error
     data = request.get_json(silent=True) or {}
-    target_path = data.get('path') or data.get('file_path') or ''
+    target_path = str(data.get('path') or data.get('file_path') or '').strip(' "\'')
+    video_path = str(data.get('video_path') or '').strip(' "\'')
+
+    if not target_path and video_path:
+        target_path = video_path
+
     if not target_path:
         target_path = os.path.join(ROOT_DIR, 'output')
-        os.makedirs(target_path, exist_ok=True)
-    if not is_path_allowed(target_path, must_exist=True):
-        return jsonify({'success': False, 'error': 'Đường dẫn không hợp lệ hoặc chưa được cho phép'}), 403
 
-    if os.name == 'nt':
-        args = ['explorer', target_path] if os.path.isdir(target_path) else ['explorer', f'/select,{target_path}']
-    elif sys.platform == 'darwin':
-        args = ['open', target_path if os.path.isdir(target_path) else os.path.dirname(target_path)]
-    else:
-        args = ['xdg-open', target_path if os.path.isdir(target_path) else os.path.dirname(target_path)]
-    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return jsonify({'success': True})
+    if not os.path.isabs(target_path):
+        target_path = os.path.abspath(os.path.join(ROOT_DIR, target_path))
+
+    # Nếu file mục tiêu chưa tồn tại hoặc bị xóa/chuyển, tìm đường dẫn dự phòng
+    if not os.path.exists(target_path):
+        parent_dir = os.path.dirname(target_path)
+        if os.path.isdir(parent_dir):
+            target_path = parent_dir
+        elif video_path and os.path.exists(video_path):
+            target_path = os.path.abspath(video_path)
+        elif video_path and os.path.isdir(os.path.dirname(video_path)):
+            target_path = os.path.abspath(os.path.dirname(video_path))
+        else:
+            target_path = os.path.join(ROOT_DIR, 'output')
+            os.makedirs(target_path, exist_ok=True)
+
+    # Đăng ký quyền truy cập cho đường dẫn này
+    register_user_path(target_path)
+
+    norm_path = os.path.normpath(target_path)
+    try:
+        if os.name == 'nt':
+            if os.path.isdir(norm_path):
+                subprocess.Popen(['explorer', norm_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen(['explorer', f'/select,{norm_path}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == 'darwin':
+            args = ['open', norm_path if os.path.isdir(norm_path) else os.path.dirname(norm_path)]
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            args = ['xdg-open', norm_path if os.path.isdir(norm_path) else os.path.dirname(norm_path)]
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return jsonify({'success': True, 'opened_path': norm_path})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Không thể mở File Explorer: {str(e)}'}), 500
 
 @core_bp.route('/api/test-openai', methods=['POST'])
 def test_openai():
@@ -415,12 +624,16 @@ def format_api_error_to_vietnamese(status_code, raw_err_msg):
         return "Mã API Key OpenAI không chính xác hoặc đã bị vô hiệu hóa. Vui lòng kiểm tra lại Key trên trang OpenAI."
     elif status_code == 429 or 'insufficient_quota' in raw_lower or 'quota' in raw_lower or 'rate_limit' in raw_lower:
         return "Tài khoản OpenAI đã hết hạn mức sử dụng (hết tiền/hết quota) hoặc gửi yêu cầu quá nhanh. Vui lòng kiểm tra số dư tại platform.openai.com."
+    elif 'guardrail' in raw_lower or 'data policy' in raw_lower:
+        return "Tài khoản OpenRouter của bạn đang bật Guardrail chặn nhà cung cấp này (https://openrouter.ai/workspaces/default/guardrails). Hãy tắt bộ lọc hoặc chọn model Qwen3.7 Flash / Deepseek V3.2."
+    elif 'batch api' in raw_lower or 'api/beta/batches' in raw_lower:
+        return "Mô hình này có đuôi :batch chỉ dành cho Batch API xử lý ngầm trên OpenRouter, không hỗ trợ dịch trực tiếp. Vui lòng chọn Qwen3.7 Flash hoặc Deepseek V3.2."
     elif status_code == 404 or 'model_not_found' in raw_lower or 'does not exist' in raw_lower:
         return "Model AI này không tồn tại hoặc tài khoản của bạn chưa được cấp quyền sử dụng model này."
     elif 'max_tokens' in raw_lower or 'max_completion_tokens' in raw_lower or 'unsupported parameter' in raw_lower:
         return "Tham số cấu hình của Model AI đã được hệ thống tự động tối ưu."
-    elif status_code == 500 or status_code == 502 or status_code == 503:
-        return "Máy chủ OpenAI hiện đang bị quá tải hoặc gặp sự cố tạm thời. Vui lòng thử lại sau vài giây."
+    elif (status_code == 500 or status_code == 502 or status_code == 503) and not any(k in raw_lower for k in ['nameerror', 'typeerror', 'keyerror', 'attributeerror', 'syntaxerror', 'valueerror']):
+        return "Máy chủ AI / OpenRouter hiện đang bị quá tải hoặc gặp sự cố tạm thời. Vui lòng thử lại sau vài giây."
     elif 'timeout' in raw_lower or 'timed out' in raw_lower:
         return "Quá thời gian kết nối (Timeout). Vui lòng kiểm tra lại đường truyền mạng Internet hoặc Base URL."
     elif 'connection' in raw_lower or 'failed to establish' in raw_lower:
@@ -433,7 +646,9 @@ def test_openai_key():
     data = request.json or {}
     api_key = data.get('openai_key') or data.get('openaiKey')
     base_url = data.get('openai_base_url') or data.get('openaiBaseUrl') or 'https://api.openai.com/v1'
-    model = data.get('openai_model') or data.get('openaiModel') or 'gpt-5.6-luna'
+    model = data.get('openai_model') or data.get('openaiModel') or 'gpt-5.6-luna-pro-batch'
+    if model == 'gpt-5.6-luna':
+        model = 'gpt-5.6-luna-pro-batch'
 
     if not api_key or str(api_key).startswith('•') or data.get('test_vip'):
         # Tự động đọc Key thật từ file cấu hình / bản quyền VIP
@@ -464,9 +679,9 @@ def test_openai_key():
         base_url = _validate_external_api_url(base_url)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
-    model = re.sub(r'[^a-zA-Z0-9_.:/-]', '', str(model))[:200]
-    if not model:
-        model = 'gpt-5.6-luna' if 'openrouter.ai' in base_url else 'gpt-5.6-luna'
+    model = re.sub(r'[^a-zA-Z0-9_.:/\-\s]', '', str(model))[:200].strip()
+    if not model or model == 'gpt-5.6-luna':
+        model = 'gpt-5.6-luna-pro-batch'
 
     try:
         headers = {
@@ -629,30 +844,22 @@ def get_hardware_info():
     import ffmpeg_installer
     ffmpeg_path = ffmpeg_installer.get_ffmpeg_path()
     
-    encoders = [
-        {"id": "libx264", "name": "CPU x264 (Chuẩn phổ thông & ổn định nhất)", "is_gpu": False}
-    ]
-    
-    def test_encoder_usable(encoder_name):
-        if not ffmpeg_path: return False
-        try:
-            cmd = [
-                ffmpeg_path, '-y', '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
-                '-c:v', encoder_name, '-f', 'null', '-'
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, creationflags=0x08000000 if os.name == 'nt' else 0)
-            return res.returncode == 0
-        except Exception:
-            return False
+    caps = ffmpeg_installer.get_hardware_capabilities(ffmpeg_path)
 
-    if test_encoder_usable('h264_nvenc'):
-        encoders.insert(0, {"id": "h264_nvenc", "name": "NVIDIA NVENC H.264 (GPU Siêu nhanh)", "is_gpu": True})
-    elif test_encoder_usable('h264_mf'):
+    encoders = [
+        {"id": "libx264", "name": "CPU x264 (Chuẩn tương thích cao nhất)", "is_gpu": False}
+    ]
+
+    gpu_label = f" ({caps.get('gpu_name')})" if caps.get('gpu_name') else ""
+    if caps.get('nvenc_supported'):
+        encoders.insert(0, {"id": "h264_nvenc", "name": f"NVIDIA NVENC H.264 (GPU Siêu nhanh{gpu_label})", "is_gpu": True})
+    elif caps.get('mf_supported'):
         encoders.insert(0, {"id": "h264_mf", "name": "GPU H.264 (Windows MediaFoundation / DirectX)", "is_gpu": True})
-    elif test_encoder_usable('h264_amf'):
+    elif caps.get('amf_supported'):
         encoders.insert(0, {"id": "h264_amf", "name": "AMD AMF H.264 (GPU)", "is_gpu": True})
-    elif test_encoder_usable('h264_qsv'):
+    elif caps.get('qsv_supported'):
         encoders.insert(0, {"id": "h264_qsv", "name": "Intel QSV H.264 (GPU)", "is_gpu": True})
+
 
     # Quét thiết bị phần cứng cho AI (ASR, OCR, TTS)
     ai_devices = [
@@ -692,7 +899,8 @@ def get_hardware_info():
         "success": True,
         "encoders": encoders,
         "ai_devices": ai_devices,
-        "has_cuda": has_cuda
+        "has_cuda": has_cuda,
+        "gpu_capabilities": caps
     })
 
 def _time_to_seconds(t_str):

@@ -357,8 +357,64 @@ def _ensure_sea_g2p_assets():
         print(f"[Local Voice] _ensure_sea_g2p_assets note: {err}")
     return False
 
+# ── Tối ưu hóa hiệu năng đỉnh cao cho Local Voice Engine ──────────────────────
+import queue
+from functools import lru_cache
+
+try:
+    import vieneu_utils.phonemize_text as _p_mod
+    if not hasattr(_p_mod, '_orig_phonemize_fn'):
+        _p_mod._orig_phonemize_fn = _p_mod.phonemize_text_with_emotions
+        @lru_cache(maxsize=20000)
+        def _cached_phonemize_text(text):
+            return _p_mod._orig_phonemize_fn(text)
+        _p_mod.phonemize_text_with_emotions = _cached_phonemize_text
+except Exception as _p_err:
+    print(f"[Local Voice] Phoneme cache note: {_p_err}")
+
 _ENGINE_INSTANCE = None
 _ENGINE_LOCK = threading.Lock()
+
+_ENGINE_POOL = None
+_ENGINE_POOL_LOCK = threading.Lock()
+_POOL_SIZE = 2  # 2 ONNX sessions song song tận dụng tối đa CPU đa lõi mà không ngốn RAM
+
+def _create_single_engine(threads=4):
+    _ensure_sea_g2p_assets()
+    from vieneu import Vieneu
+    local_onnx_dir = _get_vieneu_onnx_dir()
+    local_codec_dir = _get_vieneu_codec_dir()
+    
+    if not local_onnx_dir or not os.path.exists(local_onnx_dir):
+        raise FileNotFoundError(f"Không tìm thấy thư mục mô hình ONNX tại {ROOT_DIR}/models/vieneu/onnx_int8!")
+
+    model_root = os.path.dirname(local_onnx_dir) if (local_onnx_dir and os.path.basename(local_onnx_dir) == 'onnx_int8') else local_onnx_dir
+
+    for req_f in ["tokenizer.json", "config.json", "speaker_encoder.onnx", "denoiser.onnx"]:
+        tgt = os.path.join(local_onnx_dir, req_f)
+        if not os.path.exists(tgt):
+            alt = os.path.join(model_root, req_f)
+            if os.path.exists(alt):
+                shutil.copy2(alt, tgt)
+                
+    for spk_f in ["speaker_encoder.onnx", "denoiser.onnx"]:
+        root_spk = os.path.join(model_root, spk_f)
+        sub_spk = os.path.join(local_onnx_dir, spk_f)
+        if not os.path.exists(root_spk) and os.path.exists(sub_spk):
+            shutil.copy2(sub_spk, root_spk)
+        elif not os.path.exists(sub_spk) and os.path.exists(root_spk):
+            shutil.copy2(root_spk, sub_spk)
+
+    kwargs = {
+        "backend": "onnx",
+        "onnx_dir": local_onnx_dir,
+        "backbone_repo": model_root,
+        "threads": threads
+    }
+    if local_codec_dir:
+        kwargs["codec_dir"] = local_codec_dir
+
+    return Vieneu(**kwargs)
 
 def get_engine():
     """
@@ -370,52 +426,36 @@ def get_engine():
         with _ENGINE_LOCK:
             if _ENGINE_INSTANCE is None:
                 try:
-                    _ensure_sea_g2p_assets()
-                    from vieneu import Vieneu
                     print("[Local Voice] Initializing High-Speed Local Voice Engine (ONNX 48kHz)...")
-                    local_onnx_dir = _get_vieneu_onnx_dir()
-                    local_codec_dir = _get_vieneu_codec_dir()
-                    
-                    if not local_onnx_dir or not os.path.exists(local_onnx_dir):
-                        raise FileNotFoundError(f"Không tìm thấy thư mục mô hình ONNX tại {ROOT_DIR}/models/vieneu/onnx_int8!")
-
-                    model_root = os.path.dirname(local_onnx_dir) if (local_onnx_dir and os.path.basename(local_onnx_dir) == 'onnx_int8') else local_onnx_dir
-
-                    # Kiểm tra và đảm bảo các file ONNX & Tokenizer tồn tại đầy đủ
-                    for req_f in ["tokenizer.json", "config.json", "speaker_encoder.onnx", "denoiser.onnx"]:
-                        tgt = os.path.join(local_onnx_dir, req_f)
-                        if not os.path.exists(tgt):
-                            alt = os.path.join(model_root, req_f)
-                            if os.path.exists(alt):
-                                shutil.copy2(alt, tgt)
-                                
-                    for spk_f in ["speaker_encoder.onnx", "denoiser.onnx"]:
-                        root_spk = os.path.join(model_root, spk_f)
-                        sub_spk = os.path.join(local_onnx_dir, spk_f)
-                        if not os.path.exists(root_spk) and os.path.exists(sub_spk):
-                            shutil.copy2(sub_spk, root_spk)
-                        elif not os.path.exists(sub_spk) and os.path.exists(root_spk):
-                            shutil.copy2(root_spk, sub_spk)
-
-                    print(f"[Local Voice] - ONNX Backbone: {local_onnx_dir}")
-                    print(f"[Local Voice] - Codec Dir: {local_codec_dir}")
-                    print(f"[Local Voice] - Model Root: {model_root}")
-
-                    kwargs = {
-                        "backend": "onnx",
-                        "onnx_dir": local_onnx_dir,
-                        "backbone_repo": model_root,
-                    }
-                    if local_codec_dir:
-                        kwargs["codec_dir"] = local_codec_dir
-
-                    _ENGINE_INSTANCE = Vieneu(**kwargs)
+                    _ENGINE_INSTANCE = _create_single_engine(threads=min(max((os.cpu_count() or 8) // 2, 2), 6))
                     print("[Local Voice] Engine loaded successfully (100% Offline Ready)!")
                 except Exception as e:
                     _ENGINE_INSTANCE = None
                     print(f"[Local Voice] Failed to load engine: {e}")
                     raise e
     return _ENGINE_INSTANCE
+
+def get_engine_pool():
+    """
+    Quản lý hàng đợi Multi-Engine Pool cho phép xử lý suy luận song song đồng thời.
+    """
+    global _ENGINE_POOL
+    if _ENGINE_POOL is None:
+        with _ENGINE_POOL_LOCK:
+            if _ENGINE_POOL is None:
+                q = queue.Queue()
+                # Thêm instance chính đã có
+                primary = get_engine()
+                q.put(primary)
+                # Khởi tạo instance thứ 2 để chạy song song
+                try:
+                    secondary = _create_single_engine(threads=4)
+                    q.put(secondary)
+                    print("[Local Voice] Multi-Engine Session Pool (2x Workers) initialized for parallel throughput!")
+                except Exception as pool_err:
+                    print(f"[Local Voice] Session pool secondary instance note: {pool_err}")
+                _ENGINE_POOL = q
+    return _ENGINE_POOL
 
 def _get_ffmpeg_exe():
     try:
@@ -554,9 +594,10 @@ def validate_and_convert_audio_sample(input_audio_path, output_wav_path=None, re
     except Exception as e:
         return False, f"Lỗi xử lý file âm thanh mẫu: {str(e)}"
 
-def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None):
+def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None, target_sample_rate=None, target_channels=None):
     """
     Sinh giọng nói từ văn bản bằng Local Voice Engine (hỗ trợ cả preset, cloned voice và audio mẫu trực tiếp).
+    Tối ưu hóa: Sử dụng Engine Pool để hỗ trợ đa luồng thật sự + In-memory Resampling không cần gọi ffmpeg.
     """
     if not text or not str(text).strip():
         raise ValueError("Văn bản đọc không được để trống")
@@ -565,8 +606,6 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None)
         output_path = os.path.join(ROOT_DIR, "output", f"local_voice_{int(time.time()*1000)}.wav")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    tts = get_engine()
-    
     # 1. Xác định Voice Preset hoặc Ref Audio
     target_preset = None
     target_ref_audio = ref_audio
@@ -594,23 +633,86 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None)
     except Exception:
         norm_text = text
 
-    # 3. Chạy Inference
-    with _ENGINE_LOCK:
+    # 3. Ưu tiên GPU Worker qua IPC nếu có sẵn (Tốc độ ~20x, resident model)
+    try:
+        import local_voice_worker_client
+        client = local_voice_worker_client.get_voice_worker_client()
+        if client.is_runtime_available():
+            dst_sr = int(target_sample_rate) if target_sample_rate else 48000
+            dst_ch = int(target_channels) if target_channels else 1
+            batch_res = client.synthesize_batch(
+                items=[{"id": 0, "text": norm_text, "output_path": output_path}],
+                voice_id=voice_id or "local_ngoc_huyen",
+                speed=float(speed),
+                batch_size=4,
+                target_sample_rate=dst_sr,
+                target_channels=dst_ch,
+                ref_audio=target_ref_audio
+            )
+            if batch_res and batch_res[0].get("success") and os.path.exists(output_path) and os.path.getsize(output_path) > 100:
+                return output_path
+    except Exception as gpu_err:
+        print(f"[Local Voice] GPU worker fallback to CPU engine pool: {gpu_err}")
+
+    # 4. Lấy engine từ Pool để chạy CPU ONNX dự phòng
+    pool = get_engine_pool()
+    tts = pool.get()
+    try:
         if target_ref_audio and os.path.exists(target_ref_audio):
             audio_data = tts.infer(text=norm_text, ref_audio=target_ref_audio, apply_watermark=False)
         elif target_preset:
             audio_data = tts.infer(text=norm_text, voice=target_preset, apply_watermark=False)
         else:
             audio_data = tts.infer(text=norm_text, voice="Ngọc Huyền", apply_watermark=False)
+    finally:
+        pool.put(tts)
 
+    # 5. Xuất âm thanh & Resample trực tiếp trên bộ nhớ (In-memory, Zero FFmpeg overhead)
+    orig_sr = getattr(tts, 'sample_rate', 48000)
+    audio_arr = np.asarray(audio_data, dtype=np.float32)
+
+    # Nếu cần resample hoặc chỉnh tốc độ bằng in-memory
+    dst_sr = int(target_sample_rate) if target_sample_rate else orig_sr
+    dst_ch = int(target_channels) if target_channels else 1
+    needs_in_memory_resample = (target_sample_rate is not None and dst_sr != orig_sr) or (target_channels is not None and dst_ch != 1) or (abs(speed - 1.0) > 0.03)
+
+    if needs_in_memory_resample:
+        try:
+            import scipy.signal
+            import soundfile as sf
+            
+            proc_audio = audio_arr
+            # Chỉnh tốc độ (speed) nếu khác 1.0
+            if abs(speed - 1.0) > 0.03:
+                speed_val = max(0.5, min(2.5, float(speed)))
+                target_len = int(round(len(proc_audio) / speed_val))
+                proc_audio = scipy.signal.resample(proc_audio, target_len)
+
+            # Resample tần số mẫu nếu khác orig_sr
+            if dst_sr != orig_sr:
+                new_num_samples = int(round(len(proc_audio) * dst_sr / orig_sr))
+                proc_audio = scipy.signal.resample(proc_audio, new_num_samples)
+
+            # Chuyển kênh mono -> stereo nếu yêu cầu 2 channels
+            if dst_ch == 2 and len(proc_audio.shape) == 1:
+                final_pcm = np.column_stack((proc_audio, proc_audio))
+            else:
+                final_pcm = proc_audio
+
+            # Chuyển float32 sang int16 chuẩn CD PCM 16-bit
+            pcm_int16 = np.clip(final_pcm * 32767.0, -32768, 32767).astype(np.int16)
+            sf.write(output_path, pcm_int16, dst_sr, subtype='PCM_16')
+            return output_path
+        except Exception as resample_err:
+            print(f"[Local Voice] In-memory resample note ({resample_err}), falling back to standard write...")
+
+    # Fallback ghi chuẩn qua tts.save
     temp_out = output_path if abs(speed - 1.0) < 0.05 else os.path.join(os.path.dirname(output_path), f"temp_speed_{int(time.time()*1000)}.wav")
     tts.save(audio_data, temp_out)
 
-    # 4. Điều chỉnh tốc độ (Speed Adjustment) nếu khác 1.0
     if temp_out != output_path and os.path.exists(temp_out):
         ffmpeg_exe = _get_ffmpeg_exe()
         try:
-            # Build atempo filter chain
             speed_val = max(0.5, min(2.5, float(speed)))
             atempo_filters = []
             cur_s = speed_val
@@ -674,3 +776,90 @@ def clone_voice(audio_file_path, name, gender="Female", region="Miền Bắc", s
     import custom_voices
     custom_voices.add_or_update_voice(voice_profile)
     return voice_profile
+
+
+def get_versioned_audio_cache_key(text, voice_id, speed=1.0, target_sample_rate=48000, target_channels=1, version="v3"):
+    import hashlib
+    raw = f"{text.strip()}|{voice_id}|{float(speed):.2f}|{int(target_sample_rate)}|{int(target_channels)}|{version}"
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def synthesize_batch(items, voice_id=None, ref_audio=None, speed=1.0, target_sample_rate=None, target_channels=None, batch_size=16, cancel_token=None):
+    """
+    Sinh giọng hàng loạt (Batch Synthesis) tối ưu cho GPU RTX 5060 qua tiến trình Worker độc lập.
+    Hỗ trợ cả voice presets và custom cloned voices. Fallback an toàn về CPU nếu GPU không khả dụng.
+    """
+    if not items:
+        return []
+
+    # 1. Chuẩn hóa voice_id và ref_audio
+    target_ref = ref_audio
+    if voice_id and not target_ref:
+        for p in LOCAL_VOICE_PRESETS:
+            if p["id"] == voice_id:
+                break
+        else:
+            import custom_voices
+            prof = custom_voices.get_voice_by_id(voice_id)
+            if prof and prof.get("reference_audio"):
+                target_ref = prof.get("reference_audio")
+                if not os.path.isabs(target_ref):
+                    target_ref = os.path.join(ROOT_DIR, target_ref)
+
+    # 2. Chuẩn hóa text cho tất cả items
+    import vietnamese_text_normalizer
+    normalized_items = []
+    for it in items:
+        raw_t = it.get("text", "")
+        try:
+            norm_t = vietnamese_text_normalizer.normalize_text_for_tts(raw_t)
+        except Exception:
+            norm_t = raw_t
+        normalized_items.append({
+            "id": it.get("id"),
+            "text": norm_t,
+            "output_path": it.get("output_path")
+        })
+
+    # 3. Ưu tiên GPU Worker qua IPC
+    try:
+        import local_voice_worker_client
+        client = local_voice_worker_client.get_voice_worker_client()
+        if client.is_runtime_available():
+            dst_sr = int(target_sample_rate) if target_sample_rate else 48000
+            dst_ch = int(target_channels) if target_channels else 1
+            return client.synthesize_batch(
+                items=normalized_items,
+                voice_id=voice_id or "local_ngoc_huyen",
+                speed=float(speed),
+                batch_size=int(batch_size),
+                target_sample_rate=dst_sr,
+                target_channels=dst_ch,
+                ref_audio=target_ref,
+                cancel_token=cancel_token
+            )
+    except Exception as gpu_batch_err:
+        print(f"[Local Voice] GPU batch failed ({gpu_batch_err}), falling back to parallel CPU pool...")
+
+    # 4. Fallback CPU Engine Pool
+    from concurrent.futures import ThreadPoolExecutor
+    def _cpu_worker(it):
+        if cancel_token and cancel_token():
+            return {"id": it["id"], "error": "Cancelled", "success": False}
+        try:
+            out_p = synthesize(
+                text=it["text"],
+                voice_id=voice_id,
+                ref_audio=target_ref,
+                speed=speed,
+                output_path=it["output_path"],
+                target_sample_rate=target_sample_rate,
+                target_channels=target_channels
+            )
+            return {"id": it["id"], "path": out_p, "success": True, "error": None}
+        except Exception as ex:
+            return {"id": it["id"], "error": str(ex), "success": False}
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        return list(ex.map(_cpu_worker, normalized_items))
+

@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import subprocess
 import json
 import time
@@ -26,7 +27,7 @@ def get_app_root_dir():
 
 ROOT_DIR = get_app_root_dir()
 
-def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=None):
+def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=None, **kwargs):
     """
     Synthesizes speech for a single text sentence using RVC (Custom Clone), Kokoro (offline), Edge AI or OpenSpeaker (online).
     """
@@ -39,11 +40,18 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
     if (voice_profile and voice_profile.get('provider') == 'local_voice') or voice_id.startswith('local_'):
         try:
             import local_voice_engine
-            return local_voice_engine.synthesize(text=text, voice_id=voice_id, speed=speed, output_path=output_path)
+            return local_voice_engine.synthesize(
+                text=text,
+                voice_id=voice_id,
+                speed=speed,
+                output_path=output_path,
+                target_sample_rate=kwargs.get('target_sample_rate'),
+                target_channels=kwargs.get('target_channels')
+            )
         except Exception as e:
             print(f"[Local Voice] Synthesis error: {e}, falling back to Edge-TTS...")
             edge_fallback = "edge_vi-VN-HoaiMyNeural" if any(f in voice_id for f in ['huyen', 'trinh', 'linh', 'ly', 'ngoc', 'female']) else "edge_vi-VN-NamMinhNeural"
-            return synthesize_sentence(text, edge_fallback, speed, output_path, open_speaker_key)
+            return synthesize_sentence(text, edge_fallback, speed, output_path, open_speaker_key, **kwargs)
 
     # 0.1. RVC Voice Clone (Custom Trained Models)
     rvc_profile = voice_profile
@@ -66,7 +74,7 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
             import rvc_bridge
             index_path = rvc_profile.get('index_path') if rvc_profile else None
             pitch = int(rvc_profile.get('pitch', 0)) if rvc_profile else 0
-            f0_method = rvc_profile.get('f0_method', 'rmvpe') if rvc_profile else 'rmvpe'
+            f0_method = rvc_profile.get('f0_method', 'pm') if rvc_profile else 'pm'
             index_rate = float(rvc_profile.get('index_rate', 0.45)) if rvc_profile else 0.45
             protect = float(rvc_profile.get('protect', 0.50)) if rvc_profile else 0.50
             rms_mix_rate = float(rvc_profile.get('rms_mix_rate', 0.25)) if rvc_profile else 0.25
@@ -340,6 +348,63 @@ def parse_time_str(time_val):
     except Exception:
         return 0.0
 
+_QUICK_TRANSLATE_CACHE = {}
+
+def quick_translate_to_vi(text):
+    """
+    Dịch nhanh một câu thoại chưa dịch sang tiếng Việt để bảo vệ tiến trình tạo giọng đọc.
+    Ưu tiên dùng AI (OpenRouter / OpenAI) có sẵn trong cấu hình hệ thống, fallback sang DeepTranslator.
+    """
+    if not text or not str(text).strip():
+        return ""
+    text = str(text).strip()
+    if text in _QUICK_TRANSLATE_CACHE:
+        return _QUICK_TRANSLATE_CACHE[text]
+    
+    # 1. Thử qua OpenAI / OpenRouter có sẵn trong cấu hình
+    try:
+        from routes.subtitles import _resolve_openai_credentials
+        api_key, base_url, model = _resolve_openai_credentials()
+        if api_key:
+            import openai
+            headers = {}
+            if 'openrouter.ai' in str(base_url) or api_key.startswith('sk-or-'):
+                headers = {"HTTP-Referer": "https://novacut.app", "X-Title": "NovaCut AI"}
+            client = openai.OpenAI(api_key=api_key, base_url=base_url, default_headers=headers if headers else None, timeout=8.0)
+            req = {
+                "model": model or "qwen/qwen3.7-flash",
+                "messages": [
+                    {"role": "system", "content": "Bạn là công cụ dịch thoại phim sang tiếng Việt. Hãy dịch câu sau sang tiếng Việt tự nhiên, chính xác, không ghi chú giải thích, chỉ trả về câu dịch thuần túy."},
+                    {"role": "user", "content": text}
+                ],
+                "temperature": 0.0
+            }
+            if 'openrouter.ai' in str(base_url) or api_key.startswith('sk-or-'):
+                req["extra_body"] = {"reasoning": {"effort": "none"}}
+            res = client.chat.completions.create(**req)
+            out = res.choices[0].message.content or ""
+            out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL | re.IGNORECASE).strip()
+            if out and not any(0x4E00 <= ord(c) <= 0x9FFF for c in out):
+                _QUICK_TRANSLATE_CACHE[text] = out
+                return out
+    except Exception:
+        pass
+
+    # 2. Thử qua GoogleTranslator
+    try:
+        from deep_translator import GoogleTranslator
+        gt = GoogleTranslator(source='auto', target='vi')
+        out = gt.translate(text)
+        if out and not any(k in out for k in ['Error 500', 'Server Error', 'TooManyRequests', '<!DOCTYPE', '<html']):
+            if not any(0x4E00 <= ord(c) <= 0x9FFF for c in out):
+                res_clean = out.strip()
+                _QUICK_TRANSLATE_CACHE[text] = res_clean
+                return res_clean
+    except Exception:
+        pass
+
+    return ""
+
 def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp_dir, open_speaker_key=None, min_total_duration=0.0, max_workers=None, check_stop=None):
     """
     Generator that synthesizes speech with ThreadPoolExecutor and yields real-time progress.
@@ -353,19 +418,33 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
     os.makedirs(cache_dir, exist_ok=True)
     ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
     
+    # 0. Tự động kiểm tra file phụ đề đã dịch (editor_subtitles.srt) trong thư mục cha để tái sử dụng ngay lập tức (0s)
+    parent_editor_sub = os.path.join(os.path.dirname(temp_dir), 'editor_subtitles.srt')
+    if os.path.exists(parent_editor_sub) and os.path.getsize(parent_editor_sub) > 100:
+        try:
+            from auto_edit_pipeline import parse_srt_entries
+            p_entries = parse_srt_entries(parent_editor_sub)
+            if p_entries and len(p_entries) == len(subtitles) and not any(0x4E00 <= ord(c) <= 0x9FFF for c in p_entries[0][2]):
+                subtitles = [{"text": txt, "translation": txt, "startSeconds": s, "endSeconds": e} for s, e, txt in p_entries]
+        except Exception:
+            pass
+
     # Normalize subtitle items
-    normalized = []
+    raw_items = []
     for s in subtitles:
         if isinstance(s, (list, tuple)) and len(s) >= 3:
             s_start = parse_time_str(s[0])
             s_end = parse_time_str(s[1])
             s_text = str(s[2]).strip()
             if s_text:
-                normalized.append({"text": s_text, "startSeconds": s_start, "endSeconds": s_end})
+                raw_items.append({"text": s_text, "startSeconds": s_start, "endSeconds": s_end})
         elif isinstance(s, dict):
-            s_text = (s.get('translation') or s.get('text') or '').strip()
+            s_trans = (s.get('translation') or '').strip()
+            s_orig = (s.get('text') or '').strip()
+            s_text = s_trans if s_trans else s_orig
             if not s_text:
                 continue
+
             s_start = s.get('startSeconds')
             if s_start is None:
                 s_start = parse_time_str(s.get('time') or s.get('start', 0.0))
@@ -378,23 +457,58 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
             else:
                 s_end = float(s_end)
                 
-            normalized.append({"text": s_text, "startSeconds": s_start, "endSeconds": s_end})
+            raw_items.append({"text": s_text, "orig": s_orig, "startSeconds": s_start, "endSeconds": s_end})
 
-    total = len(normalized)
+    total = len(raw_items)
     if total == 0:
         yield ("progress", "🛑 [LỖI LỒNG TIẾNG] Danh sách phụ đề trống! Không có câu nào để lồng tiếng.")
         yield ("done", None)
         return
 
+    # Tự động phát hiện và dịch nhanh song song các câu còn dính chữ Hán (On-the-fly Parallel Translation)
+    chinese_indices = [idx for idx, item in enumerate(raw_items) if any(0x4E00 <= ord(c) <= 0x9FFF for c in item['text'])]
+    if chinese_indices:
+        yield ("progress", f"🌐 [Dịch phụ đề AI] Phát hiện {len(chinese_indices)} câu thoại còn chữ Hán, đang kích hoạt dịch nhanh song song sang tiếng Việt...")
+        from concurrent.futures import ThreadPoolExecutor
+        trans_workers = min(16, max(2, len(chinese_indices)))
+        trans_done = 0
+
+        def _do_trans(idx):
+            nonlocal trans_done
+            if check_stop and check_stop():
+                return
+            cand_text = raw_items[idx].get('orig') or raw_items[idx]['text']
+            translated = quick_translate_to_vi(cand_text)
+            if translated and not any(0x4E00 <= ord(c) <= 0x9FFF for c in translated):
+                raw_items[idx]['text'] = translated.strip()
+            trans_done += 1
+
+        with ThreadPoolExecutor(max_workers=trans_workers) as pool:
+            futures = [pool.submit(_do_trans, idx) for idx in chinese_indices]
+            for f in futures:
+                if check_stop and check_stop():
+                    yield ("progress", "🛑 Đã dừng theo yêu cầu khẩn cấp.")
+                    yield ("done", None)
+                    return
+                f.result()
+                if trans_done % 25 == 0 or trans_done == len(chinese_indices):
+                    pct = int((trans_done / len(chinese_indices)) * 100)
+                    yield ("progress", f"🌐 [Dịch phụ đề AI] Tiến độ dịch: {trans_done}/{len(chinese_indices)} câu ({pct}%)...")
+
+    normalized = [{"text": it["text"], "startSeconds": it["startSeconds"], "endSeconds": it["endSeconds"]} for it in raw_items]
+
     sample_rate = 44100
     channels = 2
 
     # Check OpenSpeaker key if using OpenSpeaker voice
-    is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro']
+    import custom_voices
+    voice_profile = custom_voices.get_voice_by_id(voice_id) or {}
+    is_local = voice_id.startswith('local_') or voice_profile.get('provider') == 'local_voice'
+    is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro']
     is_edge = voice_id.startswith('edge_')
-    is_rvc = voice_id.startswith('rvc_')
+    is_rvc = voice_id.startswith('rvc_') or voice_profile.get('provider') == 'rvc'
     
-    if not is_kokoro and not is_edge and not is_rvc and not open_speaker_key:
+    if not is_local and not is_kokoro and not is_edge and not is_rvc and not open_speaker_key:
         yield ("progress", "🛑 [LỖI API KEY] Bạn đang chọn giọng OpenSpeaker nhưng chưa cài đặt API Key trong mục Cài đặt!")
         yield ("done", None)
         return
@@ -403,124 +517,249 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
     if max_workers is not None and int(max_workers) > 0:
         req_workers = int(max_workers)
         if is_edge:
-            actual_workers = max(2, min(req_workers, 16))
+            actual_workers = max(2, min(req_workers, 32))
         elif is_rvc:
-            actual_workers = max(1, min(req_workers, 4))
-        elif is_kokoro:
             actual_workers = max(1, min(req_workers, 8))
+        elif is_local or is_kokoro:
+            actual_workers = max(1, min(req_workers, 16))
         else:
             actual_workers = max(4, min(req_workers, 32))
     else:
         if is_edge:
-            actual_workers = 12
+            actual_workers = 32
         elif is_rvc:
-            actual_workers = 2
-        elif is_kokoro:
             actual_workers = 4
+        elif is_local or is_kokoro:
+            actual_workers = 8
         else:
-            actual_workers = 16
-
-    yield ("progress", f"🎙️ Khởi động {actual_workers} luồng tạo giọng song song cho {total} câu phụ đề (Giọng: {voice_id})...")
-
-    def process_one_sub(idx, sub):
-        if check_stop and check_stop():
-            return (idx, None, sub['startSeconds'], sub['text'], "Đã dừng theo yêu cầu khẩn cấp")
-
-        text = sub['text']
-        start_sec = sub['startSeconds']
-        part_raw = os.path.join(temp_dir, f"raw_sub_{idx}.wav")
-        part_resampled = os.path.join(temp_dir, f"resampled_sub_{idx}.wav")
-        
-        # 1. Kiểm tra Cache âm thanh trước (Instant 0ms)
-        cache_key = hashlib.md5(f"{voice_id}_{speed:.2f}_{text.strip()}".encode('utf-8')).hexdigest()
-        cached_file = os.path.join(cache_dir, f"{cache_key}.wav")
-        if os.path.exists(cached_file) and os.path.getsize(cached_file) > 100:
-            try:
-                shutil.copyfile(cached_file, part_resampled)
-                return (idx, part_resampled, start_sec, text, None)
-            except Exception:
-                pass
-
-        if check_stop and check_stop():
-            return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
-
-        # 2. Tạo giọng với cơ chế Retry 3 lần nếu có lỗi mạng
-        last_err = None
-        for attempt in range(3):
-            if check_stop and check_stop():
-                return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
-            try:
-                synthesize_sentence(text, voice_id, speed, part_raw, open_speaker_key)
-                if os.path.exists(part_raw) and os.path.getsize(part_raw) > 100:
-                    last_err = None
-                    break
-            except Exception as ex:
-                last_err = str(ex)
-                time.sleep(0.3 * (attempt + 1))
-                
-        if not os.path.exists(part_raw) or os.path.getsize(part_raw) <= 100:
-            return (idx, None, start_sec, text, last_err or "Không tạo được file âm thanh sau 3 lần thử")
-
-        if check_stop and check_stop():
-            return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
-
-        try:
-            # Resample to 44100Hz 16-bit Stereo WAV
-            cmd_resample = [
-                ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-                "-i", part_raw,
-                "-ar", str(sample_rate),
-                "-ac", str(channels),
-                "-c:a", "pcm_s16le",
-                part_resampled
-            ]
-            subprocess.run(cmd_resample, capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
-            
-            if os.path.exists(part_raw):
-                try:
-                    os.remove(part_raw)
-                except:
-                    pass
-                    
-            if os.path.exists(part_resampled) and os.path.getsize(part_resampled) > 100:
-                try:
-                    shutil.copyfile(part_resampled, cached_file)
-                except:
-                    pass
-                return (idx, part_resampled, start_sec, text, None)
-            return (idx, None, start_sec, text, "File âm thanh bị rỗng sau khi xử lý")
-        except Exception as e:
-            return (idx, None, start_sec, text, str(e))
+            actual_workers = 24
 
     sentence_audios = []
     error_list = []
-    completed_count = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=actual_workers) as executor:
-        future_map = {executor.submit(process_one_sub, i, sub): i for i, sub in enumerate(normalized)}
-        for future in concurrent.futures.as_completed(future_map):
+    # ── ĐƯỜNG TỐI ƯU SIÊU TỐC CHO LOCAL VOICE (GPU PyTorch Batching qua Worker IPC) ──
+    use_gpu_batch = False
+    if is_local:
+        try:
+            import local_voice_worker_client
+            client = local_voice_worker_client.get_voice_worker_client()
+            if client.is_runtime_available():
+                use_gpu_batch = True
+        except Exception:
+            use_gpu_batch = False
+
+    if use_gpu_batch:
+        yield ("progress", f"🚀 Kích hoạt GPU Worker (VieNeu v3 Turbo PyTorch) siêu tốc cho {total} câu phụ đề (Giọng: {voice_id})...")
+        import gpu_resource_coordinator
+        import local_voice_engine
+        coordinator = gpu_resource_coordinator.get_gpu_coordinator()
+        coordinator.acquire_gpu("tts")
+
+        try:
+            # 1. Kiểm tra cache phiên bản trước
+            uncached_tasks = []
+            completed_count = 0
+
+            for i, sub in enumerate(normalized):
+                if check_stop and check_stop():
+                    yield ("progress", "🛑 Đã dừng theo yêu cầu khẩn cấp.")
+                    yield ("done", None)
+                    return
+
+                text = sub['text']
+                start_sec = sub['startSeconds']
+                part_resampled = os.path.join(temp_dir, f"resampled_sub_{i}.wav")
+
+                # Cache key SHA-256 có version v3
+                cache_key = local_voice_engine.get_versioned_audio_cache_key(
+                    text, voice_id, speed, sample_rate, channels, version="v3"
+                )
+                cached_file = os.path.join(cache_dir, f"{cache_key}.wav")
+
+                if os.path.exists(cached_file) and os.path.getsize(cached_file) > 100:
+                    try:
+                        shutil.copyfile(cached_file, part_resampled)
+                        sentence_audios.append((part_resampled, start_sec))
+                        completed_count += 1
+                        pct = int((completed_count / total) * 100)
+                        yield ("progress", f"⚡ [Cache Hit {completed_count}/{total}] ({pct}%) Câu #{i+1}: \"{text[:26]}...\" ({start_sec:.1f}s)")
+                        continue
+                    except Exception:
+                        pass
+
+                uncached_tasks.append({
+                    "idx": i,
+                    "id": i,
+                    "text": text,
+                    "startSeconds": start_sec,
+                    "target_out": part_resampled,
+                    "cached_file": cached_file
+                })
+
+            # 2. Xử lý theo Batch 16 câu trên GPU
+            batch_size = 16
+            for b_idx in range(0, len(uncached_tasks), batch_size):
+                if check_stop and check_stop():
+                    yield ("progress", "🛑 Đã hủy bỏ tiến trình tạo giọng AI theo yêu cầu khẩn cấp.")
+                    yield ("done", None)
+                    return
+
+                chunk = uncached_tasks[b_idx:b_idx + batch_size]
+                chunk_items = [{
+                    "id": item["id"],
+                    "text": item["text"],
+                    "output_path": item["target_out"]
+                } for item in chunk]
+
+                # Gọi batch synthesis
+                batch_results = local_voice_engine.synthesize_batch(
+                    items=chunk_items,
+                    voice_id=voice_id,
+                    speed=speed,
+                    target_sample_rate=sample_rate,
+                    target_channels=channels,
+                    batch_size=batch_size,
+                    cancel_token=check_stop
+                )
+
+                # Thu thập kết quả
+                for item, res in zip(chunk, batch_results):
+                    completed_count += 1
+                    pct = int((completed_count / total) * 100)
+                    if res.get("success") and os.path.exists(item["target_out"]) and os.path.getsize(item["target_out"]) > 100:
+                        try:
+                            shutil.copyfile(item["target_out"], item["cached_file"])
+                        except Exception:
+                            pass
+                        sentence_audios.append((item["target_out"], item["startSeconds"]))
+                        yield ("progress", f"🎙️ [Tiến độ {completed_count}/{total}] ({pct}%) Đang tạo giọng câu #{item['idx']+1}: \"{item['text'][:26]}...\" ({item['startSeconds']:.1f}s)")
+                    else:
+                        err = res.get("error", "Lỗi tạo audio GPU")
+                        error_list.append((item["idx"], item["text"], err))
+                        yield ("progress", f"⚠️ [Tiến độ {completed_count}/{total}] Lỗi tại câu #{item['idx']+1} (mốc {item['startSeconds']:.1f}s): {err}")
+
+        finally:
+            coordinator.release_gpu("tts")
+
+    else:
+        # ── ĐƯỜNG STANDARD CHO EDGE-TTS, OPENSPEAKER, KOKORO & RVC ──
+        yield ("progress", f"🎙️ Khởi động {actual_workers} luồng tạo giọng song song cho {total} câu phụ đề (Giọng: {voice_id})...")
+
+        def process_one_sub(idx, sub):
             if check_stop and check_stop():
+                return (idx, None, sub['startSeconds'], sub['text'], "Đã dừng theo yêu cầu khẩn cấp")
+
+            text = sub['text']
+            start_sec = sub['startSeconds']
+            part_raw = os.path.join(temp_dir, f"raw_sub_{idx}.wav")
+            part_resampled = os.path.join(temp_dir, f"resampled_sub_{idx}.wav")
+            
+            # 1. Kiểm tra Cache âm thanh trước (Instant 0ms)
+            cache_key = hashlib.md5(f"{voice_id}_{speed:.2f}_{text.strip()}".encode('utf-8')).hexdigest()
+            cached_file = os.path.join(cache_dir, f"{cache_key}.wav")
+            if os.path.exists(cached_file) and os.path.getsize(cached_file) > 100:
                 try:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                    shutil.copyfile(cached_file, part_resampled)
+                    return (idx, part_resampled, start_sec, text, None)
                 except Exception:
                     pass
-                yield ("progress", "🛑 Đã hủy bỏ tiến trình tạo giọng AI theo yêu cầu khẩn cấp.")
-                yield ("done", None)
-                return
 
-            completed_count += 1
-            pct = int((completed_count / total) * 100)
+            if check_stop and check_stop():
+                return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
+
+            # 2. Tạo giọng với cơ chế Retry 3 lần nếu có lỗi mạng
+            last_err = None
+            target_out = part_resampled if is_local else part_raw
+            for attempt in range(3):
+                if check_stop and check_stop():
+                    return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
+                try:
+                    synthesize_sentence(
+                        text, voice_id, speed, target_out, open_speaker_key,
+                        target_sample_rate=sample_rate, target_channels=channels
+                    )
+                    if os.path.exists(target_out) and os.path.getsize(target_out) > 100:
+                        last_err = None
+                        break
+                    else:
+                        if any(0x4E00 <= ord(c) <= 0x9FFF for c in text):
+                            last_err = f"Câu còn nguyên chữ tiếng Trung chưa dịch ('{text[:20]}...'), giọng đọc tiếng Việt không thể phát âm"
+                        elif not any(c.isalnum() for c in text):
+                            last_err = f"Câu chỉ chứa dấu câu hoặc ký tự đặc biệt ('{text}')"
+                        else:
+                            last_err = "File âm thanh sinh ra bị rỗng (0 bytes)"
+                except Exception as ex:
+                    last_err = str(ex)
+                    time.sleep(0.3 * (attempt + 1))
+                    
+            if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
+                if not last_err:
+                    if any(0x4E00 <= ord(c) <= 0x9FFF for c in text):
+                        last_err = f"Câu còn nguyên chữ tiếng Trung chưa dịch ('{text[:20]}...'), giọng đọc tiếng Việt không thể phát âm"
+                    elif not any(c.isalnum() for c in text):
+                        last_err = f"Câu chỉ chứa dấu câu hoặc ký tự đặc biệt ('{text}')"
+                    else:
+                        last_err = "Không tạo được file âm thanh sau 3 lần thử"
+                return (idx, None, start_sec, text, last_err)
+
+            if check_stop and check_stop():
+                return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
+
             try:
-                idx, audio_path, start_s, text, err = future.result()
-                if audio_path:
-                    sentence_audios.append((audio_path, start_s))
-                    yield ("progress", f"🎙️ [{completed_count}/{total}] ({pct}%) Đang tạo giọng: \"{text[:26]}...\" ({start_s:.1f}s)")
-                else:
-                    error_list.append((idx, text, err))
-                    yield ("progress", f"⚠️ [{completed_count}/{total}] Lỗi câu #{idx+1}: {err}")
+                # Nếu không phải Local Voice, resample sang 44100Hz 16-bit Stereo WAV qua ffmpeg
+                if not is_local:
+                    cmd_resample = [
+                        ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
+                        "-i", part_raw,
+                        "-ar", str(sample_rate),
+                        "-ac", str(channels),
+                        "-c:a", "pcm_s16le",
+                        part_resampled
+                    ]
+                    subprocess.run(cmd_resample, capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
+                    
+                    if os.path.exists(part_raw):
+                        try:
+                            os.remove(part_raw)
+                        except:
+                            pass
+                            
+                if os.path.exists(part_resampled) and os.path.getsize(part_resampled) > 100:
+                    try:
+                        shutil.copyfile(part_resampled, cached_file)
+                    except:
+                        pass
+                    return (idx, part_resampled, start_sec, text, None)
+                return (idx, None, start_sec, text, "File âm thanh bị rỗng sau khi xử lý")
             except Exception as e:
-                error_list.append((0, '', str(e)))
-                yield ("progress", f"⚠️ [{completed_count}/{total}] Lỗi xử lý: {str(e)}")
+                return (idx, None, start_sec, text, str(e))
+
+        completed_count = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=actual_workers) as executor:
+            future_map = {executor.submit(process_one_sub, i, sub): i for i, sub in enumerate(normalized)}
+            for future in concurrent.futures.as_completed(future_map):
+                if check_stop and check_stop():
+                    try:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        pass
+                    yield ("progress", "🛑 Đã hủy bỏ tiến trình tạo giọng AI theo yêu cầu khẩn cấp.")
+                    yield ("done", None)
+                    return
+
+                completed_count += 1
+                pct = int((completed_count / total) * 100)
+                try:
+                    idx, audio_path, start_s, text, err = future.result()
+                    if audio_path:
+                        sentence_audios.append((audio_path, start_s))
+                        yield ("progress", f"🎙️ [Tiến độ {completed_count}/{total}] ({pct}%) Đang tạo giọng câu #{idx+1}: \"{text[:26]}...\" ({start_s:.1f}s)")
+                    else:
+                        error_list.append((idx, text, err))
+                        yield ("progress", f"⚠️ [Tiến độ {completed_count}/{total}] Lỗi tại câu #{idx+1} (mốc {start_s:.1f}s): {err}")
+                except Exception as e:
+                    error_list.append((0, '', str(e)))
+                    yield ("progress", f"⚠️ [Tiến độ {completed_count}/{total}] Lỗi xử lý: {str(e)}")
 
     if not sentence_audios:
         first_err = error_list[0][2] if error_list else "Không thể kết nối đến máy chủ tạo giọng"
@@ -528,40 +767,55 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
         yield ("done", None)
         return
 
-    yield ("progress", f"✨ Đã tạo xong {len(sentence_audios)}/{total} câu. Đang ghép nối vào timeline video...")
+    yield ("progress", f"✨ Đã tạo xong {len(sentence_audios)}/{total} câu. Đang ghép nối vào timeline video bằng NumPy...")
 
     output_dubbed_track = os.path.join(temp_dir, "dubbed_timeline.wav")
 
-    # Pure Python High-Precision PCM Timeline Mixer
-    max_time = max(item[1] + 8.0 for item in sentence_audios)
-    if min_total_duration and min_total_duration > max_time:
-        max_time = float(min_total_duration) + 1.0
-
-    total_samples = int(max_time * sample_rate * channels)
-    master_buffer = array.array('h', [0] * total_samples)
-
-    for wav_file, start_s in sentence_audios:
-        try:
+    # High-Performance NumPy Block-Based Timeline Audio Mixer
+    try:
+        import numpy_timeline_mixer
+        numpy_timeline_mixer.mix_timeline_clips(
+            clips=sentence_audios,
+            output_path=output_dubbed_track,
+            target_sample_rate=sample_rate,
+            target_channels=channels,
+            min_total_duration=min_total_duration,
+            block_duration_sec=60.0
+        )
+    except Exception as mix_err:
+        print(f"[Mixer] NumPy block mixer error ({mix_err}), falling back to standard array mixer...")
+        max_time = 0.0
+        for wav_file, start_s in sentence_audios:
             with wave.open(wav_file, 'rb') as wf:
-                n_frames = wf.getnframes()
-                raw_bytes = wf.readframes(n_frames)
-                clip_data = array.array('h')
-                clip_data.frombytes(raw_bytes)
-                
-                offset_idx = int(start_s * sample_rate) * channels
-                for s_i, sample_val in enumerate(clip_data):
-                    target_i = offset_idx + s_i
-                    if target_i < total_samples:
-                        mixed_val = master_buffer[target_i] + sample_val
-                        master_buffer[target_i] = max(-32767, min(32767, mixed_val))
-        except Exception as e:
-            print(f"Error overlaying {wav_file}: {e}")
+                max_time = max(max_time, start_s + wf.getnframes() / wf.getframerate())
+        if min_total_duration and min_total_duration > max_time:
+            max_time = float(min_total_duration) + 1.0
 
-    with wave.open(output_dubbed_track, 'wb') as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(master_buffer.tobytes())
+        total_samples = int(max_time * sample_rate * channels)
+        master_buffer = array.array('h', [0]) * total_samples
+
+        for wav_file, start_s in sentence_audios:
+            try:
+                with wave.open(wav_file, 'rb') as wf:
+                    n_frames = wf.getnframes()
+                    raw_bytes = wf.readframes(n_frames)
+                    clip_data = array.array('h')
+                    clip_data.frombytes(raw_bytes)
+                    
+                    offset_idx = int(start_s * sample_rate) * channels
+                    for s_i, sample_val in enumerate(clip_data):
+                        target_i = offset_idx + s_i
+                        if target_i < total_samples:
+                            mixed_val = master_buffer[target_i] + sample_val
+                            master_buffer[target_i] = max(-32767, min(32767, mixed_val))
+            except Exception as e:
+                print(f"Error overlaying {wav_file}: {e}")
+
+        with wave.open(output_dubbed_track, 'wb') as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(master_buffer.tobytes())
 
     if os.path.exists(output_dubbed_track) and os.path.getsize(output_dubbed_track) > 1000:
         yield ("done", output_dubbed_track)

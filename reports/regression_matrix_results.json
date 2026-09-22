@@ -1,0 +1,38 @@
+{
+  "test_1_isolation": {
+    "status": "PASSED",
+    "main_torch": "2.6.0+cu124",
+    "worker_torch": "2.8.0+cu128",
+    "worker_vieneu": "3.8.1"
+  },
+  "test_2_subsystems": {
+    "status": "PASSED",
+    "ocr_latency_ms": 255.1,
+    "ocr_pass": true,
+    "asr_pass": true
+  },
+  "test_3_coordination": {
+    "status": "PASSED",
+    "wait_for_gpu_s": 0.0001,
+    "reload_time_s": 0.0013
+  },
+  "test_4_multijob": {
+    "status": "PASSED",
+    "preview_size_bytes": 138284,
+    "cancel_handled": true
+  },
+  "test_5_crash_recovery": {
+    "status": "PASSED",
+    "old_pid": 13016,
+    "new_pid": 16336,
+    "recovery_time_s": 11.9509
+  },
+  "test_6_sanitization": {
+    "status": "PASSED",
+    "lockfile_lines": 172
+  },
+  "test_7_rollback": {
+    "status": "PASSED",
+    "cpu_pool_available": true
+  }
+}

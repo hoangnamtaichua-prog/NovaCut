@@ -4,6 +4,7 @@ Routes API Bản quyền, HWID & Thanh toán VietQR SePay
 """
 
 import os
+import time
 import hmac
 from flask import Blueprint, jsonify, request
 import license_manager
@@ -19,6 +20,16 @@ def _require_dev_admin():
         and hmac.compare_digest(supplied, expected)
     )
 
+@license_bp.route('/api/license/hwid', methods=['GET'])
+def get_hwid():
+    """Lấy mã phần cứng máy tính HWID độc lập, tức thời, không phụ thuộc vào trạng thái mạng hay cloud."""
+    try:
+        hwid = license_manager.get_hardware_id()
+        short_hwid = license_manager.get_short_hwid(hwid)
+        return jsonify({'success': True, 'hwid': hwid, 'short_hwid': short_hwid})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @license_bp.route('/api/license/info', methods=['GET'])
 def get_license_info():
     """Lấy thông tin bản quyền và mã máy hiện tại."""
@@ -27,7 +38,26 @@ def get_license_info():
     cfg = license_manager.load_app_config()
     status['prices'] = cfg.get('prices', {})
     status['bank_info'] = license_manager.resolve_bank_details(cfg)
+    status['disclaimer_accepted'] = license_manager.is_disclaimer_accepted()
     return jsonify(status)
+
+@license_bp.route('/api/license/disclaimer_status', methods=['GET'])
+def get_disclaimer_status():
+    """Kiểm tra tức thì trạng thái cam kết bản quyền đa tầng trên máy."""
+    accepted = license_manager.is_disclaimer_accepted()
+    return jsonify({
+        'success': True,
+        'disclaimer_accepted': accepted
+    })
+
+@license_bp.route('/api/license/accept_disclaimer', methods=['POST'])
+def accept_disclaimer():
+    """Lưu vĩnh viễn trạng thái đã đọc và chấp thuận cam kết bản quyền trên máy."""
+    try:
+        license_manager.set_disclaimer_accepted(True)
+        return jsonify({'success': True, 'disclaimer_accepted': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @license_bp.route('/api/license/activate_trial', methods=['POST'])
 def activate_trial():

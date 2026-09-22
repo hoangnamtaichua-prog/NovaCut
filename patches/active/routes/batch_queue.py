@@ -273,51 +273,74 @@ def api_batch_select_files():
     title = data.get('title', 'Chọn các file video để xử lý hàng loạt')
     file_paths = []
 
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        res = filedialog.askopenfilenames(
-            title=title,
-            filetypes=[
-                ('Video Files', '*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v'),
-                ('All Files', '*.*')
-            ]
-        )
-        root.destroy()
-        if res:
-            file_paths = list(res)
-    except Exception:
-        file_paths = []
-
+    if sys.platform.startswith('win'):
         try:
             ps_cmd = f"""
-            Add-Type -AssemblyName System.Windows.Forms
+            $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+            [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+            $form = New-Object System.Windows.Forms.Form
+            $form.TopMost = $true
+            $form.Width = 0
+            $form.Height = 0
+            $form.StartPosition = "CenterScreen"
             $f = New-Object System.Windows.Forms.OpenFileDialog
             $f.Title = {_ps_literal(title)}
             $f.Filter = 'Video Files (*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v)|*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v|All Files (*.*)|*.*'
             $f.Multiselect = $true
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
-                $f.FileNames
+            if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {{
+                $f.FileNames | ForEach-Object {{ Write-Output $_ }}
             }}
+            $form.Dispose()
             """
             proc = subprocess.run(
-                ['powershell', '-WindowStyle', 'Hidden', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
-                capture_output=True, text=True, timeout=60,
+                ['powershell', '-STA', '-NoProfile', '-Command', ps_cmd],
+                capture_output=True, encoding='utf-8', errors='replace', timeout=60,
                 creationflags=0x08000000
             )
             file_paths = [p.strip() for p in proc.stdout.splitlines() if p.strip()]
         except Exception:
-            pass
+            file_paths = []
 
-    valid_paths = [os.path.normpath(p) for p in file_paths if os.path.exists(p)]
-    for p in valid_paths:
-        register_user_path(p)
+    if not file_paths:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)
+            res = filedialog.askopenfilenames(
+                title=title,
+                filetypes=[
+                    ('Video Files', '*.mp4;*.mkv;*.avi;*.mov;*.flv;*.webm;*.m4v'),
+                    ('All Files', '*.*')
+                ]
+            )
+            if res:
+                if isinstance(res, (list, tuple)):
+                    file_paths = [str(x) for x in res if str(x).strip()]
+                elif isinstance(res, str):
+                    try:
+                        file_paths = [str(x) for x in root.tk.splitlist(res) if str(x).strip()]
+                    except Exception:
+                        file_paths = [res.strip()] if res.strip() else []
+            root.destroy()
+        except Exception:
+            file_paths = []
+
+    valid_paths = []
+    for p in file_paths:
+        if p:
+            clean_p = str(p).strip().strip('"').strip("'")
+            if os.path.exists(clean_p):
+                norm_p = os.path.normpath(clean_p)
+                register_user_path(norm_p)
+                valid_paths.append(norm_p)
 
     return jsonify({
         'success': True,
         'files': valid_paths,
+        'file_paths': valid_paths,
+        'paths': valid_paths,
         'count': len(valid_paths)
     })

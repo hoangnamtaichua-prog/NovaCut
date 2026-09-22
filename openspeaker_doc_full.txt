@@ -1,0 +1,467 @@
+<USER_REQUEST>
+nếu dùng API của openspeker có nhanh hơn được không đẩy lên đa luồng như cách gửi API dịch
+đọc document của openspeaker đi xem tối đa lên được bao nhiêu# OpenSpeaker API Documentation
+
+Base URL: https://api.ai33.pro
+
+## Authentication
+
+External API endpoints use the `xi-api-key` header unless an endpoint explicitly says otherwise.
+
+```http
+xi-api-key: <YOUR_API_KEY>
+```
+
+v3 endpoints accept the same `xi-api-key` header, or `Authorization: <YOUR_API_KEY>` (raw key, no `Bearer` prefix).
+
+## Rate Limits
+
+Every authenticated API, including v3, returns the same rate-limit response headers:
+
+| Header | Meaning |
+|---|---|
+| `X-RateLimit-Limit` | Sustained token refill rate per second for the current workload |
+| `X-RateLimit-Burst` | Maximum token capacity for the current workload |
+| `X-RateLimit-Remaining` | Remaining tokens currently available |
+| `X-RateLimit-Scope` | Workload bucket: `create`, `poll`, `read`, `upload`, or `command` |
+| `Retry-After` | Seconds to wait before retrying; returned when the API responds with HTTP 429 |
+
+Task-detail polling costs 1 token; task-list polling costs 2 tokens. API keys and JWTs belonging to the same user share one quota because rate limiting is based on the authenticated user, not the credential.
+
+On HTTP 429, read `Retry-After`, wait that many seconds, then retry with exponential backoff and jitter. HTTP 503 with code `server_busy` is temporary server capacity pressure and should also be retried; it is not a user rate-limit violation.
+
+## Common Task Flow
+
+Most generation APIs are asynchronous. Create endpoints return `task_id`; poll `GET /v1/task/{task_id}` or pass `receive_url` for webhook delivery.
+Task detail and list responses include `text` limited to 1,000 Unicode characters, the original `text_length`, and `text_truncated`. Fetch `GET /v1/task/{task_id}/full` with the same authentication only when you need the complete text. This endpoint returns `{ id, text, text_length, text_truncated: false }`.
+
+```bash
+curl "https://api.ai33.pro/v1/task/$task_id" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY"
+```
+
+```json
+{
+  "id": "uuid_task_id",
+  "created_at": "2026-06-15T00:00:00.000Z",
+  "status": "doing",
+  "error_message": null,
+  "credit_cost": 1,
+  "metadata": {},
+  "progress": 60,
+  "type": "tts"
+}
+```
+
+Common task utilities:
+
+```bash
+curl "https://api.ai33.pro/v1/tasks?page=1&limit=20&type=tts" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY"
+
+curl -X POST "https://api.ai33.pro/v1/task/delete" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY" \
+  --data-raw '{"task_ids":["uuid_task_id"]}'
+
+curl "https://api.ai33.pro/v1/credits" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY"
+
+curl "https://api.ai33.pro/v1/health-check" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY"
+```
+
+## V3 APIs
+
+### Text To Speech (v3)
+
+Unified v3 endpoint. Send FormData; `voice_id` must use a provider prefix: `elevenlabs_`, `minimax_`, `clone_`, `edge_`, `kokoro_`, `vbee_`, or `fishaudio_`.
+
+```bash
+curl -X POST "https://api.ai33.pro/v3/text-to-speech" \
+  -H "xi-api-key: $API_KEY" \
+  -F text="Xin chào, đây là API v3." \
+  -F voice_id="minimax_male-qn-qingse" \
+  -F speed="1" \
+  -F with_transcript="false" \
+  -F receive_url="https://your-site.com/api/callback"
+```
+
+Fields: `voice_id` required; `text` required (max 1,000,000 chars); `speed` 0.5-1.5 (default 1); `with_transcript` optional (default false); `file_name` optional; `receive_url` optional; `pronunciation_dictionary_id` optional (apply a pronunciation dictionary — only affects audio). Returns `{ success, task_id }`.
+
+### Text To Dialogue (v3)
+
+`speakers` is a JSON array; text labels `A>`, `B>`, `C>` map to speakers by index.
+
+```bash
+curl -X POST "https://api.ai33.pro/v3/text-to-speech/dialogue" \
+  -H "xi-api-key: $API_KEY" \
+  -F text=$'A> Xin chào.\nB> Chào bạn.\nC> Mình là Edge voice.' \
+  -F speakers='[{"voice_id":"elevenlabs_hpp4J3VqNfWAUOO0d1Us","speed":1},{"voice_id":"minimax_male-qn-qingse","speed":1},{"voice_id":"edge_vi-VN-HoaiMyNeural"}]' \
+  -F delay="0.4" \
+  -F with_transcript="true"
+```
+
+Fields: `text` required; `speakers` required (JSON array, min 2; each `{ voice_id, speed? }`, mapped by label index); `delay` 0-5 (default 0); `with_transcript` top-level (default false); `receive_url`/`file_name` optional; `pronunciation_dictionary_id` optional (applies to all lines, speaker labels untouched). Transcript is controlled only by the top-level `with_transcript` — do not put it inside `speakers`.
+
+### Voice Library (v3)
+
+Lists ElevenLabs, Minimax, cloned, Edge, Kokoro, Vbee, and Fish Audio voices in one normalized format. Use the returned `voice_id` directly (already prefixed) in v3 TTS, dialogue, voice changer, and dubbing.
+
+```bash
+curl "https://api.ai33.pro/v3/voices?provider=edge&language=Vietnamese&gender=Female" \
+  -H "xi-api-key: $API_KEY"
+```
+
+Query params: `provider` required (`elevenlabs`, `minimax`, `clone`, `edge`, `kokoro`, `vbee`, `fishaudio`); `search`/`q`/`keywords`; `page` (default 1); `page_size`/`limit` (default 30, max 100); plus CSV filters `tags`/`tag_list`, `language`, `locale`, `gender`, `age`, `accent`, `category`, `use_case`(s), `descriptive`(s)/`style`(s). Provider-specific: vbee `voice_ownership` (`community` | `vbee` | `all`) + `locale` (`northern`/`central`/`southern`) + `category`; fishaudio `sort` (`score`/`task_count`/`created_at`/`trending`) + `tag`. Returns `{ success, data[], pagination }`.
+
+### Clone Voice (v3)
+
+```bash
+curl -X POST "https://api.ai33.pro/v3/text-to-speech/voice-clone" \
+  -H "xi-api-key: $API_KEY" \
+  -F voice_name="My cloned voice" \
+  -F audio_file=@sample.mp3
+```
+
+Fields: `voice_name` required; `audio_file` required (max 10MB). Returns `data.voice_id`; use it as `clone_<voice_id>` in v3 TTS, dialogue, voice changer, and dubbing.
+
+### Delete Clone Voice (v3)
+
+```bash
+curl -X DELETE "https://api.ai33.pro/v3/text-to-speech/voice-clone/$voice_clone_id" \
+  -H "xi-api-key: $API_KEY"
+```
+
+Returns `{ success: true }`.
+
+### Pronunciation Dictionary (v3)
+
+Rules that replace text before synthesis to fix pronunciation. Attach via `pronunciation_dictionary_id` in v3 TTS/dialogue — only the audio changes. JSON body; `xi-api-key` or Supabase JWT.
+
+```bash
+curl -X POST "https://api.ai33.pro/v3/dictionaries" \
+  -H "xi-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Brand names","rules":[{"from":"AI","to":"Ây Ai","matchType":"word","caseSensitive":true}]}'
+```
+
+Rule: `{ from, to, matchType, caseSensitive }`; `matchType` = `word` | `contains` (default `word`). Other endpoints: `GET /v3/dictionaries` (list), `GET/PUT/DELETE /v3/dictionaries/{id}`, `POST /v3/dictionaries/preview` (`{ text, rules }` → `{ input, output }`). Use the returned `id` as `pronunciation_dictionary_id` in TTS/dialogue.
+
+## ElevenLabs APIs (v1)
+
+### Dubbing
+
+Creates the default dubbed audio and SRT. Pass optional `voice_id` to synthesize the completed SRT once more and receive a second audio output using that replacement voice.
+
+#### Multipart request
+
+```bash
+curl -X POST "https://api.ai33.pro/v1/task/dubbing" \
+  -H "xi-api-key: $API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F file=@audio.mp3 \
+  -F num_speakers="0" \
+  -F disable_voice_cloning="false" \
+  -F source_lang="auto" \
+  -F target_lang="en" \
+  -F voice_id="elevenlabs_TX3LPaxmHKxFdv7VOQHJ" \
+  -F receive_url="https://your-site.com/api/callback"
+```
+
+#### JSON request after a presigned upload
+
+First create an upload with `POST /v1/uploads` using `kind: "dubbing"`, then PUT the file to its `put_url`. Submit the returned `upload_id` with the audio duration:
+
+```bash
+curl -X POST "https://api.ai33.pro/v1/task/dubbing" \
+  -H "xi-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "upload_id": "uuid_from_v1_uploads",
+    "duration_seconds": 62.5,
+    "num_speakers": "0",
+    "disable_voice_cloning": "false",
+    "source_lang": "auto",
+    "target_lang": "en",
+    "voice_id": "elevenlabs_TX3LPaxmHKxFdv7VOQHJ",
+    "receive_url": "https://your-site.com/api/callback"
+  }'
+```
+
+Input fields: multipart requires `file`; JSON requires `upload_id` and `duration_seconds > 0`. `num_speakers` defaults to 0; `source_lang` defaults to `auto`; `target_lang` and `receive_url` are required by `/v1/task/dubbing`.
+
+`voice_id` is optional in both request formats. Use a provider-prefixed v3 voice ID from `GET /v3/voices`: `elevenlabs_`, `minimax_`, `clone_`, `edge_`, `vbee_`, or `fishaudio_`. Kokoro is not supported because its SRT-to-TTS path is unavailable. Because it is synthesized from SRT, the replacement output is voice-only and does not include music or other background audio from the source. The replacement output is loudness-normalized automatically; there is no separate request field. A replacement voice increases that task's dubbing credit cost by 25%, rounded up.
+
+Poll `GET /v1/task/{task_id}` or receive the same final task payload at `receive_url`. On success, `metadata.audio_url` remains the default dubbed audio and `metadata.replacement_audio_url` is the optional replacement-voice audio:
+
+```json
+{
+  "status": "done",
+  "metadata": {
+    "audio_url": "https://example.com/default.m4a",
+    "srt_url": "https://example.com/translated.srt",
+    "replacement_voice_id": "elevenlabs_TX3LPaxmHKxFdv7VOQHJ",
+    "replacement_credit_multiplier": 1.25,
+    "replacement_status": "done",
+    "replacement_audio_url": "https://example.com/replacement.mp3"
+  },
+  "type": "dubbing"
+}
+```
+
+If replacement synthesis fails after the default dubbing succeeds, the task still finishes with `status: "done"`; default audio and SRT remain available, `replacement_audio_url` is omitted, and metadata contains:
+
+```json
+{
+  "replacement_status": "failed",
+  "replacement_error": {
+    "code": "text_to_speech_failed",
+    "message": "Text-to-speech failed"
+  }
+}
+```
+
+### Speech To Text
+
+```bash
+curl -X POST "https://api.ai33.pro/v1/task/speech-to-text" \
+  -H "xi-api-key: $API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F file=@audio.mp3 \
+  -F tag_audio_events=true \
+  -F receive_url="https://your-site.com/api/callback"
+```
+
+Fields: `file` required; supported formats include mp3, aac, aiff, ogg, opus, wav, webm, flac, m4a; max 200MB.
+
+### Sound Effect
+
+```bash
+curl -X POST "https://api.ai33.pro/v1/task/sound-effect" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY" \
+  -d '{
+    "text": "Thunder rolling with heavy rain",
+    "duration_seconds": 5,
+    "prompt_influence": 0.3,
+    "loop": false,
+    "model_id": "eleven_text_to_sound_v2",
+    "receive_url": "https://your-site.com/api/callback"
+  }'
+```
+
+Credit cost: auto duration costs 200 credits; specified duration costs 50 credits per second; minimum 50 credits.
+
+### Voice Changer
+
+```bash
+curl -X POST "https://api.ai33.pro/v1/task/voice-changer" \
+  -H "xi-api-key: $API_KEY" \
+  -F 'file=@audio.mp3' \
+  -F 'voice_id=21m00Tcm4TlvDq8ikWAM' \
+  -F 'model_id=eleven_multilingual_sts_v2' \
+  -F 'voice_settings={"stability":0.5,"similarity_boost":0.75,"style":0.2,"use_speaker_boost":true}' \
+  -F 'remove_background_noise=true'
+```
+
+### Voice Isolate
+
+```bash
+curl -X POST "https://api.ai33.pro/v1/task/voice-isolate" \
+  -H "xi-api-key: $API_KEY" \
+  -F 'file=@audio.mp3'
+```
+
+## Suno Music Generation
+
+Create an asynchronous Suno music generation task. The endpoint returns a `task_id`; poll the common task endpoint or use `receive_url` for webhook delivery.
+
+### POST /v1s/task/music-generation
+
+Simple mode creates a song from a short description.
+
+```bash
+curl -X POST "https://api.ai33.pro/v1s/task/music-generation" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY" \
+  -d '{
+    "create_mode": "simple",
+    "gpt_description_prompt": "Percussive indie pop song about the border between two lives",
+    "make_instrumental": false,
+    "receive_url": "https://your-site.com/api/suno-callback"
+  }'
+```
+
+Custom mode creates a song from title, lyrics, and style tags.
+
+```bash
+curl -X POST "https://api.ai33.pro/v1s/task/music-generation" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY" \
+  -d '{
+    "create_mode": "custom",
+    "title": "Border Lights",
+    "lyrics": "[Verse 1]\nI walk the line between two lives",
+    "tags": "indie pop, emotional, cinematic drums",
+    "vocal_gender": "f",
+    "receive_url": "https://your-site.com/api/suno-callback"
+  }'
+```
+
+| Field | Mode | Required | Default | Notes |
+|---|---|---|---|---|
+| `create_mode` | all | no | `simple` | `simple` or `custom` |
+| `receive_url` | all | no | - | Webhook URL called when task completes/errors |
+| `gpt_description_prompt` | simple | yes | - | 1-500 characters |
+| `make_instrumental` | simple | no | `false` | Instrumental output, simple mode only |
+| `title` | custom | no | empty | Max 80 characters |
+| `lyrics` | custom | conditional | empty | Max 5000 characters; `lyrics` or `tags` is required |
+| `tags` | custom | conditional | empty | Max 1000 characters; `lyrics` or `tags` is required |
+| `vocal_gender` | custom | no | - | `f` or `m` |
+
+Success response:
+
+```json
+{
+  "success": true,
+  "task_id": "uuid_task_id",
+  "ec_remain_credits": "9500"
+}
+```
+
+## Common Task Polling
+
+Use this endpoint for Suno and other async tasks.
+
+```bash
+curl "https://api.ai33.pro/v1/task/$task_id" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY"
+```
+
+Suno completed task response includes final audio URLs and generated metadata.
+
+```json
+{
+  "id": "uuid_task_id",
+  "status": "done",
+  "progress": 100,
+  "type": "suno_music",
+  "metadata": {
+    "create_mode": "custom",
+    "major_model_version": "v4.5-all",
+    "title": "Border Lights",
+    "lyrics": "[Verse 1]\nI walk the line between two lives",
+    "image_url": "https://cdn2.suno.ai/image_xxx.jpeg",
+    "audio_url": "https://cdn1.suno.ai/xxx.mp3",
+    "all_audio_urls": [
+      "https://cdn1.suno.ai/xxx.mp3",
+      "https://cdn1.suno.ai/yyy.mp3"
+    ],
+    "suno_result": {
+      "clips": [
+        {
+          "id": "clip_id",
+          "title": "Border Lights",
+          "audio_url": "https://cdn1.suno.ai/xxx.mp3",
+          "image_url": "https://cdn2.suno.ai/image_xxx.jpeg",
+          "duration": 187.96,
+          "tags": "indie pop, emotional, cinematic drums"
+        }
+      ]
+    }
+  }
+}
+```
+
+When a Suno task is still processing, `metadata.stream_url` and `metadata.suno_stream_result.clips[].stream_url` may be available for preview. Final files are in `metadata.audio_url` and `metadata.suno_result.clips[].audio_url` when `status` is `done`.
+
+## Imagen APIs
+
+### List Models
+
+```bash
+curl "https://api.ai33.pro/v1i/models" \
+  -H "xi-api-key: $API_KEY"
+```
+
+### Get Price
+
+```bash
+curl -X POST "https://api.ai33.pro/v1i/task/price" \
+  -H "Content-Type: application/json" \
+  -H "xi-api-key: $API_KEY" \
+  -d '{
+    "model_id": "bytedance-seedream-4.5",
+    "generations_count": 1,
+    "model_parameters": {
+      "aspect_ratio": "16:9",
+      "resolution": "2K"
+    },
+    "assets": 2
+  }'
+```
+
+### Generate Image
+
+```bash
+curl -X POST "https://api.ai33.pro/v1i/task/generate-image" \
+  -H "xi-api-key: $API_KEY" \
+  -F 'prompt=A beautiful sunset over the ocean in watercolor style' \
+  -F 'model_id=bytedance-seedream-4.5' \
+  -F 'generations_count=1' \
+  -F 'model_parameters={"aspect_ratio":"16:9","resolution":"2K"}' \
+  -F 'receive_url=https://your-site.com/api/callback'
+```
+
+Reference images: send multiple `assets` fields. Use `@img1`, `@img2`, etc. in `prompt`; the number of `@img` references must match the number of uploaded `assets` files.
+
+Imagen task type is `imagen2`. Poll with `GET /v1/task/{task_id}` or list with `GET /v1/tasks?type=imagen2&page=1&limit=20`.
+
+## Typical Success Response Shape
+
+Create endpoints usually return:
+
+```json
+{
+  "success": true,
+  "task_id": "uuid_task_id",
+  "ec_remain_credits": "9500"
+}
+```
+
+Polling completed task example:
+
+```json
+{
+  "id": "uuid_task_id",
+  "created_at": "2026-06-15T00:00:00.000Z",
+  "status": "done",
+  "error_message": null,
+  "credit_cost": 3600,
+  "metadata": {
+    "audio_url": "https://example.com/output.mp3"
+  },
+  "progress": 100,
+  "type": "suno_music"
+}
+```
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-14T08:48:31+07:00.
+
+The user's current state is as follows:
+Active Document: d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\patches\active\routes\subtitles.py (LANGUAGE_PYTHON)
+Cursor is on line: 1
+Other open documents:
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\routes\state.py (LANGUAGE_PYTHON)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\scripts\test_ocr_sub_cache.py (LANGUAGE_PYTHON)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\api_keys.txt (LANGUAGE_PLAINTEXT)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\patches\active\routes\subtitles.py (LANGUAGE_PYTHON)
+- d:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\patches\active\ai_dubbing.py (LANGUAGE_PYTHON)
+</ADDITIONAL_METADATA>

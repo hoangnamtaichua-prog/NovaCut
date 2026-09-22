@@ -120,6 +120,18 @@ def api_download_start():
     data = request.get_json(silent=True) or {}
     url = str(data.get('url', '')).strip()
     format_id = str(data.get('format_id', 'best'))[:100]
+    info_payload = data.get('info')
+    video_urls_payload = data.get('video_urls')
+
+    # Nếu payload info có chứa URL cụ thể của tập đang chọn (vd ?p=3), ưu tiên sử dụng
+    if isinstance(info_payload, dict):
+        info_url = str(info_payload.get('url') or '').strip()
+        if info_url and _validate_media_page_url(info_url):
+            url = info_url
+
+    if not isinstance(video_urls_payload, list):
+        video_urls_payload = None
+
     try:
         is_audio = parse_bool(data.get('is_audio'), False)
         output_dir = _normalize_output_dir(data.get('output_dir'))
@@ -151,12 +163,16 @@ def api_download_start():
                 is_audio=is_audio,
                 output_dir=output_dir,
                 progress_callback=progress_callback,
-                info=None,
-                video_urls=None
+                info=info_payload if isinstance(info_payload, dict) else None,
+                video_urls=video_urls_payload
             )
             file_size = os.path.getsize(final_path) if os.path.exists(final_path) else 0
             size_mb = f"{file_size / (1024*1024):.1f} MB"
-            
+
+            # Phân tích độ phân giải và thông số kỹ thuật thực tế của video vừa tải
+            specs = downloader.probe_video_specs(final_path) or {}
+            duration_val = specs.get('duration') or info.get('duration', 0)
+
             q.put({
                 'status': 'completed',
                 'file_path': final_path,
@@ -164,8 +180,18 @@ def api_download_start():
                 'file_size': size_mb,
                 'title': info.get('title', os.path.basename(final_path)),
                 'thumbnail': info.get('thumbnail', ''),
-                'duration': info.get('duration', 0),
-                'audio_url': f"/api/file?path={urllib.parse.quote(final_path)}"
+                'duration': duration_val,
+                'audio_url': f"/api/file?path={urllib.parse.quote(final_path)}",
+                'specs': specs,
+                'resolution': specs.get('resolution', ''),
+                'resolution_label': specs.get('resolution_label', ''),
+                'width': specs.get('width', 0),
+                'height': specs.get('height', 0),
+                'fps': specs.get('fps', 0),
+                'vcodec': specs.get('vcodec', ''),
+                'acodec': specs.get('acodec', ''),
+                'aspect_ratio': specs.get('aspect_ratio', ''),
+                'specs_summary': specs.get('summary', '')
             })
         except Exception as e:
             q.put({
@@ -190,6 +216,42 @@ def api_download_start():
                 yield "data: {\"status\": \"heartbeat\"}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@download_bp.route('/api/download/probe', methods=['POST'])
+def api_download_probe():
+    """
+    API phân tích thông số kỹ thuật & độ phân giải của file video cục bộ hoặc link online
+    """
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import downloader
+        data = request.get_json(silent=True) or {}
+        file_path = str(data.get('file_path', '')).strip()
+        url = str(data.get('url', '')).strip()
+
+        if file_path:
+            if not is_path_allowed(file_path, must_exist=True):
+                return jsonify({'error': 'Đường dẫn tệp không được phép hoặc không tồn tại'}), 403
+            specs = downloader.probe_video_specs(file_path)
+            if not specs or 'error' in specs:
+                return jsonify({'error': specs.get('error', 'Không thể phân tích tệp video') if specs else 'Không thể đọc tệp'}), 400
+            return jsonify({'success': True, 'type': 'file', 'specs': specs})
+
+        if url:
+            if not _validate_media_page_url(url):
+                return jsonify({'error': 'URL không hợp lệ hoặc không thuộc nền tảng hỗ trợ'}), 400
+            info = downloader.extract_video_info(url)
+            if 'error' in info:
+                return jsonify({'error': info['error']}), 400
+            return jsonify({'success': True, 'type': 'url', 'info': info})
+
+        return jsonify({'error': 'Vui lòng cung cấp file_path hoặc url để phân tích'}), 400
+    except Exception as e:
+        return jsonify({'error': f"Lỗi phân tích: {str(e)}"}), 500
+
 
 @download_bp.route('/api/download/open_folder', methods=['POST'])
 def api_download_open_folder():
@@ -222,7 +284,7 @@ def api_download_open_folder():
 def api_download_douyin_scan_channel_stream():
     global _douyin_scan_active
     """
-    API quét kênh Douyin thời gian thực qua Server-Sent Events (SSE Stream).
+    API quét kênh hoặc bộ sưu tập Douyin thời gian thực qua Server-Sent Events (SSE Stream).
     """
     import license_manager
     allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
@@ -232,21 +294,22 @@ def api_download_douyin_scan_channel_stream():
     import douyin_browser_downloader, queue, threading, json
     data = request.get_json(silent=True) or {}
     channel_url = str(data.get('channel_url', '')).strip()
-    limit = data.get('limit', 30)
+    source_type = str(data.get('source_type', 'channel')).strip().lower()
+    limit = data.get('limit', 50)
 
     if not channel_url or not _valid_douyin_source(channel_url):
-        return jsonify({'error': 'Vui lòng nhập đường dẫn kênh hoặc mã sec_uid của Douyin'}), 400
+        return jsonify({'error': 'Vui lòng nhập đường dẫn kênh, bộ sưu tập hoặc mã sec_uid/mix_id của Douyin'}), 400
 
     try:
-        limit = int(limit) if limit and str(limit).isdigit() else 30
-        if limit <= 0 or limit > 300:
-            limit = 30
+        limit = int(limit) if limit and str(limit).isdigit() else 50
+        if limit <= 0 or limit > 500:
+            limit = 50
     except Exception:
-        limit = 30
+        limit = 50
 
     with _download_lock:
         if _douyin_scan_active:
-            return jsonify({'error': 'Một tác vụ quét kênh Douyin khác đang chạy'}), 409
+            return jsonify({'error': 'Một tác vụ quét Douyin khác đang chạy'}), 409
         _douyin_scan_active = True
 
     q = queue.Queue()
@@ -262,7 +325,11 @@ def api_download_douyin_scan_channel_stream():
         global _douyin_scan_active
         try:
             crawler = douyin_browser_downloader.DouyinBrowserDownloader()
-            result = crawler.scan_channel_videos(channel_url, limit=limit, progress_cb=progress_callback)
+            mix_id = douyin_browser_downloader.extract_mix_id(channel_url)
+            if source_type == 'collection' or mix_id:
+                result = crawler.scan_collection_videos(channel_url, limit=limit, progress_cb=progress_callback)
+            else:
+                result = crawler.scan_channel_videos(channel_url, limit=limit, progress_cb=progress_callback)
             q.put({
                 'status': 'completed',
                 'pct': 100,
@@ -299,7 +366,7 @@ def api_download_douyin_scan_channel_stream():
 def api_download_douyin_scan_channel():
     global _douyin_scan_active
     """
-    API quét toàn bộ hoặc N video mới nhất từ một kênh Douyin (Fallback Synchronous).
+    API quét toàn bộ hoặc N video mới nhất từ một kênh/bộ sưu tập Douyin (Fallback Synchronous).
     """
     import license_manager
     allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
@@ -309,25 +376,30 @@ def api_download_douyin_scan_channel():
     import douyin_browser_downloader
     data = request.get_json(silent=True) or {}
     channel_url = str(data.get('channel_url', '')).strip()
-    limit = data.get('limit', 30)
+    source_type = str(data.get('source_type', 'channel')).strip().lower()
+    limit = data.get('limit', 50)
 
     if not channel_url or not _valid_douyin_source(channel_url):
-        return jsonify({'error': 'Vui lòng nhập đường dẫn kênh hoặc mã sec_uid của Douyin'}), 400
+        return jsonify({'error': 'Vui lòng nhập đường dẫn kênh, bộ sưu tập hoặc mã sec_uid/mix_id của Douyin'}), 400
 
     try:
-        limit = int(limit) if limit and str(limit).isdigit() else 30
-        if limit <= 0 or limit > 300:
-            limit = 30
+        limit = int(limit) if limit and str(limit).isdigit() else 50
+        if limit <= 0 or limit > 500:
+            limit = 50
     except Exception:
-        limit = 30
+        limit = 50
 
     with _download_lock:
         if _douyin_scan_active:
-            return jsonify({'error': 'Một tác vụ quét kênh Douyin khác đang chạy'}), 409
+            return jsonify({'error': 'Một tác vụ quét Douyin khác đang chạy'}), 409
         _douyin_scan_active = True
     try:
         crawler = douyin_browser_downloader.DouyinBrowserDownloader()
-        result = crawler.scan_channel_videos(channel_url, limit=limit)
+        mix_id = douyin_browser_downloader.extract_mix_id(channel_url)
+        if source_type == 'collection' or mix_id:
+            result = crawler.scan_collection_videos(channel_url, limit=limit)
+        else:
+            result = crawler.scan_channel_videos(channel_url, limit=limit)
         return jsonify(result)
     except Exception as e:
         import traceback
@@ -353,6 +425,11 @@ def api_download_douyin_batch_download():
     videos = data.get('videos', [])
     output_dir = data.get('output_dir', '').strip()
     channel_name = data.get('channel_name', '').strip()
+    max_workers = int(data.get('max_workers', 3))
+    connections_per_file = int(data.get('connections_per_file', 2))
+    prefix_index = parse_bool(data.get('prefix_index', True), True)
+    auto_merge = parse_bool(data.get('auto_merge', False), False)
+    merge_mode = str(data.get('merge_mode', 'auto')).strip()
 
     if not videos or not isinstance(videos, list):
         return jsonify({'error': 'Danh sách video tải xuống rỗng'}), 400
@@ -376,19 +453,28 @@ def api_download_douyin_batch_download():
 
     def worker():
         try:
-            downloaded_files = douyin_browser_downloader.download_channel_batch(
+            batch_result = douyin_browser_downloader.download_channel_batch(
                 video_list=videos,
                 output_dir=output_dir,
                 channel_name=channel_name,
-                max_workers=3,
+                max_workers=max_workers,
+                connections_per_file=connections_per_file,
+                prefix_index=prefix_index,
+                auto_merge=auto_merge,
+                merge_mode=merge_mode,
                 progress_cb=progress_callback
             )
+            downloaded_files = batch_result.get("downloaded_files", [])
+            merged_file = batch_result.get("merged_file")
+            manifest_path = batch_result.get("manifest_path")
             q.put({
                 'status': 'completed',
                 'downloaded_count': len(downloaded_files),
                 'total_requested': len(videos),
                 'output_dir': output_dir,
-                'files': downloaded_files
+                'files': downloaded_files,
+                'merged_file': merged_file,
+                'manifest_path': manifest_path
             })
         except Exception as e:
             q.put({
@@ -410,6 +496,111 @@ def api_download_douyin_batch_download():
                 yield "data: {\"status\": \"heartbeat\"}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@download_bp.route('/api/download/douyin/retry_failed', methods=['POST'])
+def api_download_douyin_retry_failed():
+    """
+    API tải lại các video bị lỗi từ batch_manifest.json
+    """
+    import license_manager
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'error': f"Chức năng bị khóa: {perm_msg}", 'license_required': True}), 403
+
+    import douyin_browser_downloader, queue, threading, json
+    data = request.get_json(silent=True) or {}
+    output_dir = data.get('output_dir', '').strip()
+    manifest_path = data.get('manifest_path', '').strip()
+    target_path = manifest_path or output_dir
+
+    if not target_path:
+        return jsonify({'error': 'Vui lòng cung cấp output_dir hoặc manifest_path'}), 400
+
+    q = queue.Queue()
+
+    def progress_callback(completed, total, video_info, file_path, status_tag):
+        q.put({
+            'status': 'progress',
+            'completed': completed,
+            'total': total,
+            'pct': int(completed / total * 100) if total > 0 else 0,
+            'current_title': video_info.get('title', '') if video_info else '',
+            'file_path': file_path or '',
+            'tag': status_tag
+        })
+
+    def worker():
+        try:
+            res = douyin_browser_downloader.retry_failed_batch_items(
+                target_path,
+                max_workers=int(data.get('max_workers', 3)),
+                connections_per_file=int(data.get('connections_per_file', 2)),
+                progress_cb=progress_callback
+            )
+            q.put({
+                'status': 'completed',
+                'result': res
+            })
+        except Exception as e:
+            q.put({
+                'status': 'error',
+                'error': str(e)
+            })
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+    def generate():
+        while True:
+            try:
+                item = q.get(timeout=60)
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                if item.get('status') in ['completed', 'error']:
+                    break
+            except queue.Empty:
+                yield "data: {\"status\": \"heartbeat\"}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@download_bp.route('/api/download/douyin/merge', methods=['POST'])
+def api_download_douyin_merge():
+    """
+    API ghép nối các tập video Douyin đã tải.
+    """
+    import license_manager
+    allowed, perm_msg, _ = license_manager.check_permission('can_access_editor')
+    if not allowed:
+        return jsonify({'error': f"Chức năng bị khóa: {perm_msg}", 'license_required': True}), 403
+
+    import downloader
+    data = request.get_json(silent=True) or {}
+    files = data.get('files', [])
+    output_path = data.get('output_path', '').strip()
+    output_dir = data.get('output_dir', '').strip()
+    merge_mode = str(data.get('merge_mode', 'auto')).strip()
+
+    if not files and output_dir:
+        if os.path.exists(output_dir):
+            files = sorted([
+                os.path.join(output_dir, f) for f in os.listdir(output_dir)
+                if f.lower().endswith('.mp4') and not f.startswith('Merged_')
+            ])
+
+    if not files or len(files) < 2:
+        return jsonify({'error': 'Cần ít nhất 2 video để ghép nối'}), 400
+
+    if not output_path:
+        dir_name = os.path.dirname(files[0])
+        output_path = os.path.join(dir_name, "Merged_Collection.mp4")
+
+    try:
+        merged_file = downloader.merge_collection_episodes(files, output_path, merge_mode=merge_mode)
+        return jsonify({'success': True, 'merged_file': merged_file})
+    except Exception as e:
+        return jsonify({'error': f"Lỗi ghép video: {str(e)}"}), 500
+
 
 
 @download_bp.route('/api/download/douyin/cancel_batch', methods=['POST'])
@@ -440,5 +631,88 @@ def api_download_douyin_open_login():
         return jsonify({'error': f"Lỗi mở trình duyệt đăng nhập: {str(e)}"}), 500
 
 
+# =========================================================================
+# BILIBILI BBDown API ROUTES
+# =========================================================================
+@download_bp.route('/api/download/bilibili/status', methods=['GET'])
+def api_download_bilibili_status():
+    """Kiểm tra trạng thái đăng nhập Bilibili (bao gồm xác minh cookie với server)"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import bilibili_downloader
+        has_file = bilibili_downloader.is_bilibili_logged_in()
+        has_bbdown = bilibili_downloader.get_bbdown_path() is not None
+
+        # Xác minh cookie thực sự với Bilibili API (không chỉ check file tồn tại)
+        verify = {'valid': False, 'uname': None, 'is_vip': False, 'mid': None}
+        if has_file:
+            try:
+                verify = bilibili_downloader.verify_bilibili_cookie()
+            except Exception:
+                pass
+
+        return jsonify({
+            'success': True,
+            'logged_in': has_file,           # Cookie file tồn tại (legacy compat)
+            'cookie_valid': verify['valid'],  # Cookie còn hoạt động với server
+            'uname': verify.get('uname'),
+            'is_vip': verify.get('is_vip', False),
+            'mid': verify.get('mid'),
+            'has_bbdown': has_bbdown
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
+
+
+@download_bp.route('/api/download/bilibili/login_qr', methods=['POST'])
+def api_download_bilibili_login_qr():
+    """Khởi động lấy mã QR đăng nhập Bilibili bằng BBDown"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import bilibili_downloader
+        res = bilibili_downloader.start_qr_login()
+        if not res.get('success'):
+            return jsonify({'error': res.get('error', 'Không thể tạo mã QR')}), 400
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@download_bp.route('/api/download/bilibili/login_poll', methods=['GET'])
+def api_download_bilibili_login_poll():
+    """Kiểm tra trạng thái quét mã QR Bilibili"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import bilibili_downloader
+        res = bilibili_downloader.poll_qr_login_status()
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@download_bp.route('/api/download/bilibili/save_cookie', methods=['POST'])
+def api_download_bilibili_save_cookie():
+    """Lưu Cookie hoặc SESSDATA Bilibili thủ công"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import bilibili_downloader
+        data = request.get_json(silent=True) or {}
+        cookie_text = str(data.get('cookie', '')).strip()
+        if not cookie_text:
+            return jsonify({'error': 'Vui lòng nhập Cookie hoặc SESSDATA'}), 400
+        ok = bilibili_downloader.save_bilibili_cookie(cookie_text)
+        if ok:
+            return jsonify({'success': True, 'message': 'Đã lưu Cookie Bilibili thành công!'})
+        return jsonify({'error': 'Không thể lưu Cookie'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
