@@ -122,7 +122,7 @@ def get_review_temp_dir(output_dir: str, video_path: str) -> str:
 
     norm_video = os.path.normpath(os.path.abspath(v_str))
     raw_stem = os.path.splitext(os.path.basename(norm_video))[0]
-    safe_stem = re.sub(r'[\s\<\>\:\"\/\\\|\?\*\x00-\x1f]+', '_', raw_stem).strip('._ ')
+    safe_stem = re.sub(r'[\s\<\>\:\"\/\\\|\?\*\x00-\x1f\']+', '_', raw_stem).strip('._ ')
     if not safe_stem:
         safe_stem = 'video'
     safe_stem = safe_stem[:60].strip('._ ')
@@ -1078,8 +1078,8 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
     concat_list_path = os.path.join(sentence_dir, 'concat.txt')
     with open(concat_list_path, 'w', encoding='utf-8') as f:
         for seg_path, _, _ in audio_segments:
-            safe_p = os.path.abspath(seg_path).replace('\\', '/')
-            f.write(f"file '{safe_p}'\n")
+            fname = os.path.basename(seg_path).replace("'", "'\\''")
+            f.write(f"file '{fname}'\n")
     
     final_audio = os.path.join(temp_dir, 'voice_review.wav')
     cmd_concat = [
@@ -2313,7 +2313,8 @@ def run_auto_edit_workflow(payload, check_stop_func):
         concat_txt = os.path.join(temp_dir, 'concat_silent.txt')
         with open(concat_txt, 'w', encoding='utf-8') as f:
             for c in silent_clip_files:
-                f.write(f"file '{os.path.basename(c)}'\n")
+                fname = os.path.basename(c).replace("'", "'\\''")
+                f.write(f"file '{fname}'\n")
                 
         concat_silent_path = os.path.join(temp_dir, 'concat_silent.mp4')
         

@@ -47,13 +47,23 @@ export async function initSocialPublisher() {
     ]);
 }
 
+let _pollingInterval = null;
+
 async function loadWorkflowConnections() {
     try {
         const res = await fetch('/api/social/workflow/connections');
         const data = await res.json();
         currentWorkflowConnections = data.success ? (data.connections || []) : [];
+        updateAccountBadge();
     } catch (err) {
         appendLog(`[Social Workflow] Không tải được tài khoản đích: ${err.message}`, 'warning');
+    }
+}
+
+function updateAccountBadge() {
+    const btn = document.getElementById('btnManageSocialAccounts');
+    if (btn) {
+        btn.textContent = `⚙️ Quản Lý Tài Khoản (${currentWorkflowConnections.length})`;
     }
 }
 
@@ -61,67 +71,458 @@ async function loadWorkflowConnections() {
 function injectWorkflowPlanAction() {
     const anchor = document.getElementById('socialPlatformCards');
     if (!anchor || document.getElementById('btnCreateSocialWorkflowPlan')) return;
+
     const bar = document.createElement('div');
-    bar.style.cssText = 'margin-top:12px;padding:12px;border:1px solid rgba(52,211,153,.35);border-radius:10px;background:rgba(52,211,153,.06);display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-    bar.innerHTML = `<span style="font-size:12px;color:#a7f3d0;flex:1">AI sẽ viết nội dung riêng cho từng nền tảng và lưu thành một công việc.</span><button type="button" id="btnCreateSocialWorkflowPlan" class="btn" style="padding:8px 12px;background:#059669;color:white">✨ AI chuẩn bị đa nền tảng</button><button type="button" id="btnAddSocialConnection" class="btn secondary" style="padding:8px 12px">＋ Thêm tài khoản</button>`;
+    bar.id = 'socialWorkflowActionPanel';
+    bar.style.cssText = 'margin-top:14px;padding:14px 16px;border:1px solid rgba(56,189,248,.35);border-radius:12px;background:rgba(15,23,42,.8);display:flex;flex-direction:column;gap:10px;box-shadow:0 4px 15px rgba(0,0,0,0.3);';
+    bar.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div>
+                <div style="font-size:13px;font-weight:700;color:#38bdf8;display:flex;align-items:center;gap:6px;">
+                    <span>🚀 XUẤT BẢN ĐA NỀN TẢNG (AI MULTI-PLATFORM)</span>
+                </div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">
+                    AI tự động chuẩn hóa tiêu đề, caption và hashtag riêng cho từng mạng xã hội từ 1 video.
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <button type="button" id="btnManageSocialAccounts" class="btn secondary" style="padding:6px 12px;font-size:12px;border-color:#38bdf8;color:#38bdf8;">
+                    ⚙️ Quản Lý Tài Khoản (${currentWorkflowConnections.length})
+                </button>
+                <button type="button" id="btnCreateSocialWorkflowPlan" class="btn" style="padding:7px 14px;font-size:12.5px;background:linear-gradient(135deg, #059669 0%, #10b981 100%);color:white;font-weight:600;box-shadow:0 2px 8px rgba(16,185,129,0.3);">
+                    ✨ AI Chuẩn Bị Đa Kênh
+                </button>
+            </div>
+        </div>
+    `;
     anchor.parentElement.appendChild(bar);
-    bar.querySelector('button').addEventListener('click', createWorkflowPlan);
-    document.getElementById('btnAddSocialConnection')?.addEventListener('click', addWorkflowConnection);
+
+    document.getElementById('btnCreateSocialWorkflowPlan')?.addEventListener('click', createWorkflowPlan);
+    document.getElementById('btnManageSocialAccounts')?.addEventListener('click', openAccountManagerModal);
 }
 
-async function addWorkflowConnection() {
-    const platformId = window.prompt('Mã nền tảng (youtube/facebook/instagram/tiktok):', 'youtube');
-    if (!platformId) return;
-    const accountLabel = window.prompt('Tên tài khoản hoặc kênh:', 'Kênh chính');
-    if (!accountLabel) return;
-    try {
-        const response = await fetch('/api/social/workflow/connections', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({platform_id: platformId.trim(), account_label: accountLabel.trim(), profile_id: selectedProfileId, capabilities: ['manual_browser']})});
-        const data = await response.json();
-        if (!data.success) throw new Error(data.error || 'Không thể lưu tài khoản');
-        currentWorkflowConnections.push(data.connection);
-        showToast(`Đã thêm ${data.connection.account_label}.`, 'success');
-    } catch (err) { showToast(err.message, 'error'); }
+/** Modal Quản Lý Tài Khoản & Kết Nối OAuth */
+function openAccountManagerModal() {
+    let modal = document.getElementById('socialAccountModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'socialAccountModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+        document.body.appendChild(modal);
+    }
+
+    renderAccountManagerModalContent(modal);
+    modal.style.display = 'flex';
+}
+
+function renderAccountManagerModalContent(modal) {
+    const connectionsHtml = currentWorkflowConnections.length === 0
+        ? '<div style="padding:16px;text-align:center;color:#64748b;font-size:12.5px;background:#0f172a;border-radius:8px;">Chưa có tài khoản nào được lưu. Thêm bên dưới để bắt đầu.</div>'
+        : currentWorkflowConnections.map(c => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0f172a;border:1px solid #1e293b;border-radius:8px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-weight:700;color:#f8fafc;font-size:13px;">${escapeHtml(c.account_label)}</span>
+                    <span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#1e293b;color:#94a3b8;">${escapeHtml(c.platform_id)}</span>
+                    ${(c.capabilities || []).includes('verified_api')
+                        ? '<span style="font-size:10.5px;padding:2px 6px;border-radius:4px;background:rgba(16,185,129,0.2);color:#34d399;border:1px solid rgba(16,185,129,0.4);">✓ OAuth API</span>'
+                        : '<span style="font-size:10.5px;padding:2px 6px;border-radius:4px;background:rgba(56,189,248,0.15);color:#38bdf8;">🌐 Chrome Profile</span>'
+                    }
+                </div>
+                <button type="button" class="btn small btn-delete-conn" data-id="${escapeHtml(c.connection_id)}" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:4px 8px;" title="Xóa tài khoản này">🗑️</button>
+            </div>
+        `).join('');
+
+    const profileOptionsHtml = currentProfiles.map(p => `
+        <option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.display_name || p.email || p.id)})</option>
+    `).join('');
+
+    modal.innerHTML = `
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:14px;width:100%;max-width:540px;box-shadow:0 12px 30px rgba(0,0,0,0.6);display:flex;flex-direction:column;max-height:85vh;overflow:hidden;">
+            <div style="padding:16px 20px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:14px;font-weight:700;color:#f8fafc;">⚙️ Quản Lý Tài Khoản Mạng Xã Hội</span>
+                <button type="button" id="btnCloseAccountModal" style="background:none;border:none;color:#94a3b8;font-size:18px;cursor:pointer;">✕</button>
+            </div>
+            
+            <div style="padding:18px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">
+                <div>
+                    <div style="font-size:12px;font-weight:700;color:#94a3b8;margin-bottom:8px;">DANH SÁCH TÀI KHOẢN ĐÃ KẾT NỐI (${currentWorkflowConnections.length})</div>
+                    <div style="max-height:180px;overflow-y:auto;">${connectionsHtml}</div>
+                </div>
+
+                <div style="border-top:1px solid #334155;padding-top:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#38bdf8;margin-bottom:10px;">＋ THÊM TÀI KHOẢN MỚI</div>
+                    
+                    <div style="display:flex;flex-direction:column;gap:10px;">
+                        <div>
+                            <label style="font-size:11.5px;color:#cbd5e1;display:block;margin-bottom:4px;">Nền tảng:</label>
+                            <select id="modalConnPlatform" class="text-input" style="width:100%;background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:7px 10px;border-radius:6px;font-size:12.5px;">
+                                <option value="youtube">YouTube Studio</option>
+                                <option value="facebook">Facebook (Meta)</option>
+                                <option value="instagram">Instagram</option>
+                                <option value="tiktok">TikTok Studio</option>
+                                <option value="x_twitter">X (Twitter)</option>
+                                <option value="linkedin">LinkedIn</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label style="font-size:11.5px;color:#cbd5e1;display:block;margin-bottom:4px;">Loại kết nối:</label>
+                            <select id="modalConnType" class="text-input" style="width:100%;background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:7px 10px;border-radius:6px;font-size:12.5px;">
+                                <option value="oauth">🔗 Xác thực API chính thức (OAuth 2.0 PKCE - Khuyến nghị cho YouTube)</option>
+                                <option value="manual_browser">🌐 Gắn Google Chrome Profile (Mở trình duyệt upload)</option>
+                            </select>
+                        </div>
+
+                        <div id="modalOAuthSection" style="padding:10px 12px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:8px;">
+                            <div style="font-size:11.5px;color:#a7f3d0;margin-bottom:8px;">
+                                🔒 Đăng nhập trực tiếp với Google. Token được mã hóa an toàn trên máy tính của bạn và dùng để đăng tự động qua YouTube Data API.
+                            </div>
+                            <button type="button" id="btnStartOAuthFlow" class="btn" style="width:100%;padding:8px;background:#059669;color:white;font-size:12px;font-weight:600;">
+                                🔑 Bắt Đầu Đăng Nhập Google / Ủy Quyền YouTube
+                            </button>
+                        </div>
+
+                        <div id="modalBrowserSection" style="display:none;flex-direction:column;gap:8px;">
+                            <div>
+                                <label style="font-size:11.5px;color:#cbd5e1;display:block;margin-bottom:4px;">Chọn Chrome Profile:</label>
+                                <select id="modalConnProfile" class="text-input" style="width:100%;background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:7px 10px;border-radius:6px;font-size:12.5px;">
+                                    ${profileOptionsHtml || '<option value="Default">Default</option>'}
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:11.5px;color:#cbd5e1;display:block;margin-bottom:4px;">Tên gợi nhớ tài khoản:</label>
+                                <input type="text" id="modalConnLabel" class="text-input" placeholder="Ví dụ: Kênh Review Phim Chính" style="width:100%;background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:7px 10px;border-radius:6px;font-size:12.5px;">
+                            </div>
+                            <button type="button" id="btnSaveBrowserConn" class="btn secondary" style="width:100%;padding:8px;font-size:12px;margin-top:4px;">
+                                ＋ Lưu Kết Nối Trình Duyệt
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="padding:12px 20px;border-top:1px solid #334155;background:#0f172a;display:flex;justify-content:flex-end;">
+                <button type="button" id="btnCloseAccountModalBottom" class="btn secondary" style="padding:6px 14px;font-size:12px;">Đóng</button>
+            </div>
+        </div>
+    `;
+
+    // Events in modal
+    const closeBtns = [document.getElementById('btnCloseAccountModal'), document.getElementById('btnCloseAccountModalBottom')];
+    closeBtns.forEach(b => b?.addEventListener('click', () => { modal.style.display = 'none'; }));
+
+    const connTypeSelect = document.getElementById('modalConnType');
+    const oauthSection = document.getElementById('modalOAuthSection');
+    const browserSection = document.getElementById('modalBrowserSection');
+    const platformSelect = document.getElementById('modalConnPlatform');
+
+    function updateConnTypeVisibility() {
+        const isOAuth = connTypeSelect?.value === 'oauth';
+        if (oauthSection) oauthSection.style.display = isOAuth ? 'block' : 'none';
+        if (browserSection) browserSection.style.display = isOAuth ? 'none' : 'flex';
+    }
+
+    connTypeSelect?.addEventListener('change', updateConnTypeVisibility);
+    platformSelect?.addEventListener('change', () => {
+        if (platformSelect.value !== 'youtube') {
+            if (connTypeSelect) {
+                connTypeSelect.value = 'manual_browser';
+                updateConnTypeVisibility();
+            }
+        }
+    });
+
+    document.getElementById('btnStartOAuthFlow')?.addEventListener('click', async () => {
+        try {
+            const res = await fetch('/api/social/oauth/start?platform_id=youtube');
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Không thể tạo phiên OAuth');
+            showToast('Đang mở trang đăng nhập Google trong trình duyệt...', 'info');
+            window.open(data.auth_url, '_blank');
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    });
+
+    document.getElementById('btnSaveBrowserConn')?.addEventListener('click', async () => {
+        const pId = platformSelect?.value || 'youtube';
+        const profId = document.getElementById('modalConnProfile')?.value || 'Default';
+        const label = document.getElementById('modalConnLabel')?.value.trim();
+        if (!label) {
+            showToast('Vui lòng nhập tên gợi nhớ tài khoản.', 'warning');
+            return;
+        }
+        try {
+            const res = await fetch('/api/social/workflow/connections', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    platform_id: pId,
+                    account_label: label,
+                    profile_id: profId,
+                    capabilities: ['manual_browser'],
+                    account_type: 'chrome_profile'
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Lỗi lưu tài khoản');
+            currentWorkflowConnections.push(data.connection);
+            updateAccountBadge();
+            renderAccountManagerModalContent(modal);
+            showToast(`Đã thêm tài khoản ${data.connection.account_label}.`, 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    });
+
+    modal.querySelectorAll('.btn-delete-conn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const connId = e.currentTarget.dataset.id;
+            if (!connId) return;
+            try {
+                const res = await fetch(`/api/social/workflow/connections/${encodeURIComponent(connId)}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Lỗi xóa tài khoản');
+                currentWorkflowConnections = currentWorkflowConnections.filter(c => c.connection_id !== connId);
+                updateAccountBadge();
+                renderAccountManagerModalContent(modal);
+                showToast('Đã xóa tài khoản kết nối.', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        });
+    });
 }
 
 async function createWorkflowPlan() {
+    // 1. Phân quyền bản quyền 2 tầng
+    if (typeof window.checkFeaturePermission === 'function') {
+        const allowed = await window.checkFeaturePermission('can_access_social_publish', 'Đăng video lên mạng xã hội');
+        if (!allowed) return;
+    }
+
     const videoPath = selectedVideoPath || socialVideoPathInput?.value.trim();
     const title = socialTitleInput?.value.trim();
     if (!videoPath || !title) {
         showToast('Cần chọn video và nhập tiêu đề mẫu trước.', 'warning');
         return;
     }
+
     const btn = document.getElementById('btnCreateSocialWorkflowPlan');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang chuẩn bị...'; }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang viết nội dung bằng AI...'; }
     try {
         const res = await fetch('/api/social/workflow/plan', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({video_path: videoPath, title_template: title, platform_ids: currentPlatforms.map(p => p.id), connection_ids: currentWorkflowConnections.map(c => c.connection_id), use_ai: true})
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_path: videoPath,
+                title_template: title,
+                platform_ids: currentPlatforms.map(p => p.id),
+                connection_ids: currentWorkflowConnections.map(c => c.connection_id),
+                use_ai: true
+            })
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Không thể tạo kế hoạch');
         window.socialWorkflowJobId = data.job.job_id;
         renderWorkflowPlanPreview(data.job);
-        showToast(`Đã tạo job ${data.job.job_id.slice(0, 8)}. Nội dung đã sẵn sàng để duyệt.`, 'success');
+        showToast(`Đã tạo job ${data.job.job_id.slice(0, 8)}. Bạn có thể duyệt & chỉnh sửa từng kênh.`, 'success');
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '✨ AI chuẩn bị đa nền tảng'; }
+        if (btn) { btn.disabled = false; btn.textContent = '✨ AI Chuẩn Bị Đa Kênh'; }
     }
 }
 
 function renderWorkflowPlanPreview(job) {
     if (!socialPreviewContainer) return;
-    socialPreviewContainer.innerHTML = `<div style="font-size:12px;color:#34d399;margin-bottom:10px">Job ${escapeHtml(job.job_id)} · ${escapeHtml(job.status)}</div><button id="btnPublishWorkflowJob" class="btn" style="margin-bottom:10px;padding:8px 12px;background:#2563eb;color:white">🚀 Đăng các nền tảng đã kết nối</button>` + job.platforms.map(item => `<div style="padding:10px;margin-bottom:8px;border:1px solid #334155;border-radius:8px"><b>${escapeHtml(item.platform_id)}</b> <small style="color:#94a3b8">${escapeHtml(item.account_label || 'Chưa gắn tài khoản')} · ${escapeHtml(item.copy_source || 'fallback')}</small><div style="margin-top:5px;white-space:pre-wrap;color:#cbd5e1">${escapeHtml(item.copy.caption || '')}</div></div>`).join('');
-    document.getElementById('btnPublishWorkflowJob')?.addEventListener('click', async () => {
-        const button = document.getElementById('btnPublishWorkflowJob');
-        button.disabled = true; button.textContent = '⏳ Đang xử lý từng nền tảng...';
-        try {
-            const response = await fetch(`/api/social/workflow/jobs/${encodeURIComponent(job.job_id)}/publish`, {method: 'POST'});
-            const data = await response.json();
-            renderWorkflowPlanPreview(data.job || job);
-            showToast(data.success ? 'Đã đăng thành công.' : 'Công việc chưa hoàn tất; cần kiểm tra kết nối tài khoản.', data.success ? 'success' : 'warning');
-        } catch (err) { showToast(err.message, 'error'); }
+
+    const statusPill = (status) => {
+        let bg = '#334155';
+        let color = '#94a3b8';
+        if (status === 'PUBLISHED') { bg = 'rgba(16,185,129,0.2)'; color = '#34d399'; }
+        else if (status === 'PROCESSING' || status === 'UPLOADING') { bg = 'rgba(234,179,8,0.2)'; color = '#facc15'; }
+        else if (status === 'NEEDS_ACTION') { bg = 'rgba(249,115,22,0.2)'; color = '#fb923c'; }
+        else if (status === 'FAILED') { bg = 'rgba(239,68,68,0.2)'; color = '#f87171'; }
+        else if (status === 'READY') { bg = 'rgba(56,189,248,0.2)'; color = '#38bdf8'; }
+        return `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;background:${bg};color:${color};">${escapeHtml(status)}</span>`;
+    };
+
+    let platformsHtml = job.platforms.map(item => {
+        const connOptions = currentWorkflowConnections
+            .filter(c => c.platform_id === item.platform_id)
+            .map(c => `<option value="${escapeHtml(c.connection_id)}" ${c.connection_id === item.connection_id ? 'selected' : ''}>${escapeHtml(c.account_label)} (${(c.capabilities || []).includes('verified_api') ? 'OAuth' : 'Profile'})</option>`)
+            .join('');
+
+        const isPublished = item.status === 'PUBLISHED';
+        const hasTitle = item.copy && item.copy.title !== undefined;
+
+        return `
+            <div class="wf-platform-card" data-platform="${escapeHtml(item.platform_id)}" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-weight:700;color:#f8fafc;font-size:13.5px;text-transform:capitalize;">${escapeHtml(item.platform_id)}</span>
+                        ${statusPill(item.status)}
+                        <span style="font-size:10.5px;color:#64748b;">Nguồn: ${escapeHtml(item.copy_source || 'fallback')}</span>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" class="btn small" style="padding:3px 8px;font-size:11px;background:#2563eb;color:white;text-decoration:none;border-radius:4px;">🔗 Mở bài đăng</a>` : ''}
+                        ${!isPublished ? `
+                            <button type="button" class="btn small btn-save-copy" data-platform="${escapeHtml(item.platform_id)}" style="padding:3px 8px;font-size:11px;background:#334155;color:#e2e8f0;border-radius:4px;">💾 Lưu</button>
+                            <button type="button" class="btn small btn-publish-platform" data-platform="${escapeHtml(item.platform_id)}" style="padding:3px 10px;font-size:11px;background:#059669;color:white;border-radius:4px;font-weight:600;">🚀 Đăng</button>
+                        ` : ''}
+                    </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    <div>
+                        <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:2px;">Tài khoản đích:</label>
+                        <select class="text-input wf-conn-select" data-platform="${escapeHtml(item.platform_id)}" style="width:100%;padding:5px 8px;font-size:12px;background:#1e293b;border:1px solid #334155;color:#f8fafc;border-radius:6px;" ${isPublished ? 'disabled' : ''}>
+                            <option value="">-- Chưa gắn tài khoản --</option>
+                            ${connOptions}
+                        </select>
+                    </div>
+
+                    ${hasTitle ? `
+                        <div>
+                            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:2px;">Tiêu đề bài đăng:</label>
+                            <input type="text" class="text-input wf-title-input" data-platform="${escapeHtml(item.platform_id)}" value="${escapeHtml(item.copy.title || '')}" style="width:100%;padding:5px 8px;font-size:12px;background:#1e293b;border:1px solid #334155;color:#f8fafc;border-radius:6px;" ${isPublished ? 'disabled' : ''}>
+                        </div>
+                    ` : ''}
+
+                    <div>
+                        <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:2px;">Mô tả / Caption:</label>
+                        <textarea class="text-input wf-caption-input" data-platform="${escapeHtml(item.platform_id)}" rows="3" style="width:100%;padding:6px 8px;font-size:12px;background:#1e293b;border:1px solid #334155;color:#f8fafc;border-radius:6px;resize:vertical;" ${isPublished ? 'disabled' : ''}>${escapeHtml(item.copy.caption || '')}</textarea>
+                    </div>
+
+                    <div>
+                        <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:2px;">Hashtags:</label>
+                        <input type="text" class="text-input wf-tags-input" data-platform="${escapeHtml(item.platform_id)}" value="${escapeHtml(item.copy.hashtags || '')}" style="width:100%;padding:5px 8px;font-size:12px;background:#1e293b;border:1px solid #334155;color:#f8fafc;border-radius:6px;" ${isPublished ? 'disabled' : ''}>
+                    </div>
+
+                    ${item.message ? `
+                        <div style="font-size:11px;color:${item.status === 'FAILED' ? '#f87171' : '#facc15'};background:rgba(0,0,0,0.3);padding:6px 10px;border-radius:6px;">
+                            ${escapeHtml(item.message)}
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    socialPreviewContainer.innerHTML = `
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                <div>
+                    <span style="font-size:12.5px;font-weight:700;color:#38bdf8;">KẾ HOẠCH ĐĂNG (JOB ${escapeHtml(job.job_id.slice(0, 8))})</span>
+                    <span style="margin-left:8px;">${statusPill(job.status)}</span>
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <button type="button" id="btnRefreshWorkflowStatus" class="btn secondary small" style="padding:5px 10px;font-size:11.5px;">🔄 Cập nhật</button>
+                    <button type="button" id="btnPublishWorkflowAsync" class="btn small" style="padding:5px 12px;font-size:11.5px;background:#2563eb;color:white;font-weight:600;" ${job.status === 'PUBLISHED' ? 'disabled' : ''}>
+                        🚀 Đăng Toàn Bộ Nền Tảng
+                    </button>
+                </div>
+            </div>
+            ${platformsHtml}
+        </div>
+    `;
+
+    // Bind item save events
+    socialPreviewContainer.querySelectorAll('.btn-save-copy').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const pId = e.currentTarget.dataset.platform;
+            const card = e.currentTarget.closest('.wf-platform-card');
+            const title = card?.querySelector('.wf-title-input')?.value;
+            const caption = card?.querySelector('.wf-caption-input')?.value;
+            const tags = card?.querySelector('.wf-tags-input')?.value;
+            const connId = card?.querySelector('.wf-conn-select')?.value;
+
+            try {
+                btn.textContent = '⏳';
+                const res = await fetch(`/api/social/workflow/jobs/${encodeURIComponent(job.job_id)}/copy`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ platform_id: pId, title, caption, hashtags: tags, connection_id: connId })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Không thể lưu');
+                renderWorkflowPlanPreview(data.job);
+                showToast(`Đã lưu nội dung cho ${pId}.`, 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+            } finally {
+                btn.textContent = '💾 Lưu';
+            }
+        });
     });
+
+    // Bind single platform publish
+    socialPreviewContainer.querySelectorAll('.btn-publish-platform').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const pId = e.currentTarget.dataset.platform;
+            btn.disabled = true;
+            btn.textContent = '⏳ Đang đăng...';
+            try {
+                const res = await fetch(`/api/social/workflow/jobs/${encodeURIComponent(job.job_id)}/platforms/${encodeURIComponent(pId)}/publish`, { method: 'POST' });
+                const data = await res.json();
+                renderWorkflowPlanPreview(data.job || job);
+                showToast(data.success ? `Đăng thành công lên ${pId}!` : `Chưa hoàn tất: ${data.result?.message || ''}`, data.success ? 'success' : 'warning');
+            } catch (err) {
+                showToast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 Đăng';
+            }
+        });
+    });
+
+    // Bind async global publish
+    document.getElementById('btnPublishWorkflowAsync')?.addEventListener('click', async () => {
+        const btn = document.getElementById('btnPublishWorkflowAsync');
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tiến hành đăng...'; }
+        try {
+            const res = await fetch(`/api/social/workflow/jobs/${encodeURIComponent(job.job_id)}/publish_async`, { method: 'POST' });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Lỗi bắt đầu tiến trình');
+            showToast('Đã bắt đầu đăng nền tảng trong luồng ngầm!', 'info');
+            startPollingJobStatus(job.job_id);
+        } catch (err) {
+            showToast(err.message, 'error');
+            if (btn) { btn.disabled = false; btn.textContent = '🚀 Đăng Toàn Bộ Nền Tảng'; }
+        }
+    });
+
+    document.getElementById('btnRefreshWorkflowStatus')?.addEventListener('click', async () => {
+        try {
+            const res = await fetch(`/api/social/workflow/jobs/${encodeURIComponent(job.job_id)}`);
+            const data = await res.json();
+            if (data.success && data.job) {
+                renderWorkflowPlanPreview(data.job);
+                showToast('Đã cập nhật trạng thái mới nhất.', 'info');
+            }
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    });
+}
+
+function startPollingJobStatus(jobId) {
+    if (_pollingInterval) clearInterval(_pollingInterval);
+    _pollingInterval = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/social/workflow/jobs/${encodeURIComponent(jobId)}`);
+            const data = await res.json();
+            if (data.success && data.job) {
+                renderWorkflowPlanPreview(data.job);
+                if (data.job.status !== 'IN_PROGRESS') {
+                    clearInterval(_pollingInterval);
+                    _pollingInterval = null;
+                    showToast(`Tiến trình đăng hoàn tất với trạng thái: ${data.job.status}`, data.job.status === 'PUBLISHED' ? 'success' : 'warning');
+                }
+            }
+        } catch (_) {}
+    }, 2500);
 }
 
 /**

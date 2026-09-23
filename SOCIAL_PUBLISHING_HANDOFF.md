@@ -132,3 +132,27 @@ Remaining work in priority order:
 4. Account selection UI (currently auto-selects all records and picks first account per platform), editable preview, actual upload/file picker, transcript/video grounding.
 5. Route integration and adapter mocked tests; real platform tests only with configured authorized accounts. Existing tests verify workflow safeguards, NOT successful live publishing.
 6. Release overlay under patches/active is not synced; source changes only so far. Audit packaging before release.
+
+## Step 13 — OAuth Token Vault, Resumable Upload, Background Worker & UI Upgrade (2026-09-22)
+- Added `social_tokens.py` with Fernet encrypted vault (`user_data/social_tokens.enc`, master key `user_data/.vault_key`), RFC 7636 PKCE pair generation, CSRF-protected state management, and automatic token refresh (`refresh_token_if_needed`).
+- Upgraded `social_adapters.py`:
+  - Enforces `verified_api` capability check on the selected connection before API dispatch.
+  - Implemented dependency-free YouTube Resumable Upload via standard HTTP protocol with chunking and processing status polling (`processingDetails.processingStatus`).
+  - Added strict idempotency: if `remote_id` is present or item is in `PROCESSING`, adapter polls the remote platform status and never re-uploads duplicate video files.
+- Upgraded `social_workflow.py`:
+  - Added extended connection metadata (`account_type`, `remote_account_id`, `avatar_url`, `capabilities`).
+  - Added `update_platform_copy(job_id, platform_id, ...)` allowing user customization of title, caption, hashtags, and target connection per platform before dispatch.
+  - Added `delete_connection(connection_id)` with automatic token cleanup.
+  - Added `start_background_publish(job_id, platform_ids)` executing multi-platform publish asynchronously in a background worker thread.
+- Upgraded `routes/social_publish.py`:
+  - Enforced project-wide `license_manager.check_permission('can_access_social_publish')` on all workflow and OAuth API routes (returns 403 when unlicensed).
+  - Added `GET /api/social/oauth/start` and `GET /api/social/oauth/callback` implementing full Google/YouTube OAuth PKCE redirect flow.
+  - Added `POST /api/social/workflow/jobs/<job_id>/copy`, `POST /api/social/workflow/jobs/<job_id>/publish_async`, and `DELETE /api/social/workflow/connections/<connection_id>`.
+- Upgraded `web/js/features/social_publisher.js`:
+  - Added dark-mode Account Manager modal (`⚙️ Quản Lý Tài Khoản`) allowing users to manage connections, start Google/YouTube OAuth authentication in browser, or add Chrome Profile targets.
+  - Added editable multi-platform copy cards in the review step (live editing of title, caption, hashtags, and target account selection per platform).
+  - Added asynchronous multi-platform publishing with live polling (every 2.5s) and toast notification on completion.
+- Extended `tests/test_social_workflow.py` from 7 to 14 unit tests: verified token encryption on disk, PKCE state handling, copy customization, connection deletion cleanup, verified API capability requirement, and license protection (403 on unlicensed calls). All 14 tests PASSED.
+- Verified backwards compatibility: all 17 tests in `scripts/test_social_publisher.py` PASSED (total 31 passing tests).
+- Synced all 5 changed/new files to `patches/active/` for future OTA packaging.
+

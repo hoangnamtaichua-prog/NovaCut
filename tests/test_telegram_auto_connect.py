@@ -45,7 +45,7 @@ class TestTelegramAutoConnect(unittest.TestCase):
         self.notifier = TelegramNotifier()
         self.notifier.enabled = True
         self.notifier.bot_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyz_1234567"
-        self.notifier.chat_id = "5011367599"
+        self.notifier.chat_id = ""
         self.notifier.users = {}
         self.notifier._pending_sessions = {}
         self.notifier._bot_info_cache = {}

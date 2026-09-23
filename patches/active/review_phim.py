@@ -97,6 +97,7 @@ def _run_cmd_yield(cmd_list, prefix="FFmpeg", check_stop=None):
         return False
 
 def build_video_workflow(video_path, script_json, voice_id, output_dir, output_name, check_stop=None):
+    start_time_workflow = time.time()
     if not output_name.lower().endswith('.mp4'):
         output_name += '.mp4'
     yield "data: BẮT ĐẦU QUÁ TRÌNH DỰNG VIDEO TỰ ĐỘNG...\n\n"
@@ -212,7 +213,8 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
             success = yield from _run_cmd_yield(cmd, f"Cắt cảnh {i+1}", check_stop)
             if not success: return
             
-            f_list.write(f"file '{out_clip}'\n")
+            safe_clip = out_clip.replace('\\', '/').replace("'", "'\\''")
+            f_list.write(f"file '{safe_clip}'\n")
             
             if total_clips > 0:
                 current_progress += (50.0 / total_clips)
@@ -281,6 +283,24 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
     
     yield f"data: [PROGRESS] 100\n\n"
     
+    try:
+        from telegram_notifier import get_telegram_notifier
+        notifier = get_telegram_notifier()
+        if notifier.enabled and notifier.notify_per_video:
+            out_target = final_hz_out if os.path.exists(final_hz_out) else final_vt_out
+            file_sz = (os.path.getsize(out_target) / (1024 * 1024)) if os.path.exists(out_target) else 0
+            notifier.notify_task_success(
+                task_type='review',
+                task_title='Review Phim (Kịch Bản Thủ Công)',
+                video_title=movie_title,
+                output_path=out_target,
+                duration_sec=time.time() - start_time_workflow,
+                file_size_mb=file_sz,
+                extra_info={'Giọng đọc': voice_id}
+            )
+    except Exception:
+        pass
+
     yield f"data: 🎉 HOÀN THÀNH TẤT CẢ!\n\n"
     yield f"data: Video ngang (Youtube): {final_hz_out}\n\n"
     yield f"data: Video dọc (TikTok): {final_vt_out}\n\n"

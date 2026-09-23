@@ -107,7 +107,7 @@ def render_comic_review_video(segments, output_path, aspect_ratio="9:16", ken_bu
     yield f"data: 🔗 [2/4 Ghép Nối] Đang hợp nhất tất cả {len(clip_files)} phân cảnh thành video liền mạch...\n\n"
     with open(concat_list_path, 'w', encoding='utf-8') as f:
         for c in clip_files:
-            escaped_path = c.replace('\\', '/')
+            escaped_path = c.replace('\\', '/').replace("'", "'\\''")
             f.write(f"file '{escaped_path}'\n")
 
     merged_temp = os.path.join(temp_dir, "merged_raw.mp4")

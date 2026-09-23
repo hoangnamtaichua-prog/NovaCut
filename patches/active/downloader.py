@@ -1773,7 +1773,7 @@ def merge_collection_episodes(file_list, output_path, merge_mode="auto", progres
         try:
             with open(temp_concat_list, 'w', encoding='utf-8') as f:
                 for vf in valid_files:
-                    norm_path = vf.replace('\\', '/')
+                    norm_path = vf.replace('\\', '/').replace("'", "'\\''")
                     f.write(f"file '{norm_path}'\n")
 
             cmd = [

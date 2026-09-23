@@ -1,8 +1,8 @@
 {
-  "version": "1.3.1",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.3.1/patch.zip",
-  "sha256": "efc3e706e9f381cbf5a6da801db51818b6cced90a451554d5c8cf6f170d613a1",
-  "changelog": "✨ Bản cập nhật v1.3.1 (Hotfix & New Features):\n- Khắc phục triệt để lỗi khởi động 'No module named translation_config' sau khi cập nhật: Bổ sung đầy đủ translation_config cùng các module cốt lõi mới vào gói vá OTA patch.zip, tích hợp cơ chế tự động quét mã nguồn và bọc dự phòng an toàn chống sập launcher.\n- Mở rộng thông báo Telegram tự động cho toàn bộ tác vụ đơn lẻ: Review Phim AI, Kể Lại Phim, Biên Tập Phim, Review Truyện Tranh (báo cáo chi tiết dung lượng MB, thời gian render, tên file thành phẩm hoặc cảnh báo lỗi thời gian thực).\n- Triển khai tính năng Đăng Video Lên Mạng Xã Hội (Social Media Video Publisher Engine): Hỗ trợ đăng tải lên YouTube Studio, TikTok Studio, Facebook Meta Suite, Instagram, X/Twitter, LinkedIn qua Chrome Profile cá nhân an toàn tuyệt đối.\n- Cô lập hoàn toàn Cache dữ liệu Review Phim theo từng video (Video-Isolated Cache): Khắc phục dứt điểm tình trạng lấy nhầm kịch bản hoặc giọng đọc dở dang của video cũ trước đó.\n- Quản trị hiển thị 3 thẻ tab ('Biên tập hàng loạt', 'Review Truyện', 'Xử Lý Hàng Loạt') chuẩn xác theo phân quyền Admin.",
+  "version": "1.3.2",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.3.2/patch.zip",
+  "sha256": "b2f53c07c16e51abde2b969f2dc49326c022bc86f33063421cf614ed28266276",
+  "changelog": "✨ Bản cập nhật v1.3.2 (Hotfix Concat Audio & Telegram & Social):\n- Sửa triệt để lỗi ghép âm thanh TTS (Lỗi concat audio 'No such file or directory'): Khắc phục lỗi FFmpeg concat demuxer bị vỡ chuỗi khi tên video hoặc đường dẫn chứa dấu nháy đơn (ví dụ IT'S), chuyển sang cơ chế tên file tương đối và escape ký tự an toàn.\n- Khắc phục hiện tượng Telegram thi thoảng mất kết nối: Ổn định định danh phiên, tự động đồng bộ chéo Chat ID, nâng timeout chống giật mạng; cấu hình sẵn Bot mặc định @ai_movie_notice_bot và để trống Chat ID ban đầu.\n- Hoàn thiện hệ sinh thái Đăng Video Mạng Xã Hội (Social Video Publisher): Tích hợp kho token bảo mật Fernet, OAuth 2.0 PKCE, YouTube Resumable Upload chống gián đoạn, và modal quản lý tài khoản linh hoạt.",
   "is_mandatory": false,
-  "updated_at": "2026-09-22 23:31:02"
+  "updated_at": "2026-09-23 09:54:46"
 }

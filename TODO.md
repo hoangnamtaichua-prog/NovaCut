@@ -29,6 +29,49 @@
 
 ---
 
+### ⏳ CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (STAGING CHANGELOG)
+
+- **Sửa Lỗi Concat Audio Do Dấu Nháy Đơn Trong Tên Thư Mục/Video ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/downloader.py), [comic_video_renderer.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/comic_video_renderer.py), [review_phim.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/review_phim.py)) (23/09/2026):**
+  - **Nguyên nhân lỗi:** Khi tên file video chứa dấu nháy đơn `'` (ví dụ: `...TO_IT'S_OWNER...`), tên thư mục tạm `auto_edit_temp` cũng chứa dấu `'`. Khi ghi danh sách ghép audio vào `concat.txt` bằng cú pháp `file 'path'`, dấu nháy đơn làm vỡ cú pháp chuỗi của FFmpeg concat demuxer khiến FFmpeg nuốt mất dấu `'` và báo lỗi `Impossible to open ... No such file or directory`.
+  - **Khắc phục:**
+    1. Chuẩn hóa tên thư mục tạm `safe_stem` trong `get_video_temp_dir()`: loại bỏ triệt để dấu nháy đơn `'` và thay bằng dấu gạch dưới `_`.
+    2. Trong `auto_edit_pipeline.py` (bước ghép audio TTS từng câu): chuyển sang dùng `os.path.basename` (chỉ ghi tên file tương đối như `file 'sent_0_pcm.wav'` thay vì đường dẫn tuyệt đối dài chứa tên thư mục ngoài), kết hợp escape an toàn `replace("'", "'\\''")`.
+    3. Áp dụng tương tự cho bước ghép video silent clips, `downloader.py`, `comic_video_renderer.py`, và `review_phim.py`.
+    4. Đã đồng bộ toàn bộ thay đổi sang thư mục `patches/active/`.
+
+- **Khắc Phục Hiện Tượng Telegram Thi Thoảng Bị Mất Kết Nối, Thiết Lập Bot Token Mặc Định & Để Trống Chat ID ([telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/telegram_notifier.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [tests/test_telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_telegram_notifier.py), [tests/test_telegram_auto_connect.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_telegram_auto_connect.py)) (23/09/2026):**
+  - **Khắc phục triệt để hiện tượng thi thoảng bị Disconnect:**
+    1. *Khắc phục phân mảnh định danh phiên (`getNovaCutUserId`):* Trước đây mỗi khi trình duyệt/WebView2 xóa cache hoặc tạo phiên mới, `getNovaCutUserId` sinh ra một `user_xxxxxxxx` ngẫu nhiên mới khiến backend không tìm thấy `chat_id` của user đó và trả về "Chưa kết nối". Đã ổn định hóa `getNovaCutUserId` về `'default'`, đồng thời trong backend `get_user_profile` tự động fallback và liên kết với `self.chat_id` hoặc cấu hình chung của máy tính. Nhờ đó, người dùng không bao giờ bị mất trạng thái kết nối khi reload hay xóa cache.
+    2. *Đồng bộ chéo dữ liệu kết nối (Cross-Sync):* Khi kết nối tự động hoặc áp dụng thủ công, dữ liệu Chat ID luôn được đồng bộ cùng lúc vào `self.users[user_id]`, `self.users['default']` và `self.chat_id`.
+    3. *Khả năng phục hồi mạng cao (Network Resilience):* Nâng trần timeout kết nối Telegram lên 15s (thay vì 6-10s), bổ sung cơ chế chống giật mạng trong `poll_connect_session` (nếu mạng chập chờn sẽ giữ nguyên trạng thái `WAITING` tiếp tục dò thay vì ngắt phiên lỗi).
+  - **Lưu Bot Token chính thức làm mặc định:**
+    - Cấu hình `DEFAULT_BOT_TOKEN = "8690443600:AAEB7E0lTZfREZ32PDUmlqlT9rCxrHAJeWc"` (`@ai_movie_notice_bot`) làm Bot mặc định của NovaCut.
+    - Người dùng không cần phải tạo hay nhập Bot Token từ @BotFather nữa (trừ khi chủ động muốn dùng bot riêng).
+    - Hiển thị badge trực quan trên giao diện: `🤖 Mặc định: @ai_movie_notice_bot`.
+  - **Loại bỏ hiển thị sẵn Chat ID cũ (5011367599):**
+    - Đặt mặc định `chat_id = ""` (chuỗi rỗng), Chat ID là thứ người dùng phải tự điền hoặc bấm "Kết Nối Telegram" để lấy tự động.
+    - Xóa toàn bộ giá trị hiển thị sẵn `5011367599` và các fallback cũ trong `web/index.html` và `web/app.js`.
+    - Tự động làm sạch cấu hình máy cục bộ `%APPDATA%/NovaCut/telegram_config.json` nếu còn lưu Chat ID dev cũ.
+    - Khi bấm kiểm tra tin nhắn mà chưa có Chat ID, hệ thống hiển thị cảnh báo Dark Mode yêu cầu người dùng kết nối hoặc điền Chat ID trước.
+  - **Kiểm thử tự động:**
+    - Bộ 34/34 tests Telegram (bao gồm cả auto-connect, API routes, và notification pipeline) đều đạt 100% PASSED.
+    - Đã đồng bộ toàn bộ vào `patches/active/telegram_notifier.py`, `patches/active/web/index.html` và `patches/active/web/app.js`.
+
+- **Hoàn Thiện Hệ Thống Đăng Mạng Xã Hội Đa Nền Tảng - Giai Đoạn 13 ([social_tokens.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/social_tokens.py), [social_adapters.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/social_adapters.py), [social_workflow.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/social_workflow.py), [routes/social_publish.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/social_publish.py), [web/js/features/social_publisher.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/social_publisher.js), [tests/test_social_workflow.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_social_workflow.py)) (22/09/2026):**
+  - **Kho Lưu Trữ Token Mã Hóa (Protected Token Vault):** Tạo module `social_tokens.py` sử dụng chuẩn mã hóa `Fernet` với khóa máy cục bộ lưu tại `user_data/.vault_key` và dữ liệu mã hóa nhị phân tại `user_data/social_tokens.enc`. Tuyệt đối không lưu token dạng text trong lịch sử hay job.
+  - **Xác Thực OAuth 2.0 PKCE:** Hỗ trợ chuẩn RFC 7636 sinh `code_verifier` và `code_challenge` (S256), bảo vệ CSRF state, tự động làm mới token (`refresh_token_if_needed`), và xác minh danh tính kênh thật (`channel_id`, `channel_title`) từ YouTube Data API.
+  - **YouTube Resumable Upload & Chống Đăng Trùng (Idempotency):** Tải video theo giao thức Resumable Upload HTTP chính thức không phụ thuộc thư viện ngoài; hỗ trợ theo dõi tiến trình xử lý `processingDetails`; tự động tái kiểm tra trạng thái remote khi đã có `remote_id` mà không upload đè file.
+  - **Background Publish Worker:** Thêm `start_background_publish` chạy tiến trình tải video và kiểm tra trạng thái bất đồng bộ trong luồng ngầm (`threading.Thread`), tránh làm nghẽn Flask HTTP request.
+  - **Bảo Vệ Bản Quyền Đầy Đủ 2 Tầng:** Bổ sung kiểm tra `can_access_social_publish` vào toàn bộ các API route workflow mới; chặn truy cập 403 Forbidden nếu chưa kích hoạt bản quyền.
+  - **Nâng Cấp Giao Diện Quản Lý & Chỉnh Sửa Nội Dung:**
+    - Thêm modal Dark Mode **⚙️ Quản Lý Tài Khoản** cho phép chuyển đổi linh hoạt giữa "Google Chrome Profile (Mở trình duyệt)" và "OAuth API (Ủy quyền tự động)".
+    - Cho phép người dùng chỉnh sửa trực tiếp Tiêu đề, Mô tả/Caption, Hashtags cho từng nền tảng trước khi bấm Đăng.
+    - Cơ chế Polling tự động mỗi 2.5s cập nhật trạng thái thời gian thực (`UPLOADING` -> `PROCESSING` -> `PUBLISHED`).
+  - **Bộ Kiểm Thử Toàn Diện:** Mở rộng test suite lên 14 unit test (`test_social_workflow.py`) và 17 integration test (`test_social_publisher.py`), 100% đạt chuẩn (31/31 PASSED).
+  - **Đồng Bộ OTA:** Đồng bộ toàn bộ 5 tệp mã nguồn mới vào thư mục `patches/active/`.
+
+---
+
 ### 🚀 CÁC THAY ĐỔI ĐÃ PHÁT HÀNH TRONG BẢN VÁ v1.3.1 (ĐÃ PHÁT HÀNH 22/09/2026)
 
 > **Trạng thái:** Đã đóng gói và phát hành thành công lên GitHub Release v1.3.1 (Asset ID: 393933431, SHA-256: `efc3e706e9f381cbf5a6da801db51818b6cced90a451554d5c8cf6f170d613a1`). Người dùng có thể nhấn [🚀 Cập Nhật Ngay] trên ứng dụng để nâng cấp tự động.

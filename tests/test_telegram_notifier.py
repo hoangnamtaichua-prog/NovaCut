@@ -44,10 +44,12 @@ class TestTelegramNotifier(unittest.TestCase):
         self.notifier.notify_batch_done = True
         self.notifier._sent_keys.clear()
 
-    def test_default_chat_id(self):
-        """Chat ID mặc định phải là 5011367599."""
+    @patch("os.path.exists", return_value=False)
+    def test_default_chat_id(self, mock_exists):
+        """Chat ID mặc định phải rỗng và Bot Token mặc định là official NovaCut bot."""
         fresh_notifier = TelegramNotifier()
-        self.assertEqual(fresh_notifier.chat_id, "5011367599")
+        self.assertEqual(fresh_notifier.chat_id, "")
+        self.assertEqual(fresh_notifier.bot_token, "8690443600:AAEB7E0lTZfREZ32PDUmlqlT9rCxrHAJeWc")
 
     def test_mask_token(self):
         """Token phải được che giấu, không lộ toàn bộ trên giao diện."""
@@ -294,7 +296,7 @@ class TestTelegramFlaskRoutes(unittest.TestCase):
         self.notifier = get_telegram_notifier()
         self.notifier.enabled = True
         self.notifier.bot_token = "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ1234567"
-        self.notifier.chat_id = "5011367599"
+        self.notifier.chat_id = "987654321"
 
     def test_get_telegram_config(self):
         """GET /api/telegram/config trả về cấu hình an toàn, token được che giấu."""
@@ -305,7 +307,7 @@ class TestTelegramFlaskRoutes(unittest.TestCase):
         cfg = data["config"]
         self.assertIn("enabled", cfg)
         self.assertIn("chat_id", cfg)
-        self.assertEqual(cfg["chat_id"], "5011367599")
+        self.assertEqual(cfg["chat_id"], "987654321")
         # Token phải được masked
         self.assertTrue(cfg["has_token"])
         self.assertNotIn("ABCdefGHI", cfg["masked_token"])
@@ -327,7 +329,7 @@ class TestTelegramFlaskRoutes(unittest.TestCase):
         self.assertFalse(data["config"]["notify_batch_done"])
 
         # Phục hồi chat_id
-        self.notifier.save_config(chat_id="5011367599", notify_batch_done=True)
+        self.notifier.save_config(chat_id="987654321", notify_batch_done=True)
 
     @patch("requests.post")
     def test_post_telegram_test(self, mock_post):
@@ -337,7 +339,7 @@ class TestTelegramFlaskRoutes(unittest.TestCase):
         mock_response.json.return_value = {"ok": True, "result": {}}
         mock_post.return_value = mock_response
 
-        resp = self.client.post("/api/telegram/test", json={"chat_id": "5011367599"})
+        resp = self.client.post("/api/telegram/test", json={"chat_id": "987654321"})
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data["success"])

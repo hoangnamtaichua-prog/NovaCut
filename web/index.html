@@ -5626,31 +5626,34 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                         <div class="form-group" style="margin-bottom: 12px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                                 <label style="font-size: 12px; color: #94a3b8; font-weight: 600;">Telegram Bot Token:</label>
-                                <a href="https://t.me/BotFather" target="_blank" style="font-size: 11px; color: #38bdf8; text-decoration: none; font-weight: 600;">🤖 @BotFather</a>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 11px; color: #38bdf8; font-weight: 600;">🤖 Mặc định: @ai_movie_notice_bot</span>
+                                    <a href="https://t.me/BotFather" target="_blank" style="font-size: 11px; color: #38bdf8; text-decoration: none; font-weight: 600;">@BotFather</a>
+                                </div>
                             </div>
                             <div style="position: relative; display: flex; align-items: center;">
-                                <input type="password" id="settingsTelegramBotToken" class="text-input" placeholder="Nhập Bot Token (VD: 123456789:ABCdef...)" style="width: 100%; padding: 8px 36px 8px 12px; background: #0b1120; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-family: monospace;">
+                                <input type="password" id="settingsTelegramBotToken" class="text-input" placeholder="Mặc định: Bot NovaCut (@ai_movie_notice_bot). Nhập để đổi bot riêng..." style="width: 100%; padding: 8px 36px 8px 12px; background: #0b1120; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-family: monospace;">
                                 <button type="button" id="btnToggleTelegramToken" title="Hiện/Ẩn Token" style="position: absolute; right: 8px; background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px; display: flex; align-items: center; font-size: 13px;">👁️</button>
                             </div>
                             <div style="font-size: 10.5px; color: #64748b; margin-top: 3px;">
-                                🔒 Token được lưu trữ bảo mật tại %APPDATA%/NovaCut, không bao giờ xuất hiện trong log hoặc đưa ra ngoài.
+                                🔒 Hệ thống mặc định sử dụng Bot chính thức <strong>@ai_movie_notice_bot</strong>. Bạn có thể để trống hoặc nhập Token riêng nếu muốn dùng bot cá nhân.
                             </div>
                         </div>
 
                         <!-- Chat ID Điền Thủ Công & Nút Áp Dụng Ngay -->
                         <div class="form-group" style="margin-bottom: 14px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                                <label style="font-size: 12px; color: #cbd5e1; font-weight: 600;">Điền Chat ID Thủ Công (Cá nhân hoặc Nhóm):</label>
-                                <span style="font-size: 11px; color: #10b981; font-weight: 600;">Mặc định: 5011367599</span>
+                                <label style="font-size: 12px; color: #cbd5e1; font-weight: 600;">Điền Chat ID (Cá nhân hoặc Nhóm):</label>
+                                <span style="font-size: 11px; color: #f59e0b; font-weight: 600;">(Bắt buộc: Tự lấy hoặc tự điền)</span>
                             </div>
                             <div style="display: flex; gap: 8px;">
-                                <input type="text" id="settingsTelegramChatId" class="text-input" value="5011367599" placeholder="Nhập Chat ID (VD: 5011367599 hoặc -100123...)" style="flex: 1; padding: 8px 12px; background: #0b1120; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-family: monospace;">
+                                <input type="text" id="settingsTelegramChatId" class="text-input" value="" placeholder="Nhập Chat ID của bạn (VD: 123456789 hoặc -100123...)" style="flex: 1; padding: 8px 12px; background: #0b1120; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; font-family: monospace;">
                                 <button type="button" id="btnApplyManualChatId" class="btn primary-cyan small" style="white-space: nowrap; padding: 0 16px; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;">
                                     <span>💾</span> <span>Áp Dụng Chat ID Này</span>
                                 </button>
                             </div>
                             <div style="font-size: 11px; color: #94a3b8; margin-top: 4px; line-height: 1.4;">
-                                💡 <em>Mẹo:</em> Nếu không muốn đợi bot tự bắt tin nhắn, bạn chỉ cần lấy Chat ID của mình (qua bot <code>@userinfobot</code> hoặc <code>@raw_data_bot</code>), dán vào đây và bấm <strong>"Áp Dụng Chat ID Này"</strong> để kích hoạt kết nối ngay lập tức!
+                                💡 <em>Mẹo:</em> Bạn có thể bấm <strong>"Kết Nối Telegram"</strong> ở trên để tự động nhận diện Chat ID, hoặc lấy Chat ID của mình qua bot <code>@userinfobot</code> và dán vào đây rồi bấm <strong>"Áp Dụng Chat ID Này"</strong>.
                             </div>
                         </div>
 

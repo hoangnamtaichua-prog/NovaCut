@@ -213,7 +213,8 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
             success = yield from _run_cmd_yield(cmd, f"Cắt cảnh {i+1}", check_stop)
             if not success: return
             
-            f_list.write(f"file '{out_clip}'\n")
+            safe_clip = out_clip.replace('\\', '/').replace("'", "'\\''")
+            f_list.write(f"file '{safe_clip}'\n")
             
             if total_clips > 0:
                 current_progress += (50.0 / total_clips)

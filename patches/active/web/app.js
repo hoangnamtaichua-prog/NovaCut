@@ -3560,12 +3560,16 @@ function switchSettingsTab(tabName) {
 // ═════════════════════════════════════════════════════════════
 
 export function getNovaCutUserId() {
-    let uid = localStorage.getItem('novacut_user_id');
-    if (!uid || uid.trim() === '') {
-        uid = 'user_' + Math.random().toString(36).substring(2, 10);
-        localStorage.setItem('novacut_user_id', uid);
+    try {
+        let uid = localStorage.getItem('novacut_user_id');
+        if (uid && uid.trim()) {
+            return uid.trim();
+        }
+        localStorage.setItem('novacut_user_id', 'default');
+        return 'default';
+    } catch (e) {
+        return 'default';
     }
-    return uid;
 }
 window.getNovaCutUserId = getNovaCutUserId;
 
@@ -3654,8 +3658,8 @@ export async function loadTelegramSettings() {
                     tokenEl.value = '';
                 }
             }
-            if (chatIdEl && (!chatIdEl.value || chatIdEl.value === '5011367599')) {
-                chatIdEl.value = cfg.chat_id || '5011367599';
+            if (chatIdEl) {
+                chatIdEl.value = (cfg.chat_id && cfg.chat_id !== '5011367599') ? cfg.chat_id : '';
             }
             if (perVidEl) perVidEl.checked = cfg.notify_per_video !== false;
             if (batchDoneEl) batchDoneEl.checked = cfg.notify_batch_done !== false;
@@ -3899,7 +3903,7 @@ async function handleApplyManualChatId() {
     const rawToken = tokenInput ? tokenInput.value.trim() : '';
 
     if (!chatId) {
-        showToast('⚠️ Vui lòng nhập Chat ID hợp lệ (VD: 5011367599 hoặc -100...)', 'warning');
+        showToast('⚠️ Vui lòng nhập Chat ID của bạn (VD: 123456789 hoặc -100...)', 'warning');
         if (inputEl) inputEl.focus();
         return;
     }
@@ -4170,7 +4174,14 @@ if (btnTestTg) {
         const statusEl = document.getElementById('settingsTelegramTestStatus');
 
         let tokVal = tokInput?.value?.trim() || '';
-        let chatIdVal = chatIdInput?.value?.trim() || '5011367599';
+        let chatIdVal = chatIdInput?.value?.trim() || '';
+        if (chatIdVal === '5011367599') chatIdVal = '';
+
+        if (!chatIdVal) {
+            showToast('⚠️ Vui lòng nhập Chat ID hoặc bấm "Kết Nối Telegram" để lấy Chat ID trước khi kiểm tra!', 'warning');
+            if (chatIdInput) chatIdInput.focus();
+            return;
+        }
 
         btnTestTg.disabled = true;
         const originalText = btnTestTg.innerHTML;
@@ -4546,7 +4557,8 @@ if (saveSettingsBtn) {
             try {
                 const tgEnabled = document.getElementById('settingsTelegramEnabled')?.checked || false;
                 const tgToken = document.getElementById('settingsTelegramBotToken')?.value?.trim() || '';
-                const tgChatId = document.getElementById('settingsTelegramChatId')?.value?.trim() || '5011367599';
+                let tgChatId = document.getElementById('settingsTelegramChatId')?.value?.trim() || '';
+                if (tgChatId === '5011367599') tgChatId = '';
                 const tgPerVideo = document.getElementById('settingsTelegramNotifyPerVideo')?.checked ?? true;
                 const tgBatchDone = document.getElementById('settingsTelegramNotifyBatchDone')?.checked ?? true;
 

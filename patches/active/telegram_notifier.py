@@ -111,6 +111,11 @@ def format_duration(seconds: float) -> str:
     return f"{hours}h {rem_min}p {remaining_sec}s"
 
 
+DEFAULT_BOT_TOKEN = "8690443600:AAEB7E0lTZfREZ32PDUmlqlT9rCxrHAJeWc"
+DEFAULT_BOT_USERNAME = "ai_movie_notice_bot"
+DEV_LEGACY_CHAT_ID = "5011367599"
+
+
 class TelegramNotifier:
     _instance = None
     _instance_lock = threading.Lock()
@@ -125,8 +130,8 @@ class TelegramNotifier:
     def __init__(self):
         self._lock = threading.RLock()
         self.enabled = False
-        self.bot_token = ""
-        self.chat_id = "5011367599"
+        self.bot_token = DEFAULT_BOT_TOKEN
+        self.chat_id = ""
         self.notify_per_video = True
         self.notify_batch_done = True
         self.users: Dict[str, dict] = {}
@@ -152,13 +157,23 @@ class TelegramNotifier:
                         with open(path, "r", encoding="utf-8") as f:
                             data = json.load(f)
                             self.enabled = bool(data.get("enabled", False))
-                            self.bot_token = str(data.get("bot_token", "")).strip()
-                            self.chat_id = str(data.get("chat_id", "5011367599")).strip() or "5011367599"
+                            saved_tok = str(data.get("bot_token", "")).strip()
+                            self.bot_token = saved_tok if (saved_tok and len(saved_tok) > 10) else DEFAULT_BOT_TOKEN
+
+                            saved_chat_id = str(data.get("chat_id", "")).strip()
+                            # Loại bỏ hoàn toàn chat_id dev cũ 5011367599
+                            if saved_chat_id == DEV_LEGACY_CHAT_ID:
+                                saved_chat_id = ""
+                            self.chat_id = saved_chat_id
+
                             self.notify_per_video = bool(data.get("notify_per_video", True))
                             self.notify_batch_done = bool(data.get("notify_batch_done", True))
                             raw_users = data.get("users", {})
                             if isinstance(raw_users, dict):
-                                self.users = raw_users
+                                self.users = {
+                                    k: v for k, v in raw_users.items()
+                                    if isinstance(v, dict) and str(v.get("chat_id", "")).strip() != DEV_LEGACY_CHAT_ID
+                                }
                             loaded = True
                             break
                     except Exception as e:
@@ -170,7 +185,7 @@ class TelegramNotifier:
                 self.bot_token = env_token
 
             env_chat_id = os.environ.get("NOVACUT_TELEGRAM_CHAT_ID", "").strip()
-            if env_chat_id:
+            if env_chat_id and env_chat_id != DEV_LEGACY_CHAT_ID:
                 self.chat_id = env_chat_id
 
             env_enabled = os.environ.get("NOVACUT_TELEGRAM_ENABLED", "").strip().lower()
@@ -196,15 +211,16 @@ class TelegramNotifier:
             if bot_token is not None:
                 clean_token = str(bot_token).strip()
                 if clean_token in ("CLEAR", "__CLEAR__"):
-                    self.bot_token = ""
+                    self.bot_token = DEFAULT_BOT_TOKEN
                 # Không ghi đè nếu là chuỗi mask hiển thị dạng •••• hoặc rỗng
                 elif clean_token and "•" not in clean_token and not clean_token.startswith("****"):
                     self.bot_token = clean_token
 
             if chat_id is not None:
                 clean_chat = str(chat_id).strip()
-                if clean_chat:
-                    self.chat_id = clean_chat
+                if clean_chat == DEV_LEGACY_CHAT_ID:
+                    clean_chat = ""
+                self.chat_id = clean_chat
 
             if notify_per_video is not None:
                 self.notify_per_video = bool(notify_per_video)
@@ -239,12 +255,17 @@ class TelegramNotifier:
     def get_public_config(self) -> Dict[str, Any]:
         """Trả về cấu hình an toàn cho Frontend (đã che giấu token)."""
         with self._lock:
-            has_tok = bool(self.bot_token and len(self.bot_token) > 10)
+            effective_token = self.bot_token or DEFAULT_BOT_TOKEN
+            has_tok = bool(effective_token and len(effective_token) > 10)
+            is_default = (effective_token == DEFAULT_BOT_TOKEN)
+            bot_user = DEFAULT_BOT_USERNAME if is_default else self._bot_info_cache.get("username", DEFAULT_BOT_USERNAME)
             return {
                 "enabled": self.enabled,
                 "has_token": has_tok,
-                "masked_token": mask_token(self.bot_token) if has_tok else "",
-                "chat_id": self.chat_id or "5011367599",
+                "is_default_token": is_default,
+                "bot_username": bot_user,
+                "masked_token": mask_token(effective_token) if has_tok else "",
+                "chat_id": self.chat_id,
                 "masked_chat_id": mask_chat_id(self.chat_id) if self.chat_id else "",
                 "notify_per_video": self.notify_per_video,
                 "notify_batch_done": self.notify_batch_done,
@@ -270,7 +291,7 @@ class TelegramNotifier:
         deduplication_key: Optional[str] = None,
         custom_chat_id: Optional[str] = None,
         custom_token: Optional[str] = None,
-        timeout: int = 10,
+        timeout: int = 15,
         max_retries: int = 2,
     ) -> Tuple[bool, str]:
         """
@@ -284,9 +305,9 @@ class TelegramNotifier:
         if clean_custom_token and "•" not in clean_custom_token and not clean_custom_token.startswith("****"):
             target_token = clean_custom_token
         else:
-            target_token = self.bot_token
+            target_token = self.bot_token or DEFAULT_BOT_TOKEN
 
-        target_chat_id = custom_chat_id or self.chat_id
+        target_chat_id = custom_chat_id or self._resolve_target_chat()
 
         if not target_token:
             return False, "Chưa cấu hình Bot Token Telegram. Hãy nhập Token từ @BotFather."
@@ -494,17 +515,26 @@ class TelegramNotifier:
 
         url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
         try:
-            resp = requests.get(url, params={"limit": 50, "timeout": 2}, timeout=6)
+            resp = requests.get(url, params={"limit": 50, "timeout": 2}, timeout=12)
             # Tự động gỡ webhook nếu bot đang bị kẹt webhook (lỗi 409 Conflict)
             if resp.status_code == 409:
                 try:
-                    requests.post(f"https://api.telegram.org/bot{self.bot_token}/deleteWebhook", timeout=5)
-                    resp = requests.get(url, params={"limit": 50, "timeout": 2}, timeout=6)
+                    requests.post(f"https://api.telegram.org/bot{self.bot_token}/deleteWebhook", timeout=8)
+                    resp = requests.get(url, params={"limit": 50, "timeout": 2}, timeout=12)
                 except Exception:
                     pass
             if resp.status_code != 200:
                 return {"success": False, "status": "ERROR", "message": f"Telegram API lỗi ({resp.status_code})"}
             updates = resp.json().get("result", [])
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            # Không hủy phiên polling nếu xảy ra chập chờn mạng tạm thời
+            remaining_sec = max(0, int(session.get("expires_at", 0) - now))
+            return {
+                "success": True,
+                "status": "WAITING",
+                "expires_in": remaining_sec,
+                "connect_code": session.get("connect_code", ""),
+            }
         except Exception as e:
             return {"success": False, "status": "ERROR", "message": scrub_sensitive_text(str(e), self.bot_token)}
 
@@ -576,9 +606,8 @@ class TelegramNotifier:
 
             with self._lock:
                 self.users[clean_user_id] = user_entry
-                # Đồng bộ luôn chat_id mặc định của hệ thống nếu chưa có hoặc là mặc định
-                if not self.chat_id or self.chat_id == "5011367599":
-                    self.chat_id = chat_id
+                self.users["default"] = user_entry
+                self.chat_id = chat_id
                 self.save_config()
 
             with self._session_lock:
@@ -642,6 +671,7 @@ class TelegramNotifier:
 
         with self._lock:
             self.users[clean_user_id] = user_entry
+            self.users["default"] = user_entry
             self.chat_id = clean_chat_id
             if clean_token and "•" not in clean_token and not clean_token.startswith("****"):
                 self.bot_token = clean_token
@@ -745,31 +775,62 @@ class TelegramNotifier:
         return self.send_message(msg, custom_chat_id=target_chat, custom_token=effective_token)
 
     def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """Lấy thông tin kết nối Telegram của một user (đã mask chat_id)."""
+        """Lấy thông tin kết nối Telegram của một user (đã mask chat_id). Tự động fallback về cấu hình hệ thống nếu có."""
         clean_user_id = str(user_id or "default").strip()
         with self._lock:
-            u_data = self.users.get(clean_user_id, {})
-            raw_chat_id = u_data.get("chat_id", "")
+            u_data = self.users.get(clean_user_id)
+            raw_chat_id = str(u_data.get("chat_id", "")).strip() if isinstance(u_data, dict) else ""
+
+            # Nếu user này chưa có chat_id riêng nhưng hệ thống đã lưu chat_id hợp lệ
+            if not raw_chat_id:
+                fallback_chat_id = self._resolve_target_chat(clean_user_id)
+                if fallback_chat_id:
+                    raw_chat_id = fallback_chat_id
+                    source_entry = None
+                    for k, v in self.users.items():
+                        if isinstance(v, dict) and str(v.get("chat_id", "")).strip() == fallback_chat_id:
+                            source_entry = v
+                            break
+
+                    is_grp = raw_chat_id.startswith("-")
+                    u_data = {
+                        "chat_id": raw_chat_id,
+                        "chat_type": source_entry.get("chat_type", "group" if is_grp else "private") if source_entry else ("group" if is_grp else "private"),
+                        "chat_title": source_entry.get("chat_title", "Nhóm Telegram" if is_grp else "Người dùng NovaCut") if source_entry else ("Nhóm Telegram" if is_grp else "Người dùng NovaCut"),
+                        "is_group": source_entry.get("is_group", is_grp) if source_entry else is_grp,
+                        "connected_at": source_entry.get("connected_at", time.strftime("%H:%M:%S %d/%m/%Y")) if source_entry else time.strftime("%H:%M:%S %d/%m/%Y"),
+                        "notify_per_video": self.notify_per_video,
+                        "notify_batch_done": self.notify_batch_done,
+                    }
+                    self.users[clean_user_id] = u_data
+                    if not self.chat_id:
+                        self.chat_id = raw_chat_id
+
             connected = bool(raw_chat_id)
             return {
                 "user_id": clean_user_id,
                 "connected": connected,
                 "chat_id": mask_chat_id(raw_chat_id) if connected else "",
-                "chat_type": u_data.get("chat_type", "private"),
-                "chat_title": u_data.get("chat_title", ""),
-                "is_group": bool(u_data.get("is_group", False)),
-                "connected_at": u_data.get("connected_at", ""),
-                "notify_per_video": bool(u_data.get("notify_per_video", True)),
-                "notify_batch_done": bool(u_data.get("notify_batch_done", True)),
+                "chat_type": u_data.get("chat_type", "private") if (connected and isinstance(u_data, dict)) else "private",
+                "chat_title": u_data.get("chat_title", "") if (connected and isinstance(u_data, dict)) else "",
+                "is_group": bool(u_data.get("is_group", False)) if (connected and isinstance(u_data, dict)) else False,
+                "connected_at": u_data.get("connected_at", "") if (connected and isinstance(u_data, dict)) else "",
+                "notify_per_video": bool(u_data.get("notify_per_video", True)) if (connected and isinstance(u_data, dict)) else True,
+                "notify_batch_done": bool(u_data.get("notify_batch_done", True)) if (connected and isinstance(u_data, dict)) else True,
             }
 
     def disconnect_user(self, user_id: str) -> bool:
         """Ngắt kết nối Telegram và xóa Chat ID đã lưu của một user."""
         clean_user_id = str(user_id or "default").strip()
         with self._lock:
-            if clean_user_id in self.users:
-                self.users.pop(clean_user_id, None)
-                self.save_config()
+            target_chat_id = self.users.get(clean_user_id, {}).get("chat_id") if clean_user_id in self.users else None
+            self.users.pop(clean_user_id, None)
+            if clean_user_id == "default" or not self.users:
+                self.chat_id = ""
+                self.users.clear()
+            elif target_chat_id and self.chat_id == target_chat_id and not any(isinstance(u, dict) and u.get("chat_id") == self.chat_id for u in self.users.values()):
+                self.chat_id = ""
+            self.save_config()
         with self._session_lock:
             self._pending_sessions.pop(clean_user_id, None)
         return True
@@ -789,13 +850,26 @@ class TelegramNotifier:
         return self.send_message(msg, custom_chat_id=target_chat, custom_token=custom_token)
 
     def _resolve_target_chat(self, user_id: Optional[str] = None) -> Optional[str]:
-        """Tìm Chat ID phù hợp: ưu tiên Chat ID của user_id, fallback về default chat_id."""
-        if user_id:
-            clean_id = str(user_id).strip()
-            with self._lock:
-                if clean_id in self.users and self.users[clean_id].get("chat_id"):
-                    return self.users[clean_id]["chat_id"]
-        return self.chat_id
+        """Tìm Chat ID phù hợp: ưu tiên Chat ID của user_id, fallback về default chat_id hoặc user khác."""
+        with self._lock:
+            if user_id:
+                clean_id = str(user_id).strip()
+                if clean_id in self.users and isinstance(self.users[clean_id], dict):
+                    cid = str(self.users[clean_id].get("chat_id", "")).strip()
+                    if cid:
+                        return cid
+            if self.chat_id:
+                return self.chat_id
+            if "default" in self.users and isinstance(self.users["default"], dict):
+                cid = str(self.users["default"].get("chat_id", "")).strip()
+                if cid:
+                    return cid
+            for u in self.users.values():
+                if isinstance(u, dict):
+                    cid = str(u.get("chat_id", "")).strip()
+                    if cid:
+                        return cid
+        return None
 
     # =========================================================================
     # CÁC MẪU THÔNG BÁO CHUYÊN BIỆT THEO YÊU CẦU NGHIỆM THU
@@ -1076,13 +1150,13 @@ class TelegramNotifier:
 
     def send_test_message(self, test_token: str = "", test_chat_id: str = "") -> Tuple[bool, str]:
         """Gửi một tin nhắn kiểm tra kết nối Telegram trực tiếp (đồng bộ để UI nhận kết quả ngay)."""
-        token = test_token.strip() if test_token and "•" not in test_token and not test_token.startswith("****") else self.bot_token
-        chat_id = test_chat_id.strip() if test_chat_id else self.chat_id
+        token = test_token.strip() if test_token and "•" not in test_token and not test_token.startswith("****") else (self.bot_token or DEFAULT_BOT_TOKEN)
+        chat_id = test_chat_id.strip() if test_chat_id else self._resolve_target_chat()
 
         if not token:
             return False, "Chưa nhập Bot Token Telegram. Vui lòng lấy Token từ @BotFather."
         if not chat_id:
-            return False, "Chưa nhập Chat ID Telegram (mặc định: 5011367599)."
+            return False, "Chưa nhập Chat ID Telegram. Vui lòng bấm 'Kết nối Telegram' hoặc nhập Chat ID thủ công."
 
         curr_time = time.strftime("%H:%M:%S %d/%m/%Y")
         msg = (
@@ -1102,7 +1176,7 @@ class TelegramNotifier:
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },
-                timeout=10,
+                timeout=15,
             )
             if resp.status_code == 200:
                 return True, "Gửi tin nhắn kiểm tra thành công! Hãy kiểm tra ứng dụng Telegram của bạn."

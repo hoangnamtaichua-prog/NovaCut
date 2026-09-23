@@ -94,6 +94,7 @@ PATCH_INCLUDE_FILES = [
     "social_publisher.py",
     "social_adapters.py",
     "social_workflow.py",
+    "social_tokens.py",
     "subtitle_layout.py",
     "bilibili_downloader.py",
     "run_rvc.py",
