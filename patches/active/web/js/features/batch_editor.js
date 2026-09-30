@@ -18,6 +18,47 @@ let activeModalItemIndex = -1;
 
 const STORAGE_KEY = 'novacut_batch_editor_items';
 const BATCH_OVERLAY_STORAGE_KEY = 'novacut_batch_overlay_layers';
+const BATCH_EXTRACT_METHOD_KEY = 'novacut_batch_extract_method';
+const BATCH_ASR_CONFIG_KEY = 'novacut_batch_asr_config';
+const BATCH_OCR_CONFIG_KEY = 'novacut_batch_ocr_config';
+
+export function getBatchExtractMethod() {
+    return localStorage.getItem(BATCH_EXTRACT_METHOD_KEY) || 'ocr';
+}
+
+export function getBatchAsrConfig() {
+    try {
+        const saved = localStorage.getItem(BATCH_ASR_CONFIG_KEY);
+        if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return {
+        model: 'whisper',
+        language: 'auto',
+        device: 'auto',
+        isolateVocals: false
+    };
+}
+
+export function getBatchOcrConfig() {
+    try {
+        const saved = localStorage.getItem(BATCH_OCR_CONFIG_KEY);
+        if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return {
+        fps: 2,
+        threads: 2,
+        device: 'auto'
+    };
+}
+
+export function syncBatchToolbarMethod(mode) {
+    const sel = document.getElementById('batchExtractMethodSelect');
+    const lbl = document.getElementById('batchScanOcrBtnLabel');
+    if (sel) sel.value = mode;
+    if (lbl) {
+        lbl.textContent = (mode === 'asr') ? '🎙️ Quét ASR Hàng Loạt' : '🔍 Quét OCR Hàng Loạt';
+    }
+}
 
 /**
  * Gửi thông báo sự kiện batch qua Telegram API mà không làm gián đoạn pipeline
@@ -43,11 +84,14 @@ export function initBatchEditorModule() {
     window.renderBatchTable = renderBatchTable;
     window.addVideosToBatch = addVideosToBatch;
     window.startBatchOcrScan = startBatchOcrScan;
+    window.startBatchAsrScan = startBatchAsrScan;
+    window.startBatchSubtitleScan = startBatchSubtitleScan;
     window.startBatchTranslateAndClean = startBatchTranslateAndClean;
     window.startBatchAllInOnePipeline = startBatchAllInOnePipeline;
     window.stopCurrentBatchTask = stopCurrentBatchTask;
     loadSavedBatchItems();
     setupBatchToolbarEvents();
+    setupBatchExtractConfigModalEvents();
     setupBatchTableEvents();
     setupBatchGlobalPresetEvents();
     setupBatchMultiOverlayLayers();
@@ -79,6 +123,8 @@ function loadSavedBatchItems() {
                     return {
                         ...item,
                         ocrRegion,
+                        extractMethod: item.extractMethod || 'ocr',
+                        asrConfig: item.asrConfig || null,
                         status: (item.status === 'processing') ? 'pending' : item.status,
                         progress: (item.status === 'completed') ? 100 : 0
                     };
@@ -105,6 +151,8 @@ function saveBatchItemsToStorage() {
             srtName: item.srtName,
             subtitles: (item.subtitles && item.subtitles.length <= 3000) ? item.subtitles : [],
             ocrRegion: item.ocrRegion,
+            extractMethod: item.extractMethod || 'ocr',
+            asrConfig: item.asrConfig || null,
             status: item.status,
             outputPath: item.outputPath || ''
         }));
@@ -287,10 +335,37 @@ function setupBatchToolbarEvents() {
         });
     }
 
-    // 6. Quét OCR hàng loạt ngoài bảng
+    // 5.1. Lựa chọn phương thức trích xuất phụ đề mặc định (OCR / ASR)
+    const methodSelect = document.getElementById('batchExtractMethodSelect');
+    if (methodSelect) {
+        methodSelect.value = getBatchExtractMethod();
+        syncBatchToolbarMethod(methodSelect.value);
+        methodSelect.addEventListener('change', (e) => {
+            const val = e.target.value;
+            localStorage.setItem(BATCH_EXTRACT_METHOD_KEY, val);
+            syncBatchToolbarMethod(val);
+            showToast(`Đã chọn phương thức trích xuất: ${val === 'asr' ? '🎙️ ASR Whisper' : '🔍 OCR Khung Hình'}`, 'info');
+        });
+    }
+
+    // 5.2. Mở hộp thoại cài đặt thông số trích xuất
+    const btnConfigExtract = document.getElementById('btnBatchConfigExtract');
+    if (btnConfigExtract) {
+        btnConfigExtract.addEventListener('click', () => {
+            openBatchExtractConfigModal();
+        });
+    }
+
+    // 6. Quét phụ đề hàng loạt ngoài bảng (điều phối OCR hoặc ASR theo lựa chọn)
     const btnScanOcr = document.getElementById('btnBatchScanOcr');
     if (btnScanOcr) {
-        btnScanOcr.addEventListener('click', startBatchOcrScan);
+        btnScanOcr.addEventListener('click', startBatchSubtitleScan);
+    }
+
+    // 6.1. Soát & Bù Sub AI hàng loạt ngoài bảng
+    const btnInspectSubtitles = document.getElementById('btnBatchInspectSubtitles');
+    if (btnInspectSubtitles) {
+        btnInspectSubtitles.addEventListener('click', startBatchSubtitleInspection);
     }
 
     // 7. Dịch & Làm sạch hàng loạt ngoài bảng
@@ -389,11 +464,158 @@ function setupBatchToolbarEvents() {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 1.1. MODAL CÀI ĐẶT THÔNG SỐ TRÍCH XUẤT PHỤ ĐỀ (OCR / ASR)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setupBatchExtractConfigModalEvents() {
+    const btnClose = document.getElementById('btnBatchExtractConfigClose');
+    const btnCancel = document.getElementById('btnBatchExtractConfigCancel');
+    const btnSave = document.getElementById('btnBatchExtractConfigSave');
+
+    if (btnClose) btnClose.addEventListener('click', closeBatchExtractConfigModal);
+    if (btnCancel) btnCancel.addEventListener('click', closeBatchExtractConfigModal);
+    if (btnSave) btnSave.addEventListener('click', saveBatchExtractConfigModal);
+
+    const rads = document.querySelectorAll('input[name="batchConfigExtractMode"]');
+    rads.forEach(r => {
+        r.addEventListener('change', () => {
+            updateBatchConfigModalDisplay(r.value);
+        });
+    });
+
+    const lblOcr = document.getElementById('lblBatchConfigModeOcr');
+    const lblAsr = document.getElementById('lblBatchConfigModeAsr');
+    if (lblOcr) {
+        lblOcr.addEventListener('click', () => {
+            const rad = lblOcr.querySelector('input');
+            if (rad) { rad.checked = true; updateBatchConfigModalDisplay('ocr'); }
+        });
+    }
+    if (lblAsr) {
+        lblAsr.addEventListener('click', () => {
+            const rad = lblAsr.querySelector('input');
+            if (rad) { rad.checked = true; updateBatchConfigModalDisplay('asr'); }
+        });
+    }
+}
+
+function updateBatchConfigModalDisplay(mode) {
+    const secAsr = document.getElementById('batchConfigAsrSection');
+    const secOcr = document.getElementById('batchConfigOcrSection');
+    const lblOcr = document.getElementById('lblBatchConfigModeOcr');
+    const lblAsr = document.getElementById('lblBatchConfigModeAsr');
+
+    if (mode === 'asr') {
+        if (secAsr) secAsr.style.display = 'flex';
+        if (secOcr) secOcr.style.display = 'none';
+        if (lblAsr) {
+            lblAsr.style.borderColor = 'rgba(52, 211, 153, 0.6)';
+            lblAsr.style.background = 'rgba(16, 185, 129, 0.15)';
+        }
+        if (lblOcr) {
+            lblOcr.style.borderColor = 'rgba(51, 65, 85, 0.6)';
+            lblOcr.style.background = 'rgba(15, 23, 42, 0.6)';
+        }
+    } else {
+        if (secAsr) secAsr.style.display = 'none';
+        if (secOcr) secOcr.style.display = 'flex';
+        if (lblOcr) {
+            lblOcr.style.borderColor = 'rgba(56, 189, 248, 0.6)';
+            lblOcr.style.background = 'rgba(14, 165, 233, 0.15)';
+        }
+        if (lblAsr) {
+            lblAsr.style.borderColor = 'rgba(51, 65, 85, 0.6)';
+            lblAsr.style.background = 'rgba(15, 23, 42, 0.6)';
+        }
+    }
+}
+
+export function openBatchExtractConfigModal() {
+    const modal = document.getElementById('batchExtractConfigModal');
+    if (!modal) return;
+
+    const curMode = getBatchExtractMethod();
+    const asrCfg = getBatchAsrConfig();
+    const ocrCfg = getBatchOcrConfig();
+
+    const rads = document.querySelectorAll('input[name="batchConfigExtractMode"]');
+    rads.forEach(r => {
+        r.checked = (r.value === curMode);
+    });
+    updateBatchConfigModalDisplay(curMode);
+
+    const selAsrModel = document.getElementById('batchConfigAsrModel');
+    const selAsrLang = document.getElementById('batchConfigAsrLang');
+    const selAsrDev = document.getElementById('batchConfigAsrDevice');
+    const chkAsrIso = document.getElementById('batchConfigAsrIsolateVocals');
+
+    if (selAsrModel && asrCfg.model) selAsrModel.value = asrCfg.model;
+    if (selAsrLang && asrCfg.language) selAsrLang.value = asrCfg.language;
+    if (selAsrDev && asrCfg.device) selAsrDev.value = asrCfg.device;
+    if (chkAsrIso) chkAsrIso.checked = Boolean(asrCfg.isolateVocals);
+
+    const numOcrFps = document.getElementById('batchConfigOcrFps');
+    const numOcrThreads = document.getElementById('batchConfigOcrThreads');
+    const selOcrDev = document.getElementById('batchConfigOcrDevice');
+
+    if (numOcrFps && ocrCfg.fps) numOcrFps.value = ocrCfg.fps;
+    if (numOcrThreads && ocrCfg.threads) numOcrThreads.value = ocrCfg.threads;
+    if (selOcrDev && ocrCfg.device) selOcrDev.value = ocrCfg.device;
+
+    modal.style.display = 'flex';
+}
+
+export function closeBatchExtractConfigModal() {
+    const modal = document.getElementById('batchExtractConfigModal');
+    if (modal) modal.style.display = 'none';
+}
+
+export function saveBatchExtractConfigModal() {
+    const selectedRad = document.querySelector('input[name="batchConfigExtractMode"]:checked');
+    const mode = selectedRad ? selectedRad.value : 'ocr';
+
+    const asrConfig = {
+        model: document.getElementById('batchConfigAsrModel')?.value || 'whisper',
+        language: document.getElementById('batchConfigAsrLang')?.value || 'auto',
+        device: document.getElementById('batchConfigAsrDevice')?.value || 'auto',
+        isolateVocals: Boolean(document.getElementById('batchConfigAsrIsolateVocals')?.checked)
+    };
+
+    const ocrConfig = {
+        fps: parseInt(document.getElementById('batchConfigOcrFps')?.value, 10) || 2,
+        threads: parseInt(document.getElementById('batchConfigOcrThreads')?.value, 10) || 2,
+        device: document.getElementById('batchConfigOcrDevice')?.value || 'auto'
+    };
+
+    localStorage.setItem(BATCH_EXTRACT_METHOD_KEY, mode);
+    localStorage.setItem(BATCH_ASR_CONFIG_KEY, JSON.stringify(asrConfig));
+    localStorage.setItem(BATCH_OCR_CONFIG_KEY, JSON.stringify(ocrConfig));
+
+    syncBatchToolbarMethod(mode);
+
+    // Đồng bộ cấu hình mới cho toàn bộ các video trong danh sách hàng loạt
+    batchEditorItems.forEach(item => {
+        item.extractMethod = mode;
+        if (mode === 'asr') {
+            item.asrConfig = JSON.parse(JSON.stringify(asrConfig));
+        }
+    });
+
+    saveBatchItemsToStorage();
+    renderBatchTable();
+    closeBatchExtractConfigModal();
+    showToast(`✅ Đã lưu cấu hình trích xuất [${mode === 'asr' ? '🎙️ ASR Whisper' : '🔍 OCR Khung Hình'}] và áp dụng cho toàn bộ video trong danh sách!`, 'success');
+}
+
 /**
  * Thêm danh sách video đường dẫn vào hàng đợi
  */
 export async function addVideosToBatch(paths) {
     let addedCount = 0;
+    const currentMethod = getBatchExtractMethod();
+    const currentAsrCfg = (currentMethod === 'asr') ? getBatchAsrConfig() : null;
+
     for (const p of paths) {
         if (!p) continue;
         const normPath = p.replace(/\\/g, '/');
@@ -410,6 +632,8 @@ export async function addVideosToBatch(paths) {
                 srtName: '',
                 subtitles: [],
                 ocrRegion: { x: 20, y: 81.5, w: 60, h: 9.5, width: 60, height: 9.5 },
+                extractMethod: currentMethod,
+                asrConfig: currentAsrCfg ? JSON.parse(JSON.stringify(currentAsrCfg)) : null,
                 selected: true,
                 status: 'pending', // 'pending' | 'ready' | 'processing' | 'completed' | 'error'
                 progress: 0,
@@ -634,6 +858,10 @@ export function renderBatchTable() {
             statusBadge = `<span class="batch-badge badge-danger" title="${escapeHtml(item.errorMsg || 'Lỗi xử lý')}">❌ Thất bại</span>`;
         } else if (item.status === 'translated') {
             statusBadge = `<span class="batch-badge badge-success" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);">✅ Đã dịch & làm sạch</span>`;
+        } else if (item.status === 'inspected') {
+            statusBadge = `<span class="batch-badge badge-success" style="background: rgba(167, 139, 250, 0.2); color: #c4b5fd; border: 1px solid rgba(167, 139, 250, 0.4);">🤖 Đã soát AI</span>`;
+        } else if (item.status === 'asr_done') {
+            statusBadge = `<span class="batch-badge badge-ready" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4);">🎙️ Đã quét ASR</span>`;
         } else if (item.status === 'ocr_done') {
             statusBadge = `<span class="batch-badge badge-ready" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">📄 Đã quét OCR</span>`;
         } else if (item.srtPath) {
@@ -662,6 +890,10 @@ export function renderBatchTable() {
             `;
         }
 
+        const methodBadge = (item.extractMethod === 'asr')
+            ? `<span class="batch-method-badge" style="font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.18); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35); margin-left: 6px; vertical-align: middle;" title="Phương thức trích xuất: ASR Whisper giọng nói">🎙️ ASR</span>`
+            : `<span class="batch-method-badge" style="font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: rgba(56, 189, 248, 0.18); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); margin-left: 6px; vertical-align: middle;" title="Phương thức trích xuất: OCR Khung hình">🔍 OCR</span>`;
+
         html += `
             <tr class="batch-row ${item.selected ? 'selected' : ''} ${isRunningThis ? 'running' : ''}" data-index="${index}">
                 <td style="text-align: center;">
@@ -672,7 +904,7 @@ export function renderBatchTable() {
                     <div class="batch-video-title-wrap" title="${escapeHtml(item.videoPath)}">
                         <span class="batch-video-icon">🎬</span>
                         <div class="batch-video-names">
-                            <span class="batch-video-name">${escapeHtml(item.videoName)}</span>
+                            <span class="batch-video-name">${escapeHtml(item.videoName)} ${methodBadge}</span>
                             <span class="batch-video-path">${escapeHtml(item.videoPath)}</span>
                         </div>
                     </div>
@@ -815,19 +1047,102 @@ function setupBatchModalDetailEvents() {
     const btnSave = document.getElementById('btnBatchModalSave');
     const btnSaveOcrOnly = document.getElementById('btnBatchModalSaveOcrOnly');
     const btnApplyOcrToAll = document.getElementById('btnBatchModalApplyOcrToAll');
+    const btnSwitchOcr = document.getElementById('btnBatchModalSwitchOcr');
+    const btnSwitchAsr = document.getElementById('btnBatchModalSwitchAsr');
 
     const btnToggleLog = document.getElementById('btnBatchModalToggleLog');
 
     if (btnClose) btnClose.addEventListener('click', closeBatchDetailModal);
     if (btnCancel) btnCancel.addEventListener('click', closeBatchDetailModal);
     if (btnSave) btnSave.addEventListener('click', saveBatchDetailModal);
-    if (btnSaveOcrOnly) btnSaveOcrOnly.addEventListener('click', saveBatchOcrRegionOnly);
-    if (btnApplyOcrToAll) btnApplyOcrToAll.addEventListener('click', applyBatchOcrRegionToAll);
+    if (btnSaveOcrOnly) btnSaveOcrOnly.addEventListener('click', saveBatchExtractionConfigOnly);
+    if (btnApplyOcrToAll) btnApplyOcrToAll.addEventListener('click', applyBatchExtractionConfigToAll);
+
+    if (btnSwitchOcr) {
+        btnSwitchOcr.addEventListener('click', () => {
+            setBatchModalExtractionMode('ocr');
+        });
+    }
+    if (btnSwitchAsr) {
+        btnSwitchAsr.addEventListener('click', () => {
+            setBatchModalExtractionMode('asr');
+        });
+    }
+
     if (btnToggleLog) {
         btnToggleLog.addEventListener('click', () => {
             const toggleTerminalBtn = document.getElementById('toggleTerminalBtn');
             if (toggleTerminalBtn) toggleTerminalBtn.click();
         });
+    }
+}
+
+/**
+ * Điều chuyển chế độ OCR / ASR trong Modal Sửa Chi Tiết
+ */
+function setBatchModalExtractionMode(mode) {
+    const btnSwitchOcr = document.getElementById('btnBatchModalSwitchOcr');
+    const btnSwitchAsr = document.getElementById('btnBatchModalSwitchAsr');
+    const guideText = document.getElementById('batchModalGuideText');
+    const saveBtnText = document.getElementById('batchModalSaveBtnText');
+    const applyAllBtnText = document.getElementById('batchModalApplyAllBtnText');
+
+    if (mode === 'asr') {
+        if (btnSwitchAsr) {
+            btnSwitchAsr.style.background = '#8b5cf6';
+            btnSwitchAsr.style.color = '#fff';
+        }
+        if (btnSwitchOcr) {
+            btnSwitchOcr.style.background = 'transparent';
+            btnSwitchOcr.style.color = '#94a3b8';
+        }
+        if (guideText) {
+            guideText.innerHTML = '<b>Trích Xuất Giọng Nói ASR Whisper:</b> Chọn ngôn ngữ &amp; Model AI bên dưới rồi bấm <b>"Lưu Video Này"</b> hoặc <b>"Áp Dụng Cho Tất Cả"</b> để quét phụ đề giọng nói.';
+        }
+        if (saveBtnText) saveBtnText.textContent = '🎯 Lưu Cấu Hình ASR';
+        if (applyAllBtnText) applyAllBtnText.textContent = '🌐 Áp Dụng ASR Cho Tất Cả';
+
+        // Chuyển tab sang ASR trong Editor
+        const tabAsr = document.getElementById('tabAsr');
+        if (tabAsr) tabAsr.click();
+
+        if (activeModalItemIndex >= 0 && batchEditorItems[activeModalItemIndex]) {
+            batchEditorItems[activeModalItemIndex].extractMethod = 'asr';
+            const asrCfg = batchEditorItems[activeModalItemIndex].asrConfig || getBatchAsrConfig();
+            const selModel = document.getElementById('asrModelSelect');
+            const selLang = document.getElementById('asrLangSelect');
+            const selDev = document.getElementById('asrHardwareDevice');
+            const chkIso = document.getElementById('asrIsolateVocals');
+            if (selModel && asrCfg.model) selModel.value = asrCfg.model;
+            if (selLang && asrCfg.language) selLang.value = asrCfg.language;
+            if (selDev && asrCfg.device) selDev.value = asrCfg.device;
+            if (chkIso) chkIso.checked = Boolean(asrCfg.isolateVocals);
+        }
+    } else {
+        if (btnSwitchOcr) {
+            btnSwitchOcr.style.background = '#0284c7';
+            btnSwitchOcr.style.color = '#fff';
+        }
+        if (btnSwitchAsr) {
+            btnSwitchAsr.style.background = 'transparent';
+            btnSwitchAsr.style.color = '#94a3b8';
+        }
+        if (guideText) {
+            guideText.innerHTML = '<b>Chọn Vùng Quét OCR:</b> Bạn chỉ cần kéo thả khung chữ nhật trên video để chọn vùng phụ đề chữ Hán. Sau đó bấm <b>"Lưu Video Này"</b> hoặc <b>"Áp Dụng Cho Tất Cả"</b>.';
+        }
+        if (saveBtnText) saveBtnText.textContent = '🎯 Lưu Vùng OCR';
+        if (applyAllBtnText) applyAllBtnText.textContent = '🌐 Áp Dụng OCR Cho Tất Cả';
+
+        // Chuyển tab sang OCR trong Editor
+        const tabOcr = document.getElementById('tabOcr');
+        if (tabOcr) tabOcr.click();
+
+        if (activeModalItemIndex >= 0 && batchEditorItems[activeModalItemIndex]) {
+            batchEditorItems[activeModalItemIndex].extractMethod = 'ocr';
+            if (batchEditorItems[activeModalItemIndex].ocrRegion && typeof window.setEditorOcrRegion === 'function') {
+                window.setEditorOcrRegion(batchEditorItems[activeModalItemIndex].ocrRegion);
+            }
+        }
     }
 }
 
@@ -850,36 +1165,71 @@ function getCurrentNormalizedEditorRegion() {
 }
 
 /**
- * Lưu riêng vùng quét OCR từ modal sửa cho video hiện tại
+ * Lưu riêng cấu hình trích xuất (OCR / ASR) từ modal sửa cho video hiện tại
  */
-function saveBatchOcrRegionOnly() {
+function saveBatchExtractionConfigOnly() {
     if (activeModalItemIndex < 0 || !batchEditorItems[activeModalItemIndex]) {
         closeBatchDetailModal();
         return;
     }
     const item = batchEditorItems[activeModalItemIndex];
-    item.ocrRegion = getCurrentNormalizedEditorRegion();
-    saveBatchItemsToStorage();
-    renderBatchTable();
-    showToast(`🎯 Đã lưu vùng quét OCR cho "${item.videoName}"! Giờ đây bạn có thể dùng nút Quét OCR Hàng Loạt ngoài bảng.`, 'success');
+    const isAsr = (item.extractMethod === 'asr') || (document.getElementById('contentAsr')?.classList.contains('active'));
+
+    if (isAsr) {
+        item.extractMethod = 'asr';
+        item.asrConfig = {
+            model: document.getElementById('asrModelSelect')?.value || 'whisper',
+            language: document.getElementById('asrLangSelect')?.value || 'auto',
+            device: document.getElementById('asrHardwareDevice')?.value || 'auto',
+            isolateVocals: Boolean(document.getElementById('asrIsolateVocals')?.checked)
+        };
+        saveBatchItemsToStorage();
+        renderBatchTable();
+        showToast(`🎙️ Đã lưu cấu hình ASR Whisper cho "${item.videoName}"! Giờ đây bạn có thể dùng nút Quét Phụ Đề ngoài bảng.`, 'success');
+    } else {
+        item.extractMethod = 'ocr';
+        item.ocrRegion = getCurrentNormalizedEditorRegion();
+        saveBatchItemsToStorage();
+        renderBatchTable();
+        showToast(`🎯 Đã lưu vùng quét OCR cho "${item.videoName}"! Giờ đây bạn có thể dùng nút Quét Phụ Đề ngoài bảng.`, 'success');
+    }
     closeBatchDetailModal();
 }
 
 /**
- * Áp dụng vùng quét OCR hiện tại cho toàn bộ video trong danh sách hàng loạt
+ * Áp dụng cấu hình trích xuất (OCR / ASR) hiện tại cho toàn bộ video trong danh sách hàng loạt
  */
-function applyBatchOcrRegionToAll() {
+function applyBatchExtractionConfigToAll() {
     if (batchEditorItems.length === 0) {
         closeBatchDetailModal();
         return;
     }
-    const region = getCurrentNormalizedEditorRegion();
-    batchEditorItems.forEach(item => {
-        item.ocrRegion = JSON.parse(JSON.stringify(region));
-    });
-    saveBatchItemsToStorage();
-    renderBatchTable();
-    showToast(`🌐 Đã áp dụng vùng quét OCR này cho toàn bộ ${batchEditorItems.length} video trong danh sách!`, 'success');
+    const isAsr = (activeModalItemIndex >= 0 && batchEditorItems[activeModalItemIndex]?.extractMethod === 'asr') || (document.getElementById('contentAsr')?.classList.contains('active'));
+
+    if (isAsr) {
+        const asrConfig = {
+            model: document.getElementById('asrModelSelect')?.value || 'whisper',
+            language: document.getElementById('asrLangSelect')?.value || 'auto',
+            device: document.getElementById('asrHardwareDevice')?.value || 'auto',
+            isolateVocals: Boolean(document.getElementById('asrIsolateVocals')?.checked)
+        };
+        batchEditorItems.forEach(item => {
+            item.extractMethod = 'asr';
+            item.asrConfig = JSON.parse(JSON.stringify(asrConfig));
+        });
+        saveBatchItemsToStorage();
+        renderBatchTable();
+        showToast(`🌐 Đã áp dụng phương thức Quét ASR Whisper cho toàn bộ ${batchEditorItems.length} video trong danh sách!`, 'success');
+    } else {
+        const region = getCurrentNormalizedEditorRegion();
+        batchEditorItems.forEach(item => {
+            item.extractMethod = 'ocr';
+            item.ocrRegion = JSON.parse(JSON.stringify(region));
+        });
+        saveBatchItemsToStorage();
+        renderBatchTable();
+        showToast(`🌐 Đã áp dụng vùng quét OCR này cho toàn bộ ${batchEditorItems.length} video trong danh sách!`, 'success');
+    }
     closeBatchDetailModal();
 }
 
@@ -943,6 +1293,12 @@ export async function openBatchDetailModal(index) {
         modal.style.display = 'flex';
         modal.focus();
     }
+
+    // 5. Đồng bộ tab & giao diện OCR/ASR theo cấu hình của item
+    const targetMethod = item.extractMethod || getBatchExtractMethod();
+    setTimeout(() => {
+        setBatchModalExtractionMode(targetMethod);
+    }, 120);
 }
 
 /**
@@ -1017,9 +1373,21 @@ async function saveBatchDetailModal() {
         }
     }
 
-    // Lưu tọa độ vùng quét OCR nếu người dùng đã vẽ/chỉnh sửa
-    if (typeof window.getEditorOcrRegion === 'function') {
-        item.ocrRegion = window.getEditorOcrRegion();
+    // Lưu phương thức trích xuất và tham số tương ứng
+    const isAsr = (item.extractMethod === 'asr') || (document.getElementById('contentAsr')?.classList.contains('active'));
+    item.extractMethod = isAsr ? 'asr' : 'ocr';
+    if (isAsr) {
+        item.asrConfig = {
+            model: document.getElementById('asrModelSelect')?.value || 'whisper',
+            language: document.getElementById('asrLangSelect')?.value || 'auto',
+            device: document.getElementById('asrHardwareDevice')?.value || 'auto',
+            isolateVocals: Boolean(document.getElementById('asrIsolateVocals')?.checked)
+        };
+    } else {
+        // Lưu tọa độ vùng quét OCR nếu người dùng đã vẽ/chỉnh sửa
+        if (typeof window.getEditorOcrRegion === 'function') {
+            item.ocrRegion = window.getEditorOcrRegion();
+        }
     }
 
     const currentSubs = (typeof window.getEditorSrtData === 'function') ? window.getEditorSrtData() : [];
@@ -1740,16 +2108,221 @@ function setupBatchExecutionEvents() {
 }
 
 /**
+ * Chuẩn hóa timestamp SRT thành giây
+ */
+function srtTimeToSeconds(timeStr) {
+    if (typeof timeStr === 'number') return Math.max(0, timeStr);
+    if (!timeStr) return 0;
+    let clean = String(timeStr).trim().replace(',', '.');
+    if (clean.includes('-->')) clean = clean.split('-->')[0].trim();
+    else if (clean.includes(' - ')) clean = clean.split(' - ')[0].trim();
+    const parts = clean.split(':');
+    if (parts.length === 3) {
+        return Math.max(0, (parseFloat(parts[0]) || 0) * 3600 + (parseFloat(parts[1]) || 0) * 60 + (parseFloat(parts[2]) || 0));
+    }
+    if (parts.length === 2) {
+        return Math.max(0, (parseFloat(parts[0]) || 0) * 60 + (parseFloat(parts[1]) || 0));
+    }
+    return Math.max(0, parseFloat(clean) || 0);
+}
+
+function secondsToSrtTime(totalSec) {
+    if (isNaN(totalSec) || totalSec < 0) totalSec = 0;
+    const hours = Math.floor(totalSec / 3600);
+    const remainder = totalSec % 3600;
+    const minutes = Math.floor(remainder / 60);
+    const seconds = Math.floor(remainder % 60);
+    const ms = Math.floor((remainder - Math.floor(remainder)) * 1000);
+    const pad = (n, width = 2) => String(n).padStart(width, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)},${pad(ms, 3)}`;
+}
+
+/**
+ * Hậu kiểm deterministic phụ đề: sort, fix overlap, gộp duplicate < 0.7s, đánh lại ID
+ */
+async function normalizeAndDedupSubtitles(subs, minGapSec = 0.7) {
+    if (!subs || !Array.isArray(subs) || subs.length === 0) return [];
+    try {
+        const res = await fetch('/api/subtitles/normalize_dedup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subtitles: subs, min_gap_sec: minGapSec })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.success && Array.isArray(data.subtitles) && data.subtitles.length > 0) {
+                return data.subtitles;
+            }
+        }
+    } catch (e) {
+        console.warn('API normalize_dedup failed, using client fallback:', e);
+    }
+
+    // Client deterministic fallback
+    const parsed = [];
+    subs.forEach((s, idx) => {
+        if (!s) return;
+        const text = (s.text || s.original_text || '').trim();
+        const trans = (s.translation || '').trim();
+        if (!text && !trans) return;
+
+        let sSec = null;
+        let eSec = null;
+
+        if (s.startSeconds != null && s.startSeconds !== '') sSec = parseFloat(s.startSeconds);
+        else if (s.start_sec != null && s.start_sec !== '') sSec = parseFloat(s.start_sec);
+        else if (s.startSec != null && s.startSec !== '') sSec = parseFloat(s.startSec);
+
+        if (s.endSeconds != null && s.endSeconds !== '') eSec = parseFloat(s.endSeconds);
+        else if (s.end_sec != null && s.end_sec !== '') eSec = parseFloat(s.end_sec);
+        else if (s.endSec != null && s.endSec !== '') eSec = parseFloat(s.endSec);
+
+        if (sSec == null || isNaN(sSec)) {
+            const rawStart = s.start ?? s.start_time ?? s.startTime;
+            if (rawStart != null) sSec = srtTimeToSeconds(rawStart);
+        }
+        if (eSec == null || isNaN(eSec)) {
+            const rawEnd = s.end ?? s.end_time ?? s.endTime;
+            if (rawEnd != null) eSec = srtTimeToSeconds(rawEnd);
+        }
+
+        if ((sSec == null || isNaN(sSec) || eSec == null || isNaN(eSec)) && typeof s.time === 'string') {
+            const timeParts = s.time.includes('-->') ? s.time.split('-->') : s.time.split(' - ');
+            if (timeParts.length >= 2) {
+                if (sSec == null || isNaN(sSec)) sSec = srtTimeToSeconds(timeParts[0]);
+                if (eSec == null || isNaN(eSec)) eSec = srtTimeToSeconds(timeParts[1]);
+            }
+        }
+
+        sSec = Math.max(0, sSec || 0);
+        eSec = Math.max(sSec + 0.1, eSec || (sSec + 1.0));
+
+        parsed.push({
+            id: s.id || (idx + 1),
+            start_sec: sSec,
+            end_sec: eSec,
+            text: text,
+            translation: trans
+        });
+    });
+
+    parsed.sort((a, b) => a.start_sec - b.start_sec || a.end_sec - b.end_sec);
+
+    const merged = [];
+    for (const item of parsed) {
+        if (merged.length === 0) {
+            merged.push({ ...item });
+            continue;
+        }
+        const prev = merged[merged.length - 1];
+        const gap = item.start_sec - prev.end_sec;
+        const textSame = item.text && prev.text && item.text.toLowerCase() === prev.text.toLowerCase();
+        const transSame = item.translation && prev.translation && item.translation.toLowerCase() === prev.translation.toLowerCase();
+
+        if ((textSame || transSame) && gap >= -0.2 && gap < minGapSec) {
+            prev.end_sec = Math.max(prev.end_sec, item.end_sec);
+            if (!prev.translation && item.translation) prev.translation = item.translation;
+        } else {
+            if (item.start_sec < prev.end_sec) {
+                item.start_sec = prev.end_sec + 0.05;
+                if (item.end_sec <= item.start_sec) {
+                    item.end_sec = item.start_sec + 0.5;
+                }
+            }
+            merged.push({ ...item });
+        }
+    }
+
+    return merged.map((item, idx) => ({
+        id: idx + 1,
+        start: secondsToSrtTime(item.start_sec),
+        end: secondsToSrtTime(item.end_sec),
+        startSeconds: Math.round(item.start_sec * 1000) / 1000,
+        endSeconds: Math.round(item.end_sec * 1000) / 1000,
+        time: `${secondsToSrtTime(item.start_sec).replace(',', '.')} - ${secondsToSrtTime(item.end_sec).replace(',', '.')}`,
+        text: item.text,
+        translation: item.translation || ''
+    }));
+}
+
+/**
+ * Kiểm tra tính hợp lệ của phụ đề trước khi xuất
+ */
+function validateSubtitlesForExport(subtitles, targetLang = 'vi') {
+    if (!subtitles || !Array.isArray(subtitles) || subtitles.length === 0) {
+        return { isValid: false, reason: 'Danh sách phụ đề rỗng', errorCount: 0 };
+    }
+
+    const tLang = (targetLang || 'vi').toLowerCase();
+    const errors = [];
+
+    subtitles.forEach((s, idx) => {
+        if (s && s._ocr_garbage_skipped) return;
+        const id = s.id || (idx + 1);
+        const trans = (s.translation || '').trim();
+        const orig = (s.text || '').trim();
+
+        if (!trans) {
+            errors.push(`ID ${id}: Chưa có bản dịch`);
+            return;
+        }
+
+        if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('Rate limit')) {
+            errors.push(`ID ${id}: Chứa thông báo lỗi ("${trans.substring(0, 30)}")`);
+            return;
+        }
+
+        if (tLang === 'vi') {
+            if (/[\u4e00-\u9fff]/.test(trans)) {
+                errors.push(`ID ${id}: Bản dịch còn chứa chữ Hán ("${trans.substring(0, 30)}")`);
+                return;
+            }
+            if (/[\u4e00-\u9fff]/.test(orig) && trans.toLowerCase() === orig.toLowerCase()) {
+                errors.push(`ID ${id}: Chưa dịch, còn nguyên chữ Hán nguồn ("${orig.substring(0, 30)}")`);
+                return;
+            }
+        } else if (tLang === 'en') {
+            if (/[\u4e00-\u9fff]/.test(trans)) {
+                errors.push(`ID ${id}: Bản dịch tiếng Anh chứa chữ Hán ("${trans.substring(0, 30)}")`);
+                return;
+            }
+            if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(trans)) {
+                errors.push(`ID ${id}: Bản dịch tiếng Anh chứa tiếng Việt ("${trans.substring(0, 30)}")`);
+                return;
+            }
+        }
+    });
+
+    if (errors.length > 0) {
+        return {
+            isValid: false,
+            reason: `Phát hiện ${errors.length} câu lỗi: ${errors.slice(0, 3).join('; ')}`,
+            errorCount: errors.length,
+            errors: errors
+        };
+    }
+
+    return { isValid: true, reason: 'Phụ đề hợp lệ', errorCount: 0 };
+}
+
+/**
  * Thu thập cấu hình chung áp dụng cho tất cả video
  */
 function collectBatchGlobalConfig() {
     const dubbingEnabled = document.getElementById('batch_dubbingEnabled')?.checked ?? true;
-    const voiceInput = document.getElementById('batch_dubbingVoiceInput')?.value || 'local_clone_1787245769140';
+    const voiceInputElem = document.getElementById('batch_dubbingVoiceInput');
+    const voiceInput = voiceInputElem?.value || 'local_clone_1787245769140';
+    const voiceGender = voiceInputElem?.dataset?.gender || '';
+    const voiceLang = voiceInputElem?.dataset?.lang || '';
+    const voiceProvider = voiceInputElem?.dataset?.provider || '';
     const speed = parseFloat(document.getElementById('batch_dubbingSpeed')?.value || 1.1);
     const voiceVol = (parseInt(document.getElementById('batch_dubbingVoiceVol')?.value || 100)) / 100;
     const origVol = (parseInt(document.getElementById('batch_dubbingOrigVol')?.value || 45)) / 100;
     const ducking = Boolean(document.getElementById('batch_dubbingDucking')?.checked);
     const threads = parseInt(document.getElementById('batch_dubbingThreads')?.value || 16);
+
+    // Fresh run: Mặc định bật nếu có checkbox, nếu không thì true để đảm bảo an toàn tuyệt đối
+    const freshRun = document.getElementById('batch_freshRun')?.checked ?? true;
 
     // Stem separation
     const stemEnabled = Boolean(document.getElementById('batch_editorStemSeparationEnabled')?.checked);
@@ -1763,6 +2336,9 @@ function collectBatchGlobalConfig() {
     const outlineColor = document.getElementById('batch_subOutlineColorPicker')?.value || '#000000';
     const outline = parseInt(document.getElementById('batch_subOutline')?.value || 1);
     const blurSubOriginal = document.getElementById('batch_reviewBlurOriginalSubtitles')?.checked ?? true;
+    const enableSubtitleInspector = document.getElementById('batch_enableSubtitleInspector')?.checked ?? true;
+    const inspectorSpeedMode = document.getElementById('batch_inspectorSpeedMode')?.value || 'turbo';
+    const translationCleanMode = document.getElementById('batch_translationCleanMode')?.value || 'both';
 
     // Video tools
     const videoSpeed = parseFloat(document.getElementById('batch_editToolSpeedSlider')?.value || 1.0);
@@ -1786,11 +2362,19 @@ function collectBatchGlobalConfig() {
 
     return {
         mode: dubbingEnabled ? 'tts' : 'none',
+        fresh_run: freshRun,
+        use_cache: !freshRun,
         dubbing: {
             enabled: dubbingEnabled,
             mode: 'tts',
             voice_id: voiceInput,
             voice: voiceInput,
+            gender: voiceGender,
+            voice_gender: voiceGender,
+            lang: voiceLang,
+            voice_lang: voiceLang,
+            provider: voiceProvider,
+            voice_provider: voiceProvider,
             speed: speed,
             voice_volume: voiceVol,
             voice_vol: voiceVol,
@@ -1819,6 +2403,9 @@ function collectBatchGlobalConfig() {
             uppercase: false
         },
         blur_original_subtitles: blurSubOriginal,
+        enable_subtitle_inspector: enableSubtitleInspector,
+        inspector_speed_mode: inspectorSpeedMode,
+        translation_clean_mode: translationCleanMode,
         video_speed: videoSpeed,
         aspect_ratio: aspectRatio,
         mirror_flip: mirrorFlip,
@@ -1933,20 +2520,65 @@ export async function startBatchExport() {
             }
             const outName = `[Edited] ${item.videoName.replace(/\.[^/.]+$/, '')}.mp4`;
 
+            const subtitlesEnabled = Boolean(globalConfig.subtitles_enabled);
+            let itemSubs = item.subtitles;
+            if ((!itemSubs || itemSubs.length === 0) && item.srtPath) {
+                try {
+                    const rRes = await fetch('/api/read_srt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ srt_path: item.srtPath })
+                    });
+                    if (rRes.ok) {
+                        const rd = await rRes.json();
+                        itemSubs = rd.subtitles || [];
+                    }
+                } catch(e) {}
+            }
+
+            if (globalConfig.dubbing && globalConfig.dubbing.enabled) {
+                if ((!itemSubs || itemSubs.length === 0) && (!item.subtitles || item.subtitles.length === 0)) {
+                    throw new Error('Video chưa có dữ liệu phụ đề để lồng tiếng AI! Vui lòng Quét OCR hoặc Gán file SRT.');
+                }
+            }
+
+            if (itemSubs && itemSubs.length > 0) {
+                itemSubs = await normalizeAndDedupSubtitles(itemSubs, 0.7);
+                const exportTargetLang = (globalConfig && (globalConfig.target_lang || globalConfig.voiceLang)) || 'vi';
+                if (subtitlesEnabled) {
+                    const val = validateSubtitlesForExport(itemSubs, exportTargetLang);
+                    if (!val.isValid) {
+                        throw new Error(`Kiểm tra phụ đề thất bại: ${val.reason}`);
+                    }
+                }
+                item.subtitles = itemSubs;
+            }
+
+            const exportTargetLang = (globalConfig && (globalConfig.target_lang || globalConfig.voiceLang)) || 'vi';
+            const validSubs = (itemSubs && itemSubs.length > 0) ? itemSubs : (item.subtitles || []);
             const itemOverrides = {
                 ...globalConfig,
+                target_lang: exportTargetLang,
                 source_tool: 'batch_editor',
                 inputVideo: item.videoPath,
                 outputDir: outDir,
                 save_to_source_dir: saveToSource,
                 outputName: outName,
-                manualSrt: item.srtPath || '',
-                subtitles: (item.subtitles && item.subtitles.length > 0) ? item.subtitles : undefined,
+                fresh_run: Boolean(globalConfig.fresh_run),
+                use_cache: !Boolean(globalConfig.fresh_run),
+                subtitles_enabled: subtitlesEnabled,
+                // Khi subtitles_enabled=false, tuyệt đối không gửi manualSrt cho burn-in
+                manualSrt: subtitlesEnabled ? (item.srtPath || '') : '',
+                subtitles: subtitlesEnabled ? (validSubs.length > 0 ? validSubs : undefined) : undefined,
+                subtitles_for_dubbing: validSubs,
+                original_subtitles_for_blur: item.originalSubtitles || validSubs,
                 ocr_region: item.ocrRegion,
                 custom_overlay_layers: (Array.isArray(window.batchCustomOverlayLayers) && window.batchCustomOverlayLayers.length > 0)
                     ? window.batchCustomOverlayLayers.filter(l => l.visible !== false)
                     : (globalConfig.custom_overlay_layers || [])
             };
+
+            console.log(`[Batch Editor] Gửi payload xuất video (subtitles_enabled=${itemOverrides.subtitles_enabled}, fresh_run=${itemOverrides.fresh_run}):`, itemOverrides);
 
             const payload = (typeof window.buildEditorExportConfig === 'function')
                 ? window.buildEditorExportConfig(itemOverrides)
@@ -2183,6 +2815,7 @@ function setBatchTaskUiRunning(isRunning, taskName = '') {
     isBatchRunning = isRunning;
     const btnStopTask = document.getElementById('btnBatchStopTask');
     const btnScanOcr = document.getElementById('btnBatchScanOcr');
+    const btnInspectSubtitles = document.getElementById('btnBatchInspectSubtitles');
     const btnTranslateClean = document.getElementById('btnBatchTranslateClean');
     const btnAutoAllInOne = document.getElementById('btnBatchAutoAllInOne');
     const btnStartExport = document.getElementById('btnBatchStartExport');
@@ -2191,6 +2824,7 @@ function setBatchTaskUiRunning(isRunning, taskName = '') {
 
     if (btnStopTask) btnStopTask.style.display = isRunning ? 'inline-flex' : 'none';
     if (btnScanOcr) btnScanOcr.disabled = isRunning;
+    if (btnInspectSubtitles) btnInspectSubtitles.disabled = isRunning;
     if (btnTranslateClean) btnTranslateClean.disabled = isRunning;
     if (btnAutoAllInOne) btnAutoAllInOne.disabled = isRunning;
     if (btnStartExport) btnStartExport.disabled = isRunning;
@@ -2214,11 +2848,12 @@ function updateBatchOverallProgress(current, total, statusText) {
 /**
  * Kiểm tra xem danh sách phụ đề có cần dịch lại hoặc sửa lỗi hay không
  */
-function checkSubtitleNeedsTranslation(subtitles) {
+function checkSubtitleNeedsTranslation(subtitles, targetLang = 'vi') {
     if (!subtitles || !Array.isArray(subtitles) || subtitles.length === 0) {
         return { needsTranslation: true, reason: 'Chưa có dữ liệu phụ đề', untranslatedCount: 0 };
     }
 
+    const tLang = (targetLang || 'vi').toLowerCase();
     let untranslatedCount = 0;
     let errorCount = 0;
 
@@ -2226,7 +2861,7 @@ function checkSubtitleNeedsTranslation(subtitles) {
         const orig = (sub.text || '').trim();
         const trans = (sub.translation || '').trim();
 
-        if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('quota')) {
+        if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('quota') || trans.includes('Rate limit')) {
             errorCount++;
             continue;
         }
@@ -2236,10 +2871,22 @@ function checkSubtitleNeedsTranslation(subtitles) {
             continue;
         }
 
-        // Bản dịch vẫn còn nguyên chữ Hán
-        if (/[\u4e00-\u9fff]/.test(trans) && (/[\u4e00-\u9fff]/.test(orig) || trans === orig)) {
-            untranslatedCount++;
-            continue;
+        if (tLang === 'vi') {
+            // Bản dịch tiếng Việt vẫn còn chữ Hán
+            if (/[\u4e00-\u9fff]/.test(trans)) {
+                untranslatedCount++;
+                continue;
+            }
+            if (/[\u4e00-\u9fff]/.test(orig) && trans.toLowerCase() === orig.toLowerCase()) {
+                untranslatedCount++;
+                continue;
+            }
+        } else if (tLang === 'en') {
+            // Bản dịch tiếng Anh chứa chữ Hán hoặc tiếng Việt
+            if (/[\u4e00-\u9fff]/.test(trans) || /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(trans)) {
+                untranslatedCount++;
+                continue;
+            }
         }
     }
 
@@ -2255,7 +2902,7 @@ function checkSubtitleNeedsTranslation(subtitles) {
     if (untranslatedCount > 0) {
         return {
             needsTranslation: true,
-            reason: `Có ${untranslatedCount}/${total} câu chưa dịch`,
+            reason: `Có ${untranslatedCount}/${total} câu chưa dịch hoặc sai ngôn ngữ target`,
             untranslatedCount
         };
     }
@@ -2274,8 +2921,8 @@ async function executeSubtitlesCleanBatch(subs, aiChoice, signal) {
     let openaiKey = document.getElementById('openaiKey')?.value?.trim() || '';
     let openaiBaseUrl = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://api.openai.com/v1';
     let openaiModel = (openaiBaseUrl.includes('openrouter.ai') || openaiKey.startsWith('sk-or-')) 
-        ? 'openai/gpt-5.6-luna-pro' 
-        : 'gpt-5.6-luna-pro-batch';
+        ? 'openai/gpt-6-luna' 
+        : 'gpt-6-luna';
 
     // Nếu số câu quá lớn (> 300 câu), chia thành từng đợt 200 câu để chống tràn token
     const CLEAN_CHUNK = 200;
@@ -2319,7 +2966,8 @@ async function executeSubtitlesCleanBatch(subs, aiChoice, signal) {
  * Gọi API dịch phụ đề AI chuẩn mực theo logic của Biên Tập Phim:
  * 1. Sử dụng Parallel Worker Engine (6 luồng song song, Queue-based)
  * 2. Chia mẻ 100 câu có kèm ngữ cảnh, thử lại tối đa 5 lần nếu nghẽn mạng
- * 3. Bảo toàn tuyệt đối 100% số câu và timestamp, không làm mất hoặc cắt cụt phụ đề
+ * 3. Hậu kiểm phát hiện các ID thiếu bản dịch và tự động retry cứu hộ
+ * 4. Không cho export nếu còn câu chưa dịch hoặc sai target language
  */
 async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
     if (!subs || subs.length === 0) return subs;
@@ -2329,8 +2977,8 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
     let openaiKey = document.getElementById('openaiKey')?.value?.trim() || '';
     let openaiBaseUrl = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://api.openai.com/v1';
     
-    // Mặc định luôn dùng Qwen như Tab Biên Tập Phim
-    let openaiModel = 'qwen/qwen3.7-flash';
+    // Mặc định luôn dùng Qwen 3.8 Flash như Tab Biên Tập Phim
+    let openaiModel = 'qwen/qwen3.8-flash';
     const configuredModel = document.getElementById('openaiModel')?.value?.trim() || '';
     if (configuredModel && configuredModel.toLowerCase().includes('qwen')) {
         openaiModel = configuredModel;
@@ -2340,8 +2988,8 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
     const targetLang = (aiChoice && aiChoice.target_lang) || 'vi';
     const transStyle = (aiChoice && aiChoice.translation_style) || 'cinema';
 
-    const CONCURRENCY = isOffline ? 1 : 6;
-    const BATCH_SIZE = 100;
+    const CONCURRENCY = isOffline ? 1 : 3;
+    const BATCH_SIZE = 80;
     const CONTEXT_LINES = 6;
 
     // Chuẩn bị danh sách chunks có kèm ngữ cảnh câu trước
@@ -2380,9 +3028,19 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
             if (taskIdx >= allChunks.length) return;
 
             const { chunk, ctx, from, to } = allChunks[taskIdx];
+            // Làm sạch các mẩu tiếng Anh vụn dính sau dấu câu tiếng Trung do OCR quét dính dòng sub song ngữ
+            const cleanChunk = chunk.map(s => {
+                let orig = (s.text || '').trim();
+                if (/[\u4e00-\u9fff]/.test(orig) && /[a-zA-Z]/.test(orig)) {
+                    const cleaned = orig.replace(/([。，！？\.\,\!\?])\s*[a-zA-Z\s\',.-]+$/, '$1').trim();
+                    if (cleaned) orig = cleaned;
+                }
+                return { ...s, text: orig };
+            });
+
             const payload = {
                 mode: isOffline ? 'local' : 'ai',
-                subtitles: chunk,
+                subtitles: cleanChunk,
                 context_before: ctx,
                 source_lang: sourceLang,
                 target_lang: targetLang,
@@ -2436,8 +3094,11 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
 
             if (data && Array.isArray(data.subtitles)) {
                 let chunkOk = 0;
-                data.subtitles.forEach(item => {
-                    const target = subMap.get(String(item.id));
+                data.subtitles.forEach((item, cIdx) => {
+                    let target = subMap.get(String(item.id));
+                    if (!target && chunk[cIdx]) {
+                        target = subMap.get(String(chunk[cIdx].id));
+                    }
                     if (target && item.translation) {
                         target.translation = item.translation;
                         chunkOk++;
@@ -2447,7 +3108,7 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
                 const pct = Math.round((translatedCount / totalSubs) * 100);
                 appendLog(`[${timeNow()}] > [W${workerIdx}] ✅ Dịch xong nhóm ${from}–${to} (${pct}% | ${translatedCount}/${totalSubs} câu)`, 'info');
             } else {
-                appendLog(`[${timeNow()}] > [W${workerIdx}] ⚠️ Nhóm ${from}–${to} giữ nguyên câu gốc do phản hồi AI không trả về bản dịch.`, 'warning');
+                appendLog(`[${timeNow()}] > [W${workerIdx}] ⚠️ Nhóm ${from}–${to} phản hồi không đầy đủ, sẽ tự động retry cứu hộ.`, 'warning');
             }
         }
     }
@@ -2457,13 +3118,492 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
     for (let w = 0; w < numWorkers; w++) {
         workers.push(
             new Promise(resolve => {
-                setTimeout(() => translationWorker(w + 1).then(resolve).catch(resolve), w * 120);
+                setTimeout(() => translationWorker(w + 1).then(resolve).catch(resolve), w * 500);
             })
         );
     }
 
     await Promise.all(workers);
-    return resultSubs;
+
+    // Kiểm tra hậu kiểm các câu thiếu bản dịch hợp lệ
+    const invalidItems = resultSubs.filter(s => {
+        const trans = (s.translation || '').trim();
+        const orig = (s.text || '').trim();
+        if (!trans) return true;
+        if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('Rate limit')) return true;
+        if (targetLang === 'vi' && /[\u4e00-\u9fff]/.test(trans)) return true;
+        if (targetLang === 'en' && /[\u4e00-\u9fff]/.test(trans)) return true;
+        if (targetLang === 'vi' && /[\u4e00-\u9fff]/.test(orig) && trans.toLowerCase() === orig.toLowerCase()) return true;
+        return false;
+    });
+
+    if (invalidItems.length > 0 && (!signal || !signal.aborted)) {
+        appendLog(`[${timeNow()}] > ⚠️ Phát hiện ${invalidItems.length}/${totalSubs} câu chưa dịch xong. Đang kích hoạt cứu hộ retry theo từng ID...`, 'warning');
+        const RETRY_CHUNK = 20;
+        for (let r = 0; r < invalidItems.length; r += RETRY_CHUNK) {
+            if (signal && signal.aborted) break;
+            const rChunk = invalidItems.slice(r, r + RETRY_CHUNK);
+            const cleanRChunk = rChunk.map(s => {
+                let orig = (s.text || '').trim();
+                if (/[\u4e00-\u9fff]/.test(orig) && /[a-zA-Z]/.test(orig)) {
+                    const cleaned = orig.replace(/([。，！？\.\,\!\?])\s*[a-zA-Z\s\',.-]+$/, '$1').trim();
+                    if (cleaned) orig = cleaned;
+                }
+                return { ...s, text: orig };
+            });
+            try {
+                const res = await fetch('/api/translate_subtitles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: isOffline ? 'local' : 'ai',
+                        subtitles: cleanRChunk,
+                        source_lang: sourceLang,
+                        target_lang: targetLang,
+                        translation_style: transStyle,
+                        stream: false,
+                        engine: isOffline ? 'offline' : 'online',
+                        local_model: isOffline ? localModel : undefined,
+                        openai_key: (!isOffline && openaiKey) ? openaiKey : undefined,
+                        openai_base_url: !isOffline ? openaiBaseUrl : undefined,
+                        openai_model: !isOffline ? openaiModel : undefined
+                    }),
+                    signal: signal
+                });
+                if (res.ok) {
+                    const rData = await res.json();
+                    if (rData && Array.isArray(rData.subtitles)) {
+                        rData.subtitles.forEach((item, rIdx) => {
+                            let target = subMap.get(String(item.id));
+                            if (!target && rChunk[rIdx]) {
+                                target = subMap.get(String(rChunk[rIdx].id));
+                            }
+                            if (target && item.translation) {
+                                target.translation = item.translation;
+                            }
+                        });
+                    }
+                }
+            } catch (err) {
+                console.warn('Retry translation chunk failed:', err);
+            }
+        }
+    }
+
+    // Xác thực nghiêm ngặt sau khi đã retry
+    let finalInvalid = resultSubs.filter(s => {
+        const trans = (s.translation || '').trim();
+        const orig = (s.text || '').trim();
+        if (!trans) return true;
+        if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('Rate limit')) return true;
+        if (targetLang === 'vi' && /[\u4e00-\u9fff]/.test(trans)) return true;
+        if (targetLang === 'en' && /[\u4e00-\u9fff]/.test(trans)) return true;
+        if (targetLang === 'vi' && /[\u4e00-\u9fff]/.test(orig) && trans.toLowerCase() === orig.toLowerCase()) return true;
+        return false;
+    });
+
+    // Cứu hộ lần cuối (Tầng 3a): tự động làm sạch chữ Hán còn sót trong bản dịch
+    if (finalInvalid.length > 0) {
+        finalInvalid.forEach(badItem => {
+            if (badItem.translation) {
+                const cleaned = badItem.translation.replace(/[\u4e00-\u9fff]+/g, '').replace(/\s+/g, ' ').trim();
+                if (cleaned.length >= 2) {
+                    badItem.translation = cleaned;
+                }
+            }
+        });
+        finalInvalid = resultSubs.filter(s => {
+            const trans = (s.translation || '').trim();
+            const orig = (s.text || '').trim();
+            if (!trans) return true;
+            if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('Rate limit')) return true;
+            if (targetLang === 'vi' && /[\u4e00-\u9fff]/.test(trans)) return true;
+            if (targetLang === 'en' && /[\u4e00-\u9fff]/.test(trans)) return true;
+            if (targetLang === 'vi' && /[\u4e00-\u9fff]/.test(orig) && trans.toLowerCase() === orig.toLowerCase()) return true;
+            return false;
+        });
+    }
+
+    // ── Cứu hộ thông minh (Tầng 3b): Xử lý câu rác OCR & Dịch bổ sung qua backend ──
+    // Nhận diện câu rác OCR (1–5 ký tự Hán đơn lẻ không có nghĩa đầy đủ) và tự động bỏ qua gracefully
+    // thay vì block toàn bộ video vì mấy chữ như "水", "业", "白山".
+    const OCR_GARBAGE_MAX_CHARS = 5; // Câu gốc có tổng <= 5 ký tự Hán thì coi là rác OCR
+    if (finalInvalid.length > 0) {
+        const realMissing = []; // Câu dài thực sự chưa dịch được
+        const garbageSubs = []; // Câu rác OCR ngắn
+
+        finalInvalid.forEach(badItem => {
+            const orig = (badItem.text || '').trim();
+            const chineseChars = (orig.match(/[\u4e00-\u9fff]/g) || []).length;
+            const totalChars = orig.replace(/\s+/g, '').length;
+
+            // Câu chỉ toàn chữ Hán (hoặc dấu câu CJK) và rất ngắn => rác OCR
+            const isOnlyChinese = /^[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\s\p{P}]+$/u.test(orig);
+            if (chineseChars > 0 && chineseChars === totalChars && chineseChars <= OCR_GARBAGE_MAX_CHARS) {
+                garbageSubs.push(badItem);
+            } else if (isOnlyChinese && totalChars <= OCR_GARBAGE_MAX_CHARS) {
+                garbageSubs.push(badItem);
+            } else {
+                realMissing.push(badItem);
+            }
+        });
+
+        // Xử lý câu rác OCR: cố dịch qua Google Translate backend, nếu không được thì gán chuỗi rỗng (bỏ qua)
+        if (garbageSubs.length > 0) {
+            appendLog(`[${timeNow()}] > 🧹 Phát hiện ${garbageSubs.length} câu rác OCR ngắn (≤${OCR_GARBAGE_MAX_CHARS} ký tự). Đang thử dịch bổ sung qua Google Translate...`, 'warning');
+            try {
+                const res = await fetch('/api/translate_subtitles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'free',  // Dùng Google Translate free cho câu ngắn
+                        subtitles: garbageSubs.map(s => ({ id: s.id, text: s.text })),
+                        source_lang: sourceLang,
+                        target_lang: targetLang
+                    }),
+                    signal: signal
+                });
+                if (res.ok) {
+                    const rData = await res.json();
+                    if (rData && Array.isArray(rData.subtitles)) {
+                        let rescued = 0;
+                        rData.subtitles.forEach((item, rIdx) => {
+                            let target = subMap.get(String(item.id));
+                            if (!target && garbageSubs[rIdx]) target = subMap.get(String(garbageSubs[rIdx].id));
+                            if (target) {
+                                const t = (item.translation || '').trim();
+                                // Chấp nhận nếu không còn chữ Hán
+                                if (t && !/[\u4e00-\u9fff]/.test(t)) {
+                                    target.translation = t;
+                                    rescued++;
+                                } else {
+                                    // Gán chuỗi rỗng – câu này sẽ bị bỏ qua khi render phụ đề (không block video)
+                                    target.translation = '';
+                                    target._ocr_garbage_skipped = true;
+                                }
+                            }
+                        });
+                        appendLog(`[${timeNow()}] > ✅ Đã xử lý ${garbageSubs.length} câu rác OCR (${rescued} dịch được, ${garbageSubs.length - rescued} bỏ qua gracefully).`, 'info');
+                    }
+                }
+            } catch (gcErr) {
+                console.warn('Google Translate fallback for garbage subs failed:', gcErr);
+                // Gán rỗng để không block video
+                garbageSubs.forEach(badItem => {
+                    const target = subMap.get(String(badItem.id));
+                    if (target) { target.translation = ''; target._ocr_garbage_skipped = true; }
+                });
+                appendLog(`[${timeNow()}] > ⚠️ Không thể dịch câu rác OCR qua Google, tự động bỏ qua ${garbageSubs.length} câu để tiếp tục.`, 'warning');
+            }
+        }
+
+        // Chỉ ném lỗi nếu còn câu DÀI thực sự chưa dịch được (không phải rác OCR)
+        if (realMissing.length > 0) {
+            const badPreview = realMissing.slice(0, 3).map(s => `ID ${s.id}: "${(s.translation || s.text || '').substring(0, 30)}"`).join('; ');
+            throw new Error(`Dịch thuật thất bại: còn ${realMissing.length}/${totalSubs} câu chưa được dịch hoặc sai ngôn ngữ target (${badPreview})`);
+        }
+
+        if (garbageSubs.length > 0) {
+            const skippedCount = garbageSubs.filter(s => subMap.get(String(s.id))?._ocr_garbage_skipped).length;
+            if (skippedCount > 0) {
+                appendLog(`[${timeNow()}] > ℹ️ ${skippedCount} câu rác OCR đã được bỏ qua hoàn toàn (sẽ không hiển thị trên phụ đề). Video vẫn tiếp tục xuất bình thường.`, 'info');
+            }
+        }
+        // Không throw lỗi – tất cả câu rác OCR đã được xử lý gracefully
+        // Lọc bỏ triệt để các câu rác OCR bỏ qua (translation rỗng) để không làm gãy Step 5 thẩm định
+        return resultSubs.filter(s => !s._ocr_garbage_skipped && (s.translation || '').trim() !== '');
+    }
+
+    if (finalInvalid.length > 0) {
+        const badPreview = finalInvalid.slice(0, 3).map(s => `ID ${s.id}: "${(s.translation || s.text || '').substring(0, 30)}"`).join('; ');
+        throw new Error(`Dịch thuật thất bại: còn ${finalInvalid.length}/${totalSubs} câu chưa được dịch hoặc sai ngôn ngữ target (${badPreview})`);
+    }
+
+    return resultSubs.filter(s => !s._ocr_garbage_skipped && (s.translation || '').trim() !== '');
+}
+
+/**
+ * Chạy trích xuất phụ đề OCR khung hình cho 1 video item
+ */
+export async function runOcrScanOnItem(item, signal, onProgress) {
+    if (!item.videoPath) throw new Error('Video không có đường dẫn hợp lệ');
+    const defaultRegion = { x: 20, y: 81.5, w: 60, h: 9.5, width: 60, height: 9.5 };
+    const rawRegion = item.ocrRegion || defaultRegion;
+    const region = {
+        x: Number(rawRegion.x ?? 20),
+        y: Number(rawRegion.y ?? 81.5),
+        w: Number(rawRegion.w ?? rawRegion.width ?? 60),
+        h: Number(rawRegion.h ?? rawRegion.height ?? 9.5)
+    };
+    const ocrCfg = getBatchOcrConfig();
+
+    const response = await fetch('/api/ocr_extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            video_path: item.videoPath,
+            region: region,
+            fps: Number(ocrCfg.fps) || 2,
+            threads: Number(ocrCfg.threads) || 2,
+            device: ocrCfg.device || 'auto'
+        }),
+        signal: signal
+    });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let generatedSrtPath = '';
+    let serverErrorMsg = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                const msg = line.substring(6).trim();
+                if (msg.startsWith('Lỗi') || msg.startsWith('🛑') || msg.includes('Error:') || msg.toLowerCase().includes('lỗi')) {
+                    serverErrorMsg = msg;
+                }
+                const pctMatch = msg.match(/\[OCR\s+(\d+)%\]/i);
+                if (pctMatch) {
+                    item.progress = parseInt(pctMatch[1]);
+                    if (typeof onProgress === 'function') onProgress(item.progress);
+                }
+                if (msg.startsWith('[RESULT_SRT] ')) {
+                    generatedSrtPath = msg.replace('[RESULT_SRT] ', '').trim();
+                } else if (msg.endsWith('.srt') && !msg.startsWith('Vùng') && !msg.startsWith('💾') && !msg.startsWith('Lỗi') && !msg.includes('\n')) {
+                    generatedSrtPath = msg;
+                }
+            }
+        }
+    }
+
+    if (!generatedSrtPath) {
+        throw new Error(serverErrorMsg || 'Không tạo được file SRT sau khi quét OCR');
+    }
+
+    let subs = [];
+    try {
+        const readRes = await fetch('/api/read_srt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ srt_path: generatedSrtPath })
+        });
+        if (readRes.ok) {
+            const readData = await readRes.json();
+            subs = readData.subtitles || [];
+        }
+    } catch(e) {}
+
+    let normDestSrt = item.videoPath.replace(/\.[^/.]+$/, '_novacut.srt');
+    try {
+        subs = await normalizeAndDedupSubtitles(subs, 0.7);
+        const expRes = await fetch('/api/subtitles/export_temp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_path: item.videoPath,
+                target_srt_path: normDestSrt,
+                replace_original: false,
+                subtitles: subs
+            })
+        });
+        if (expRes.ok) {
+            const ed = await expRes.json();
+            if (ed.srt_path) normDestSrt = ed.srt_path.replace(/\\/g, '/');
+        }
+        item.srtPath = normDestSrt;
+        item.srtName = normDestSrt.split('/').pop();
+    } catch(e) {
+        item.srtPath = generatedSrtPath;
+        item.srtName = generatedSrtPath.split('/').pop();
+    }
+
+    item.subtitles = subs;
+    item.originalSubtitles = subs;
+
+    // Tự động rà soát & bù câu thoại bị sót bằng AI Subtitle Inspector Bot nếu bật
+    const enableInspector = Boolean(document.getElementById('batch_enableSubtitleInspector')?.checked ?? true);
+    if (enableInspector && subs && subs.length > 0) {
+        appendLog(`[${timeNow()}] > 🤖 [Bot Soát Sub AI] Đang đối soát video để bù câu thoại bị sót: ${item.videoName}...`, 'info');
+        try {
+            const speedMode = document.getElementById('batch_inspectorSpeedMode')?.value || 'turbo';
+            const inspResult = await runSubtitleInspectionOnItem(item, speedMode);
+            if (inspResult.success) {
+                subs = inspResult.fixedSubtitles || subs;
+                item.subtitles = subs;
+                item.originalSubtitles = JSON.parse(JSON.stringify(subs));
+                if (inspResult.missingCount > 0 || inspResult.ghostCount > 0) {
+                    appendLog(`[${timeNow()}] > ✨ [Bot Soát Sub AI] Hoàn tất: Tự động bù +${inspResult.missingCount} câu sót, Lọc -${inspResult.ghostCount} câu ảo!`, 'success');
+                } else {
+                    appendLog(`[${timeNow()}] > 💎 [Bot Soát Sub AI] Phụ đề đã khớp 100% với video!`, 'info');
+                }
+            }
+        } catch (inspErr) {
+            appendLog(`[${timeNow()}] > ⚠️ [Bot Soát Sub AI] Bỏ qua cảnh báo đối soát: ${inspErr.message}`, 'warning');
+        }
+    }
+
+    item.status = 'ocr_done';
+    item.progress = 100;
+    return subs;
+}
+
+/**
+ * Chạy trích xuất phụ đề giọng nói ASR Whisper cho 1 video item
+ */
+export async function runAsrScanOnItem(item, signal, onProgress) {
+    if (!item.videoPath) throw new Error('Video không có đường dẫn hợp lệ');
+    const defaultAsr = getBatchAsrConfig();
+    const cfg = item.asrConfig || defaultAsr;
+
+    const baseName = item.videoName ? item.videoName.replace(/\.[^/.]+$/, '') : 'video';
+    const outFilename = `${baseName}_asr_${Date.now()}.srt`;
+
+    const res = await fetch('/api/asr/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            videoPath: item.videoPath,
+            model: cfg.model || 'whisper',
+            language: cfg.language || 'auto',
+            device: cfg.device || 'auto',
+            isolateVocals: Boolean(cfg.isolateVocals),
+            outputDir: 'output',
+            outputFilename: outFilename
+        }),
+        signal: signal
+    });
+
+    if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let generatedSrtPath = '';
+    let serverErrorMsg = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+
+            if (trimmed.startsWith('[PROGRESS]')) {
+                const pct = parseInt(trimmed.replace('[PROGRESS]', '').trim(), 10);
+                if (!isNaN(pct)) {
+                    item.progress = pct;
+                    if (typeof onProgress === 'function') onProgress(pct);
+                }
+            } else if (trimmed.startsWith('[STEP]')) {
+                const stepText = trimmed.replace('[STEP]', '').trim();
+                appendLog(`[${timeNow()}] > 🎙️ [ASR] ${stepText}`, 'info');
+            } else if (trimmed.startsWith('[RESULT]')) {
+                const jsonStr = trimmed.replace('[RESULT]', '').trim();
+                try {
+                    const resultData = JSON.parse(jsonStr);
+                    if (resultData.success) {
+                        generatedSrtPath = resultData.srt_path || '';
+                    } else {
+                        serverErrorMsg = resultData.error || 'Trích xuất ASR thất bại';
+                    }
+                } catch(e) {}
+            }
+        }
+    }
+
+    if (!generatedSrtPath) {
+        throw new Error(serverErrorMsg || 'Không nhận được đường dẫn SRT từ tiến trình ASR Whisper');
+    }
+
+    let subs = [];
+    try {
+        const readRes = await fetch('/api/read_srt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ srt_path: generatedSrtPath })
+        });
+        if (readRes.ok) {
+            const readData = await readRes.json();
+            subs = readData.subtitles || [];
+        }
+    } catch(e) {}
+
+    // Chuẩn hóa và khử trùng lặp
+    subs = await normalizeAndDedupSubtitles(subs, 0.7);
+
+    // Lưu vào _novacut.srt
+    let normDestSrt = item.videoPath.replace(/\.[^/.]+$/, '_novacut.srt');
+    try {
+        const expRes = await fetch('/api/subtitles/export_temp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_path: item.videoPath,
+                target_srt_path: normDestSrt,
+                replace_original: false,
+                subtitles: subs
+            })
+        });
+        if (expRes.ok) {
+            const ed = await expRes.json();
+            if (ed.srt_path) normDestSrt = ed.srt_path.replace(/\\/g, '/');
+        }
+        item.srtPath = normDestSrt;
+        item.srtName = normDestSrt.split('/').pop();
+    } catch(e) {
+        item.srtPath = generatedSrtPath;
+        item.srtName = generatedSrtPath.split('/').pop();
+    }
+
+    item.subtitles = subs;
+    item.originalSubtitles = JSON.parse(JSON.stringify(subs));
+
+    // Tự động rà soát & bù câu thoại bị sót bằng AI Subtitle Inspector Bot nếu bật
+    const enableInspector = Boolean(document.getElementById('batch_enableSubtitleInspector')?.checked ?? true);
+    if (enableInspector && subs && subs.length > 0) {
+        appendLog(`[${timeNow()}] > 🤖 [Bot Soát Sub AI] Đang đối soát video để bù câu thoại bị sót: ${item.videoName}...`, 'info');
+        try {
+            const speedMode = document.getElementById('batch_inspectorSpeedMode')?.value || 'turbo';
+            const inspResult = await runSubtitleInspectionOnItem(item, speedMode);
+            if (inspResult.success) {
+                subs = inspResult.fixedSubtitles || subs;
+                item.subtitles = subs;
+                item.originalSubtitles = JSON.parse(JSON.stringify(subs));
+                if (inspResult.missingCount > 0 || inspResult.ghostCount > 0) {
+                    appendLog(`[${timeNow()}] > ✨ [Bot Soát Sub AI] Hoàn tất: Tự động bù +${inspResult.missingCount} câu sót, Lọc -${inspResult.ghostCount} câu ảo!`, 'success');
+                } else {
+                    appendLog(`[${timeNow()}] > 💎 [Bot Soát Sub AI] Phụ đề đã khớp 100% với video!`, 'info');
+                }
+            }
+        } catch (inspErr) {
+            appendLog(`[${timeNow()}] > ⚠️ [Bot Soát Sub AI] Bỏ qua cảnh báo đối soát: ${inspErr.message}`, 'warning');
+        }
+    }
+
+    item.status = 'asr_done';
+    item.progress = 100;
+    return subs;
 }
 
 /**
@@ -2517,110 +3657,9 @@ export async function startBatchOcrScan() {
         appendLog(`[${timeNow()}] > 🔍 [OCR ${i+1}/${queue.length}] Bắt đầu quét: ${item.videoName}...`, 'info');
 
         try {
-            const defaultRegion = { x: 20, y: 81.5, w: 60, h: 9.5, width: 60, height: 9.5 };
-            const rawRegion = item.ocrRegion || defaultRegion;
-            const region = {
-                x: Number(rawRegion.x ?? 20),
-                y: Number(rawRegion.y ?? 81.5),
-                w: Number(rawRegion.w ?? rawRegion.width ?? 60),
-                h: Number(rawRegion.h ?? rawRegion.height ?? 9.5)
-            };
-            
-            const response = await fetch('/api/ocr_extract', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    video_path: item.videoPath,
-                    region: region,
-                    fps: 2,
-                    threads: 2,
-                    device: 'auto'
-                }),
-                signal: taskAbortController.signal
-            });
-
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                throw new Error(err.error || `HTTP ${response.status}`);
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let generatedSrtPath = '';
-            let serverErrorMsg = '';
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n\n');
-                buffer = lines.pop();
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const msg = line.substring(6).trim();
-                        if (msg.startsWith('Lỗi') || msg.startsWith('🛑') || msg.includes('Error:') || msg.toLowerCase().includes('lỗi')) {
-                            serverErrorMsg = msg;
-                        }
-                        const pctMatch = msg.match(/\[OCR\s+(\d+)%\]/i);
-                        if (pctMatch) {
-                            item.progress = parseInt(pctMatch[1]);
-                            renderBatchTable();
-                        }
-                        if (msg.startsWith('[RESULT_SRT] ')) {
-                            generatedSrtPath = msg.replace('[RESULT_SRT] ', '').trim();
-                        } else if (msg.endsWith('.srt') && !msg.startsWith('Vùng') && !msg.startsWith('💾') && !msg.startsWith('Lỗi') && !msg.includes('\n')) {
-                            generatedSrtPath = msg;
-                        }
-                    }
-                }
-            }
-
-            if (generatedSrtPath) {
-                let subs = [];
-                try {
-                    const readRes = await fetch('/api/read_srt', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ srt_path: generatedSrtPath })
-                    });
-                    if (readRes.ok) {
-                        const readData = await readRes.json();
-                        subs = readData.subtitles || [];
-                    }
-                } catch(e) {}
-
-                // Lưu file SRT vào cùng vị trí của video gốc
-                const normDestSrt = item.videoPath.replace(/\.[^/.]+$/, '.srt');
-                try {
-                    await fetch('/api/subtitles/export_temp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            video_path: item.videoPath,
-                            target_srt_path: normDestSrt,
-                            replace_original: true,
-                            subtitles: subs
-                        })
-                    });
-                    item.srtPath = normDestSrt;
-                    item.srtName = normDestSrt.split('/').pop();
-                } catch(e) {
-                    item.srtPath = generatedSrtPath;
-                    item.srtName = generatedSrtPath.split('/').pop();
-                }
-
-                item.subtitles = subs;
-                item.status = 'ocr_done';
-                item.progress = 100;
-                successCount++;
-                appendLog(`[${timeNow()}] > ✅ [OCR ${i+1}/${queue.length}] Hoàn tất: ${item.videoName} (${subs.length} câu) -> ${item.srtName}`, 'success');
-            } else {
-                throw new Error(serverErrorMsg || 'Không tạo được file SRT sau khi quét OCR');
-            }
-
+            const subs = await runOcrScanOnItem(item, taskAbortController.signal, () => renderBatchTable());
+            successCount++;
+            appendLog(`[${timeNow()}] > ✅ [OCR ${i+1}/${queue.length}] Hoàn tất: ${item.videoName} (${subs.length} câu) -> ${item.srtName}`, 'success');
         } catch (err) {
             if (err.name === 'AbortError') {
                 item.status = 'pending';
@@ -2641,6 +3680,389 @@ export async function startBatchOcrScan() {
     renderBatchTable();
     saveBatchItemsToStorage();
     showToast(`Quét OCR hàng loạt xong: ${successCount} thành công, ${failCount} thất bại!`, successCount > 0 ? 'success' : 'warning');
+}
+
+/**
+ * 1.1. Quét ASR hàng loạt cho các video trong bảng
+ */
+export async function startBatchAsrScan() {
+    if (typeof window.checkFeaturePermission === 'function') {
+        if (!window.checkFeaturePermission('can_access_editor', 'Quét ASR Whisper hàng loạt')) return;
+    }
+
+    const selected = batchEditorItems.filter(i => i.selected);
+    const targetItems = selected.length > 0 ? selected : batchEditorItems;
+    if (targetItems.length === 0) {
+        showToast('Chưa có video nào trong danh sách!', 'warning');
+        return;
+    }
+
+    let queue = targetItems;
+    if (selected.length === 0) {
+        queue = targetItems.filter(i => !i.srtPath && (!i.subtitles || i.subtitles.length === 0));
+        if (queue.length === 0) {
+            const proceed = await showConfirmModal(
+                'Quét lại ASR toàn bộ danh sách?',
+                `Tất cả ${targetItems.length} video đều đã có file SRT.\n\nBạn có muốn quét lại ASR Whisper cho toàn bộ video này không?`
+            );
+            if (!proceed) return;
+            queue = targetItems;
+        }
+    }
+
+    taskAbortController = new AbortController();
+    setBatchTaskUiRunning(true, 'Quét ASR Whisper hàng loạt');
+    appendLog(`[${timeNow()}] > 🎙️ Bắt đầu quét ASR Whisper hàng loạt cho ${queue.length} video...`, 'info');
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < queue.length; i++) {
+        if (taskAbortController.signal.aborted) {
+            appendLog(`[${timeNow()}] > 🛑 Đã dừng quét ASR theo lệnh người dùng.`, 'warning');
+            break;
+        }
+
+        const item = queue[i];
+        item.status = 'processing';
+        item.progress = 0;
+        currentBatchItemIndex = batchEditorItems.indexOf(item);
+        renderBatchTable();
+
+        updateBatchOverallProgress(i, queue.length, `[ASR ${i+1}/${queue.length}] ${item.videoName}`);
+        appendLog(`[${timeNow()}] > 🎙️ [ASR ${i+1}/${queue.length}] Bắt đầu nhận dạng giọng nói: ${item.videoName}...`, 'info');
+
+        try {
+            const subs = await runAsrScanOnItem(item, taskAbortController.signal, () => renderBatchTable());
+            successCount++;
+            appendLog(`[${timeNow()}] > ✅ [ASR ${i+1}/${queue.length}] Hoàn tất: ${item.videoName} (${subs.length} câu) -> ${item.srtName}`, 'success');
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                item.status = 'pending';
+                break;
+            } else {
+                item.status = 'error';
+                item.errorMsg = err.message;
+                failCount++;
+                appendLog(`[${timeNow()}] > ❌ [ASR Lỗi] ${item.videoName}: ${err.message}`, 'error');
+            }
+        }
+
+        renderBatchTable();
+        saveBatchItemsToStorage();
+    }
+
+    setBatchTaskUiRunning(false);
+    renderBatchTable();
+    saveBatchItemsToStorage();
+    showToast(`Quét ASR Whisper hàng loạt xong: ${successCount} thành công, ${failCount} thất bại!`, successCount > 0 ? 'success' : 'warning');
+}
+
+/**
+ * 1.2. Quét phụ đề hàng loạt thông minh: Tự động điều phối theo phương thức đã chọn (OCR hoặc ASR) của từng video
+ */
+export async function startBatchSubtitleScan() {
+    const globalMethod = getBatchExtractMethod();
+    if (typeof window.checkFeaturePermission === 'function') {
+        const featureTitle = (globalMethod === 'asr') ? 'Quét ASR Whisper hàng loạt' : 'Quét OCR hàng loạt';
+        if (!window.checkFeaturePermission('can_access_editor', featureTitle)) return;
+    }
+
+    const selected = batchEditorItems.filter(i => i.selected);
+    const targetItems = selected.length > 0 ? selected : batchEditorItems;
+    if (targetItems.length === 0) {
+        showToast('Chưa có video nào trong danh sách!', 'warning');
+        return;
+    }
+
+    let queue = targetItems;
+    if (selected.length === 0) {
+        queue = targetItems.filter(i => !i.srtPath && (!i.subtitles || i.subtitles.length === 0));
+        if (queue.length === 0) {
+            const proceed = await showConfirmModal(
+                'Quét lại phụ đề toàn bộ danh sách?',
+                `Tất cả ${targetItems.length} video đều đã có file SRT.\n\nBạn có muốn quét lại phụ đề (OCR / ASR) cho toàn bộ video này không?`
+            );
+            if (!proceed) return;
+            queue = targetItems;
+        }
+    }
+
+    taskAbortController = new AbortController();
+    setBatchTaskUiRunning(true, 'Quét phụ đề hàng loạt');
+    appendLog(`[${timeNow()}] > 🚀 Bắt đầu quét phụ đề hàng loạt cho ${queue.length} video...`, 'info');
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < queue.length; i++) {
+        if (taskAbortController.signal.aborted) {
+            appendLog(`[${timeNow()}] > 🛑 Đã dừng quét phụ đề theo lệnh người dùng.`, 'warning');
+            break;
+        }
+
+        const item = queue[i];
+        item.status = 'processing';
+        item.progress = 0;
+        currentBatchItemIndex = batchEditorItems.indexOf(item);
+        renderBatchTable();
+
+        const method = item.extractMethod || globalMethod;
+        const methodTitle = (method === 'asr') ? 'ASR Whisper' : 'OCR Khung hình';
+
+        updateBatchOverallProgress(i, queue.length, `[${methodTitle} ${i+1}/${queue.length}] ${item.videoName}`);
+        appendLog(`[${timeNow()}] > 🎬 [${methodTitle} ${i+1}/${queue.length}] Bắt đầu trích xuất: ${item.videoName}...`, 'info');
+
+        try {
+            if (method === 'asr') {
+                const subs = await runAsrScanOnItem(item, taskAbortController.signal, () => renderBatchTable());
+                successCount++;
+                appendLog(`[${timeNow()}] > ✅ [ASR ${i+1}/${queue.length}] Hoàn tất: ${item.videoName} (${subs.length} câu) -> ${item.srtName}`, 'success');
+            } else {
+                const subs = await runOcrScanOnItem(item, taskAbortController.signal, () => renderBatchTable());
+                successCount++;
+                appendLog(`[${timeNow()}] > ✅ [OCR ${i+1}/${queue.length}] Hoàn tất: ${item.videoName} (${subs.length} câu) -> ${item.srtName}`, 'success');
+            }
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                item.status = 'pending';
+                break;
+            } else {
+                item.status = 'error';
+                item.errorMsg = err.message;
+                failCount++;
+                appendLog(`[${timeNow()}] > ❌ [Trích xuất lỗi] ${item.videoName}: ${err.message}`, 'error');
+            }
+        }
+
+        renderBatchTable();
+        saveBatchItemsToStorage();
+    }
+
+    setBatchTaskUiRunning(false);
+    renderBatchTable();
+    saveBatchItemsToStorage();
+    showToast(`Quét phụ đề hàng loạt xong: ${successCount} thành công, ${failCount} thất bại!`, successCount > 0 ? 'success' : 'warning');
+}
+
+/**
+ * Chạy AI Subtitle Inspector Bot đối soát và tự động bù/sửa phụ đề cho 1 video
+ */
+export async function runSubtitleInspectionOnItem(item, speedMode = 'turbo') {
+    if (!item.videoPath || !item.subtitles || item.subtitles.length === 0) {
+        return { success: false, reason: 'Chưa có video hoặc phụ đề' };
+    }
+
+    const defaultRegion = { x: 20, y: 81.5, w: 60, h: 9.5, width: 60, height: 9.5 };
+    const rawRegion = item.ocrRegion || defaultRegion;
+    const region = {
+        x: Number(rawRegion.x ?? 20),
+        y: Number(rawRegion.y ?? 81.5),
+        w: Number(rawRegion.w ?? rawRegion.width ?? 60),
+        h: Number(rawRegion.h ?? rawRegion.height ?? 9.5)
+    };
+
+    // 1. Gọi inspect đồng bộ
+    const inspectRes = await fetch('/api/subtitles/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            video_path: item.videoPath,
+            subtitles: item.subtitles,
+            ocr_region: region,
+            options: {
+                check_missing: true,
+                check_ghost: true,
+                scan_mode: speedMode
+            }
+        })
+    });
+
+    if (!inspectRes.ok) {
+        const errJson = await inspectRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Lỗi đối soát (HTTP ${inspectRes.status})`);
+    }
+
+    const inspectData = await inspectRes.json();
+    const missing = inspectData.missing_warnings || [];
+    const ghost = inspectData.ghost_warnings || [];
+
+    // Nếu không có câu sót và không có câu ảo -> Giữ nguyên
+    if (missing.length === 0 && ghost.length === 0) {
+        return {
+            success: true,
+            missingCount: 0,
+            ghostCount: 0,
+            fixedSubtitles: item.subtitles
+        };
+    }
+
+    // 2. Tự động áp dụng sửa (bù câu sót, xóa câu ảo)
+    const fixRes = await fetch('/api/subtitles/apply_inspector_fixes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            subtitles: item.subtitles,
+            missing_warnings: missing,
+            ghost_warnings: ghost,
+            remove_ghosts: true,
+            auto_add_missing: true
+        })
+    });
+
+    if (!fixRes.ok) {
+        const errFix = await fixRes.json().catch(() => ({}));
+        throw new Error(errFix.error || 'Lỗi áp dụng bản vá phụ đề');
+    }
+
+    const fixData = await fixRes.json();
+    const fixedSubs = fixData.fixed_subtitles || item.subtitles;
+
+    // Cập nhật lại phụ đề của item
+    item.subtitles = fixedSubs;
+    item.originalSubtitles = JSON.parse(JSON.stringify(fixedSubs));
+
+    // Lưu ra file SRT _novacut.srt
+    let normDestSrt = item.videoPath.replace(/\.[^/.]+$/, '_novacut.srt');
+    try {
+        const expRes = await fetch('/api/subtitles/export_temp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_path: item.videoPath,
+                target_srt_path: normDestSrt,
+                replace_original: false,
+                subtitles: fixedSubs
+            })
+        });
+        if (expRes.ok) {
+            const ed = await expRes.json();
+            if (ed.srt_path) normDestSrt = ed.srt_path.replace(/\\/g, '/');
+        }
+        item.srtPath = normDestSrt;
+        item.srtName = normDestSrt.split('/').pop();
+    } catch(e) {}
+
+    return {
+        success: true,
+        missingCount: missing.length,
+        ghostCount: ghost.length,
+        fixedSubtitles: fixedSubs
+    };
+}
+
+/**
+ * 1.5. Soát & Bù Sub AI hàng loạt cho các video trong bảng
+ */
+export async function startBatchSubtitleInspection() {
+    if (typeof window.checkFeaturePermission === 'function') {
+        if (!window.checkFeaturePermission('can_access_editor', 'Soát & Bù Phụ Đề AI Hàng Loạt')) return;
+    }
+
+    const selected = batchEditorItems.filter(i => i.selected);
+    const targetItems = selected.length > 0 ? selected : batchEditorItems;
+    if (targetItems.length === 0) {
+        showToast('Chưa có video nào trong danh sách!', 'warning');
+        return;
+    }
+
+    // Lọc các video đã có SRT / subtitles
+    const queue = targetItems.filter(i => (i.subtitles && i.subtitles.length > 0) || i.srtPath);
+    if (queue.length === 0) {
+        showToast('Các video đã chọn chưa có phụ đề SRT để đối soát! Vui lòng Quét OCR trước.', 'warning');
+        return;
+    }
+
+    const speedMode = document.getElementById('batch_inspectorSpeedMode')?.value || 'turbo';
+    taskAbortController = new AbortController();
+    setBatchTaskUiRunning(true, 'Soát & Bù Sub AI hàng loạt');
+    appendLog(`[${timeNow()}] > 🤖 Bắt đầu chạy Bot Soát & Bù Sub AI cho ${queue.length} video (Chế độ: ${speedMode})...`, 'info');
+
+    let totalFixed = 0;
+    let totalMissing = 0;
+    let totalGhost = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < queue.length; i++) {
+        if (taskAbortController.signal.aborted) {
+            appendLog(`[${timeNow()}] > 🛑 Đã dừng đối soát theo lệnh người dùng.`, 'warning');
+            break;
+        }
+
+        const item = queue[i];
+        item.status = 'processing';
+        item.progress = 20;
+        currentBatchItemIndex = batchEditorItems.indexOf(item);
+        renderBatchTable();
+
+        updateBatchOverallProgress(i, queue.length, `[Soát AI ${i+1}/${queue.length}] ${item.videoName}`);
+        appendLog(`[${timeNow()}] > 🤖 [Soát AI ${i+1}/${queue.length}] Đang đối soát: ${item.videoName}...`, 'info');
+
+        try {
+            // Nếu chưa load subtitles từ file SRT thì đọc trước
+            if (!item.subtitles || item.subtitles.length === 0) {
+                if (item.srtPath) {
+                    try {
+                        const rRes = await fetch('/api/read_srt', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ srt_path: item.srtPath })
+                        });
+                        if (rRes.ok) {
+                            const rData = await rRes.json();
+                            item.subtitles = rData.subtitles || [];
+                            item.originalSubtitles = JSON.parse(JSON.stringify(item.subtitles));
+                        }
+                    } catch(e) {}
+                }
+            }
+
+            if (!item.subtitles || item.subtitles.length === 0) {
+                throw new Error('Không đọc được nội dung phụ đề SRT');
+            }
+
+            item.progress = 50;
+            renderBatchTable();
+
+            const inspRes = await runSubtitleInspectionOnItem(item, speedMode);
+            if (inspRes.success) {
+                item.status = 'inspected';
+                item.progress = 100;
+                totalFixed++;
+                totalMissing += (inspRes.missingCount || 0);
+                totalGhost += (inspRes.ghostCount || 0);
+
+                if (inspRes.missingCount > 0 || inspRes.ghostCount > 0) {
+                    appendLog(`[${timeNow()}] > ✨ [Soát AI ${i+1}/${queue.length}] ${item.videoName}: Đã bù +${inspRes.missingCount} câu sót, Lọc -${inspRes.ghostCount} câu ảo!`, 'success');
+                } else {
+                    appendLog(`[${timeNow()}] > 💎 [Soát AI ${i+1}/${queue.length}] ${item.videoName}: Phụ đề đã khớp 100% với video!`, 'info');
+                }
+            } else {
+                throw new Error(inspRes.reason || 'Lỗi đối soát phụ đề');
+            }
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                item.status = 'pending';
+                break;
+            } else {
+                item.status = 'error';
+                item.errorMsg = err.message;
+                failCount++;
+                appendLog(`[${timeNow()}] > ❌ [Soát AI Lỗi] ${item.videoName}: ${err.message}`, 'error');
+            }
+        }
+
+        renderBatchTable();
+        saveBatchItemsToStorage();
+    }
+
+    setBatchTaskUiRunning(false);
+    renderBatchTable();
+    saveBatchItemsToStorage();
+
+    const toastMsg = `Đối soát AI hàng loạt hoàn tất! (${totalFixed} video: Bổ sung +${totalMissing} câu sót, Lọc -${totalGhost} câu ảo)`;
+    showToast(toastMsg, totalFixed > 0 ? 'success' : 'warning');
+    appendLog(`[${timeNow()}] > 🏁 ${toastMsg}`, 'success');
 }
 
 /**
@@ -2742,15 +4164,18 @@ export async function startBatchTranslateAndClean() {
                 subs = await executeSubtitlesTranslateBatch(subs, aiChoice, taskAbortController.signal);
             }
 
-            // LƯU FILE SRT MỚI DỊCH VÀO CÙNG VỊ TRÍ CỦA VIDEO / SRT GỐC
-            const destSrtPath = item.srtPath || item.videoPath.replace(/\.[^/.]+$/, '.srt');
+            // Hậu kiểm và khử trùng lặp < 0.7s
+            subs = await normalizeAndDedupSubtitles(subs, 0.7);
+
+            // LƯU FILE SRT MỚI DỊCH VÀO CÙNG VỊ TRÍ CỦA VIDEO / SRT GỐC (KHÔNG GHI ĐÈ SRT NGUỒN)
+            let destSrtPath = item.videoPath.replace(/\.[^/.]+$/, '_novacut.srt');
             const saveRes = await fetch('/api/subtitles/export_temp', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     video_path: item.videoPath,
                     target_srt_path: destSrtPath,
-                    replace_original: true,
+                    replace_original: false,
                     subtitles: subs
                 })
             });
@@ -2758,10 +4183,11 @@ export async function startBatchTranslateAndClean() {
             if (saveRes.ok) {
                 const saveData = await saveRes.json();
                 if (saveData.srt_path) {
-                    item.srtPath = saveData.srt_path.replace(/\\/g, '/');
-                    item.srtName = item.srtPath.split('/').pop();
+                    destSrtPath = saveData.srt_path.replace(/\\/g, '/');
                 }
             }
+            item.srtPath = destSrtPath;
+            item.srtName = destSrtPath.split('/').pop();
 
             item.subtitles = subs;
             item.status = 'translated';
@@ -2807,13 +4233,33 @@ export async function startBatchAllInOnePipeline() {
         return;
     }
 
+    // Lựa chọn quy trình: "Cả Dịch & Làm sạch" hoặc "Nguyên dịch thôi"
+    const promptActionFn = window.promptTranslateCleanAction;
+    const defaultCleanMode = document.getElementById('batch_translationCleanMode')?.value || 'both';
+    let chosenCleanAction = defaultCleanMode;
+    if (typeof promptActionFn === 'function') {
+        const actionResult = await promptActionFn({
+            hideCleanOnly: true,
+            title: 'LỰA CHỌN QUY TRÌNH DỊCH TOÀN TRÌNH',
+            subtitle: 'Chọn "Cả Dịch & Làm Sạch" (khuyên dùng) hoặc "Nguyên Dịch Thôi" (chỉ dịch nguyên câu, bỏ qua bước làm sạch)'
+        });
+        if (!actionResult) return; // Người dùng huỷ / đóng modal
+        chosenCleanAction = actionResult;
+        const modeElem = document.getElementById('batch_translationCleanMode');
+        if (modeElem) modeElem.value = (chosenCleanAction === 'translate' || chosenCleanAction === 'translate_only') ? 'translate_only' : 'both';
+    }
+
+    const isTranslateOnly = (chosenCleanAction === 'translate' || chosenCleanAction === 'translate_only');
+    const modeLabel = isTranslateOnly ? '⚡ Nguyên Dịch Thôi (Bỏ qua làm sạch)' : '✨ Cả Dịch & Làm Sạch (Chuẩn)';
+
     const promptAiFn = window.promptAiExecutionMode;
     const aiChoice = promptAiFn ? await promptAiFn(
         '⚡ Tự Động Toàn Trình (Treo Máy Qua Đêm)',
-        'Hệ thống sẽ tự động quét OCR -> Dịch & Làm sạch SRT -> Xuất video có phụ đề hoàn chỉnh tuần tự cho tất cả video.',
+        `Quy trình: Quét OCR -> Bot Soát Bù Sub AI -> [${modeLabel}] -> Thẩm định -> Lồng tiếng & Xuất video.`,
         { showLanguageOptions: true }
     ) : { engine: 'online' };
     if (!aiChoice) return;
+    aiChoice.clean_mode = isTranslateOnly ? 'translate_only' : 'both';
 
     taskAbortController = new AbortController();
     setBatchTaskUiRunning(true, 'Tự động toàn trình qua đêm');
@@ -2850,148 +4296,144 @@ export async function startBatchAllInOnePipeline() {
         appendLog(`[${timeNow()}] > 🎬 [Video ${i+1}/${targetItems.length}] Xử lý: ${item.videoName}`, 'info');
 
         try {
-            // ── BƯỚC 1: Quét OCR nếu video chưa có SRT hoặc chưa có subtitles ──
-            let hasValidSrt = !!item.srtPath || (item.subtitles && item.subtitles.length > 0);
-            if (!hasValidSrt) {
-                appendLog(`[${timeNow()}] > 🔍 [Bước 1/3] Video chưa có phụ đề, bắt đầu quét OCR tự động...`, 'info');
-                const defaultRegion = { x: 20, y: 81.5, w: 60, h: 9.5, width: 60, height: 9.5 };
-                const rawRegion = item.ocrRegion || defaultRegion;
-                const region = {
-                    x: Number(rawRegion.x ?? 20),
-                    y: Number(rawRegion.y ?? 81.5),
-                    w: Number(rawRegion.w ?? rawRegion.width ?? 60),
-                    h: Number(rawRegion.h ?? rawRegion.height ?? 9.5)
-                };
-                const ocrRes = await fetch('/api/ocr_extract', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        video_path: item.videoPath,
-                        region: region,
-                        fps: 2,
-                        threads: 2,
-                        device: 'auto'
-                    }),
-                    signal: taskAbortController.signal
-                });
-
-                if (!ocrRes.ok) {
-                    const errJson = await ocrRes.json().catch(() => ({}));
-                    throw new Error(errJson.error || `HTTP ${ocrRes.status}`);
-                }
-
-                const reader = ocrRes.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let ocrSrtPath = '';
-                let serverErrorMsg = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n\n');
-                    buffer = lines.pop();
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const msg = line.substring(6).trim();
-                            if (msg.startsWith('Lỗi') || msg.startsWith('🛑') || msg.includes('Error:') || msg.toLowerCase().includes('lỗi')) {
-                                serverErrorMsg = msg;
-                            }
-                            if (msg.startsWith('[RESULT_SRT] ')) {
-                                ocrSrtPath = msg.replace('[RESULT_SRT] ', '').trim();
-                            } else if (msg.endsWith('.srt') && !msg.startsWith('Vùng') && !msg.startsWith('💾') && !msg.startsWith('Lỗi') && !msg.includes('\n')) {
-                                ocrSrtPath = msg;
-                            }
-                        }
-                    }
-                }
-
-                if (ocrSrtPath) {
-                    let subs = [];
-                    try {
-                        const readRes = await fetch('/api/read_srt', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ srt_path: ocrSrtPath })
-                        });
-                        if (readRes.ok) {
-                            const rd = await readRes.json();
-                            subs = rd.subtitles || [];
-                        }
-                    } catch(e) {}
-
-                    const normDest = item.videoPath.replace(/\.[^/.]+$/, '.srt');
-                    await fetch('/api/subtitles/export_temp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            video_path: item.videoPath,
-                            target_srt_path: normDest,
-                            replace_original: true,
-                            subtitles: subs
-                        })
-                    }).catch(() => {});
-
-                    item.srtPath = normDest;
-                    item.srtName = normDest.split('/').pop();
-                    item.subtitles = subs;
-                    appendLog(`[${timeNow()}] > ✅ [Bước 1/3] Quét OCR xong (${subs.length} câu)!`, 'success');
-                } else {
-                    throw new Error(serverErrorMsg || 'Không trích xuất được phụ đề từ OCR');
-                }
-            }
-
-            // ── BƯỚC 2: Kiểm tra & Dịch / Làm sạch phụ đề ──
-            item.progress = 35;
-            renderBatchTable();
-
-            let subsToProcess = item.subtitles;
-            if (!subsToProcess || subsToProcess.length === 0) {
-                if (item.srtPath) {
-                    const rRes = await fetch('/api/read_srt', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ srt_path: item.srtPath })
-                    });
-                    if (rRes.ok) {
-                        const rd = await rRes.json();
-                        subsToProcess = rd.subtitles || [];
-                    }
-                }
-            }
-
-            const check = checkSubtitleNeedsTranslation(subsToProcess);
-            if (check.needsTranslation) {
-                appendLog(`[${timeNow()}] > 🌐 [Bước 2/3] Bắt đầu Dịch thuật phụ đề AI chuẩn Biên Tập Phim (${check.reason})...`, 'info');
-                subsToProcess = await executeSubtitlesTranslateBatch(subsToProcess, aiChoice, taskAbortController.signal);
-
-                const finalSrtPath = item.srtPath || item.videoPath.replace(/\.[^/.]+$/, '.srt');
-                await fetch('/api/subtitles/export_temp', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        video_path: item.videoPath,
-                        target_srt_path: finalSrtPath,
-                        replace_original: true,
-                        subtitles: subsToProcess
-                    })
-                }).catch(() => {});
-
-                item.srtPath = finalSrtPath;
-                item.srtName = finalSrtPath.split('/').pop();
-                item.subtitles = subsToProcess;
-                appendLog(`[${timeNow()}] > ✅ [Bước 2/3] Dịch & Làm sạch hoàn tất!`, 'success');
-            } else {
-                appendLog(`[${timeNow()}] > ℹ️ [Bước 2/3] Phụ đề đã chuẩn, bỏ qua bước dịch.`, 'info');
-            }
-
-            // ── BƯỚC 3: Xuất Video thành phẩm có Sub hoàn chỉnh ──
-            item.progress = 60;
-            renderBatchTable();
-            appendLog(`[${timeNow()}] > 🚀 [Bước 3/3] Đang render xuất video thành phẩm...`, 'info');
-
             const globalConfig = collectBatchGlobalConfig();
+            const freshRun = globalConfig.fresh_run ?? true;
+
+            if (freshRun) {
+                appendLog(`[${timeNow()}] > ⚡ Chế độ Fresh Run kích hoạt: xóa bỏ dữ liệu phụ đề và cache cũ của video này...`, 'info');
+                item.srtPath = null;
+                item.srtName = null;
+                item.subtitles = [];
+                item.originalSubtitles = [];
+            }
+
+            // ── BƯỚC 1: Quét phụ đề tự động (Extract Subtitles - OCR hoặc ASR) ──
+            item.progress = 10;
+            renderBatchTable();
+            let subs = item.subtitles;
+
+            if (freshRun || !subs || subs.length === 0) {
+                const method = item.extractMethod || getBatchExtractMethod();
+                if (method === 'asr') {
+                    appendLog(`[${timeNow()}] > 🎙️ [Bước 1/6] Bắt đầu quét ASR Whisper giọng nói tự động...`, 'info');
+                    subs = await runAsrScanOnItem(item, taskAbortController.signal, () => renderBatchTable());
+                    appendLog(`[${timeNow()}] > ✅ [Bước 1/6] Quét ASR thành công (${subs.length} câu)!`, 'success');
+                } else {
+                    appendLog(`[${timeNow()}] > 🔍 [Bước 1/6] Bắt đầu quét OCR khung hình tự động...`, 'info');
+                    subs = await runOcrScanOnItem(item, taskAbortController.signal, () => renderBatchTable());
+                    appendLog(`[${timeNow()}] > ✅ [Bước 1/6] Quét OCR thành công (${subs.length} câu)!`, 'success');
+                }
+            } else {
+                appendLog(`[${timeNow()}] > ℹ️ [Bước 1/6] Sử dụng phụ đề hiện có (${subs.length} câu).`, 'info');
+            }
+
+            // Lưu phụ đề gốc để dùng cho việc làm mờ (nếu cần)
+            item.originalSubtitles = JSON.parse(JSON.stringify(subs || []));
+
+            // ── BƯỚC 2: Hậu kiểm & Chuẩn hóa / Khử trùng lặp (Normalize & Dedup < 0.7s) ──
+            item.progress = 25;
+            renderBatchTable();
+            appendLog(`[${timeNow()}] > 📏 [Bước 2/6] Chuẩn hóa timestamp & Khử câu trùng dưới 0,7 giây...`, 'info');
+            subs = await normalizeAndDedupSubtitles(subs, 0.7);
+
+            // Lưu bản OCR đã chuẩn hóa vào _novacut.srt (KHÔNG GHI ĐÈ SRT NGUỒN)
+            let ocrNormPath = item.videoPath.replace(/\.[^/.]+$/, '_novacut.srt');
+            await fetch('/api/subtitles/export_temp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_path: item.videoPath,
+                    target_srt_path: ocrNormPath,
+                    replace_original: false,
+                    subtitles: subs
+                })
+            }).catch(() => {});
+            item.srtPath = ocrNormPath;
+            item.srtName = ocrNormPath.split('/').pop();
+            item.subtitles = subs;
+
+            // ── BƯỚC 2.5: Bot Soát & Bổ Sung Sub AI (Giám định 2 chiều) ──
+            const enableInspector = Boolean(document.getElementById('batch_enableSubtitleInspector')?.checked ?? true);
+            if (enableInspector && subs && subs.length > 0) {
+                item.progress = 32;
+                renderBatchTable();
+                appendLog(`[${timeNow()}] > 🤖 [Bước 2.5/6] Bot Soát Sub AI: Đang rà soát video để bù câu thoại bị sót...`, 'info');
+                try {
+                    const speedMode = document.getElementById('batch_inspectorSpeedMode')?.value || 'turbo';
+                    const inspResult = await runSubtitleInspectionOnItem(item, speedMode);
+                    if (inspResult.success) {
+                        subs = inspResult.fixedSubtitles || subs;
+                        item.subtitles = subs;
+                        item.originalSubtitles = JSON.parse(JSON.stringify(subs));
+                        if (inspResult.missingCount > 0 || inspResult.ghostCount > 0) {
+                            appendLog(`[${timeNow()}] > ✨ [Bước 2.5/6] Đã tự động bù +${inspResult.missingCount} câu sót, Lọc -${inspResult.ghostCount} câu ảo!`, 'success');
+                        } else {
+                            appendLog(`[${timeNow()}] > 💎 [Bước 2.5/6] Phụ đề đã khớp 100% với video!`, 'info');
+                        }
+                    }
+                } catch (inspErr) {
+                    appendLog(`[${timeNow()}] > ⚠️ [Bước 2.5/6] Bỏ qua lỗi đối soát: ${inspErr.message}`, 'warning');
+                }
+            }
+
+            // ── BƯỚC 3: Làm sạch phụ đề AI (Clean) ──
+            const cleanMode = (aiChoice && (aiChoice.clean_mode || aiChoice.sub_action)) || globalConfig.translation_clean_mode || 'both';
+            if (cleanMode === 'translate_only' || cleanMode === 'translate') {
+                item.progress = 40;
+                renderBatchTable();
+                appendLog(`[${timeNow()}] > ⚡ [Bước 3/6] Bỏ qua bước làm sạch phụ đề (Chế độ: Nguyên dịch thôi)...`, 'info');
+            } else {
+                item.progress = 40;
+                renderBatchTable();
+                appendLog(`[${timeNow()}] > 🧹 [Bước 3/6] Làm sạch phụ đề AI (Loại bỏ câu rác, ký hiệu thừa, văn cảnh lạ)...`, 'info');
+                subs = await executeSubtitlesCleanBatch(subs, aiChoice, taskAbortController.signal);
+                subs = await normalizeAndDedupSubtitles(subs, 0.7);
+                item.subtitles = subs;
+            }
+
+            // ── BƯỚC 4: Dịch thuật AI chuẩn Biên Tập Phim (Translate) ──
+            item.progress = 55;
+            renderBatchTable();
+            const targetLang = (aiChoice && aiChoice.target_lang) || 'vi';
+            appendLog(`[${timeNow()}] > 🌐 [Bước 4/6] Dịch thuật phụ đề AI sang "${targetLang}" (Engine song song 6 worker)...`, 'info');
+            subs = await executeSubtitlesTranslateBatch(subs, aiChoice, taskAbortController.signal);
+
+            // ── BƯỚC 5: Hậu kiểm deterministic & Thẩm định bắt buộc trước xuất (Validate) ──
+            item.progress = 65;
+            renderBatchTable();
+            appendLog(`[${timeNow()}] > 🛡️ [Bước 5/6] Hậu kiểm deterministic & Thẩm định bản dịch bắt buộc...`, 'info');
+            // Lọc bỏ các câu rác OCR đã bỏ qua trước khi chuẩn hóa và thẩm định
+            subs = subs.filter(s => !s._ocr_garbage_skipped && (s.translation || '').trim() !== '');
+            subs = await normalizeAndDedupSubtitles(subs, 0.7);
+
+            const valResult = validateSubtitlesForExport(subs, targetLang);
+            if (!valResult.isValid) {
+                throw new Error(`Kiểm tra phụ đề sau dịch không đạt yêu cầu xuất video: ${valResult.reason}`);
+            }
+
+            // Lưu file SRT thành phẩm đã dịch hoàn hảo vào _novacut.srt (KHÔNG GHI ĐÈ SRT NGUỒN)
+            const finalTranslatedSrt = item.videoPath.replace(/\.[^/.]+$/, '_novacut.srt');
+            await fetch('/api/subtitles/export_temp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_path: item.videoPath,
+                    target_srt_path: finalTranslatedSrt,
+                    replace_original: false,
+                    subtitles: subs
+                })
+            }).catch(() => {});
+
+            item.srtPath = finalTranslatedSrt;
+            item.srtName = finalTranslatedSrt.split('/').pop();
+            item.subtitles = subs;
+            appendLog(`[${timeNow()}] > ✅ [Bước 5/6] Phụ đề hợp lệ 100%! Đã lưu tại: ${item.srtName}`, 'success');
+
+            // ── BƯỚC 6 & 7: Lồng tiếng TTS & Xuất Video thành phẩm (TTS & Export) ──
+            item.progress = 70;
+            renderBatchTable();
+            appendLog(`[${timeNow()}] > 🚀 [Bước 6-7/6] Tạo giọng TTS & Render xuất video thành phẩm...`, 'info');
+
             const saveToSource = Boolean(document.getElementById('batch_saveToSourceDir')?.checked);
             let outDir = (document.getElementById('batch_outputDir')?.value || 'output/batch_export').trim();
             if (saveToSource && item.videoPath) {
@@ -3000,20 +4442,30 @@ export async function startBatchAllInOnePipeline() {
             }
             const outName = `[Subbed] ${item.videoName.replace(/\.[^/.]+$/, '')}.mp4`;
 
+            const subtitlesEnabled = Boolean(globalConfig.subtitles_enabled);
             const itemOverrides = {
                 ...globalConfig,
+                target_lang: targetLang,
                 source_tool: 'batch_editor',
                 inputVideo: item.videoPath,
                 outputDir: outDir,
                 save_to_source_dir: saveToSource,
                 outputName: outName,
-                manualSrt: item.srtPath || '',
-                subtitles: (item.subtitles && item.subtitles.length > 0) ? item.subtitles : undefined,
+                fresh_run: freshRun,
+                use_cache: !freshRun,
+                subtitles_enabled: subtitlesEnabled,
+                // Khi subtitles_enabled=false, tuyệt đối không burn-in
+                manualSrt: subtitlesEnabled ? (item.srtPath || '') : '',
+                subtitles: subtitlesEnabled ? (subs && subs.length > 0 ? subs : undefined) : undefined,
+                subtitles_for_dubbing: (subs && subs.length > 0) ? subs : undefined,
+                original_subtitles_for_blur: item.originalSubtitles || subs,
                 ocr_region: item.ocrRegion,
                 custom_overlay_layers: (Array.isArray(window.batchCustomOverlayLayers) && window.batchCustomOverlayLayers.length > 0)
                     ? window.batchCustomOverlayLayers.filter(l => l.visible !== false)
                     : (globalConfig.custom_overlay_layers || [])
             };
+
+            console.log(`[All-In-One] Gửi payload xuất video (subtitles_enabled=${itemOverrides.subtitles_enabled}, fresh_run=${itemOverrides.fresh_run}):`, itemOverrides);
 
             const payload = (typeof window.buildEditorExportConfig === 'function')
                 ? window.buildEditorExportConfig(itemOverrides)
@@ -3153,6 +4605,8 @@ export async function stopCurrentBatchTask() {
     if (taskAbortController) {
         taskAbortController.abort();
     }
+    // Dừng tiến trình ASR nếu đang chạy ngầm
+    fetch('/api/asr/stop', { method: 'POST' }).catch(() => {});
     if (isBatchRunning) {
         await stopBatchExport();
     }

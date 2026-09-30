@@ -206,9 +206,10 @@ class DouyinBrowserDownloader:
     def open_login_window(self):
         """
         Mở cửa sổ trình duyệt Edge/Chromium (headless=False) để người dùng quét QR / đăng nhập Douyin 1 lần duy nhất.
-        Phiên đăng nhập và Cookie sẽ được lưu vĩnh viễn trong thư mục temp/douyin_browser_profile.
+        Phiên đăng nhập và Cookie sẽ được lưu vĩnh viễn trong thư mục temp/douyin_browser_profile và douyin_cookie.txt.
         """
         from playwright.sync_api import sync_playwright
+        import douyin_cookie_manager
         with sync_playwright() as p:
             try:
                 context = p.chromium.launch_persistent_context(
@@ -227,15 +228,31 @@ class DouyinBrowserDownloader:
                     user_agent=DEFAULT_USER_AGENT,
                     args=["--disable-blink-features=AutomationControlled"]
                 )
+
+            # Nạp cookie đã có nếu có
+            try:
+                c_list = douyin_cookie_manager.get_douyin_cookie_list_for_playwright()
+                if c_list:
+                    context.add_cookies(c_list)
+            except Exception:
+                pass
+
             page = context.pages[0] if context.pages else context.new_page()
             page.goto("https://www.douyin.com/", wait_until="domcontentloaded")
             
             # Giữ cửa sổ mở để người dùng đăng nhập
-            for _ in range(120):
+            for _ in range(180):
                 if context.pages:
                     time.sleep(1)
                 else:
                     break
+
+            # Tự động xuất cookie sang douyin_cookie.txt
+            try:
+                douyin_cookie_manager.extract_and_save_cookies_from_playwright_context(context)
+            except Exception:
+                pass
+
             try:
                 context.close()
             except Exception:
@@ -310,15 +327,21 @@ class DouyinBrowserDownloader:
                 except Exception as e:
                     raise Exception(f"Không thể khởi tạo luồng phân tích dữ liệu: {str(e)}")
 
-            # Kiểm tra và nạp sẵn ttwid nếu trình duyệt chưa có cookie
+            # Nạp cookie Douyin nếu người dùng đã lưu hoặc đăng nhập
             try:
-                existing_cookies = context.cookies()
-                if not any(c.get('name') == 'ttwid' for c in existing_cookies):
-                    s = requests.Session()
-                    s.get("https://live.douyin.com/1", headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=6)
-                    tw = s.cookies.get("ttwid")
-                    if tw:
-                        context.add_cookies([{"name": "ttwid", "value": tw, "domain": ".douyin.com", "path": "/"}])
+                import douyin_cookie_manager
+                custom_cookies = douyin_cookie_manager.get_douyin_cookie_list_for_playwright()
+                if custom_cookies:
+                    context.add_cookies(custom_cookies)
+                else:
+                    # Kiểm tra và nạp sẵn ttwid nếu trình duyệt chưa có cookie
+                    existing_cookies = context.cookies()
+                    if not any(c.get('name') == 'ttwid' for c in existing_cookies):
+                        s = requests.Session()
+                        s.get("https://live.douyin.com/1", headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=6)
+                        tw = s.cookies.get("ttwid")
+                        if tw:
+                            context.add_cookies([{"name": "ttwid", "value": tw, "domain": ".douyin.com", "path": "/"}])
             except Exception:
                 pass
 
@@ -544,35 +567,67 @@ class DouyinBrowserDownloader:
 
                 if len(collected_videos) == prev_len:
                     no_new_count += 1
-                    if no_new_count >= 2:
-                        # Cuộn ngược nhẹ rồi cuộn mạnh xuống đáy để ép Douyin kích hoạt Infinite Pagination
+                    # Cuộn ngược nhẹ rồi cuộn mạnh xuống đáy để ép Douyin kích hoạt Infinite Pagination
+                    try:
+                        page.evaluate("""() => {
+                            const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
+                            containers.forEach(c => {
+                                c.scrollTop -= 1000;
+                                c.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            });
+                            window.scrollBy(0, -1000);
+                        }""")
+                        time.sleep(0.3)
+                        page.evaluate("""() => {
+                            const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
+                            containers.forEach(c => {
+                                c.scrollTop = c.scrollHeight;
+                                c.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            });
+                            window.scrollTo(0, document.body.scrollHeight);
+                            window.dispatchEvent(new Event('scroll', { bubbles: true }));
+                        }""")
+                        page.mouse.click(640, 500)
+                        page.mouse.wheel(0, 4500)
+                        page.keyboard.press("End")
+                        time.sleep(0.8)
+                    except Exception:
+                        pass
+
+                    # HYBRID ENGINE: Nếu cuộn không ra video mới mà có URL Post API trước đó, tự fetch trực tiếp từ browser context
+                    if pagination_state.get("last_url") and pagination_state.get("has_more") and pagination_state.get("max_cursor"):
                         try:
-                            page.evaluate("""() => {
-                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
-                                containers.forEach(c => {
-                                    c.scrollTop -= 1000;
-                                    c.dispatchEvent(new Event('scroll', { bubbles: true }));
-                                });
-                                window.scrollBy(0, -1000);
-                            }""")
-                            time.sleep(0.4)
-                            page.evaluate("""() => {
-                                const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
-                                containers.forEach(c => {
-                                    c.scrollTop = c.scrollHeight;
-                                    c.dispatchEvent(new Event('scroll', { bubbles: true }));
-                                });
-                                window.scrollTo(0, document.body.scrollHeight);
-                                window.dispatchEvent(new Event('scroll', { bubbles: true }));
-                            }""")
-                            page.mouse.click(640, 500)
-                            page.mouse.wheel(0, 4500)
-                            page.keyboard.press("End")
-                            time.sleep(1.2)
+                            next_cursor = pagination_state["max_cursor"]
+                            last_u = pagination_state["last_url"]
+                            import re as _re
+                            next_url = _re.sub(r'max_cursor=\d+', f'max_cursor={next_cursor}', last_u)
+                            if 'max_cursor=' not in next_url:
+                                next_url += f"&max_cursor={next_cursor}"
+
+                            post_json = page.evaluate(f"""async () => {{
+                                try {{
+                                    const res = await window.fetch({json.dumps(next_url)});
+                                    return await res.json();
+                                }} catch(e) {{ return null; }}
+                            }}""")
+                            if post_json and isinstance(post_json, dict):
+                                aweme_list = post_json.get("aweme_list") or []
+                                if aweme_list:
+                                    pagination_state["max_cursor"] = post_json.get("max_cursor", 0)
+                                    pagination_state["has_more"] = post_json.get("has_more", 0)
+                                    added = process_aweme_list(aweme_list)
+                                    if added > 0:
+                                        no_new_count = 0
+                                        prev_len = len(collected_videos)
                         except Exception:
                             pass
-                        if len(collected_videos) == prev_len and no_new_count >= 5:
-                            break
+
+                    # Nếu pagination_state báo đã hết video (has_more == 0) -> Dừng sớm
+                    if pagination_state.get("has_more") == 0 and len(collected_videos) > 0:
+                        break
+
+                    if len(collected_videos) == prev_len and no_new_count >= 8:
+                        break
                 else:
                     no_new_count = 0
                     prev_len = len(collected_videos)
@@ -691,6 +746,15 @@ class DouyinBrowserDownloader:
                     user_agent=DEFAULT_USER_AGENT,
                     args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
                 )
+
+            # Nạp cookie Douyin nếu có
+            try:
+                import douyin_cookie_manager
+                custom_cookies = douyin_cookie_manager.get_douyin_cookie_list_for_playwright()
+                if custom_cookies:
+                    context.add_cookies(custom_cookies)
+            except Exception:
+                pass
 
             page = context.pages[0] if context.pages else context.new_page()
 
@@ -830,6 +894,13 @@ class DouyinBrowserDownloader:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Referer": "https://www.douyin.com/"
             }
+            try:
+                import douyin_cookie_manager
+                user_c = douyin_cookie_manager.get_douyin_custom_cookie()
+                if user_c:
+                    headers["Cookie"] = user_c
+            except Exception:
+                pass
             res = requests.get(target_url, headers=headers, timeout=8)
             if res.status_code == 200 and ("__UNIVERSAL_DATA_FOR_REHYDRATION__" in res.text or "RENDER_DATA" in res.text):
                 import downloader
@@ -874,6 +945,15 @@ class DouyinBrowserDownloader:
             )
             page = context.pages[0] if context.pages else context.new_page()
 
+            # Nạp cookie Douyin nếu có
+            try:
+                import douyin_cookie_manager
+                custom_cookies = douyin_cookie_manager.get_douyin_cookie_list_for_playwright()
+                if custom_cookies:
+                    context.add_cookies(custom_cookies)
+            except Exception:
+                pass
+
             def block_heavy_assets(route):
                 req = route.request
                 rtype = req.resource_type
@@ -894,12 +974,14 @@ class DouyinBrowserDownloader:
                                 if str(itm.get("aweme_id") or "") == str(vid):
                                     aweme_detail = itm
                                     break
-                            if not aweme_detail and j.get("aweme_list"):
+                            if not aweme_detail and not vid and j.get("aweme_list"):
                                 aweme_detail = j["aweme_list"][0]
 
                         if aweme_detail:
-                            import downloader
-                            variants = downloader.resolve_douyin_variants(aweme_detail, aweme_id=vid)
+                            aw_id = str(aweme_detail.get("aweme_id") or "")
+                            if not vid or aw_id == str(vid):
+                                import downloader
+                                variants = downloader.resolve_douyin_variants(aweme_detail, aweme_id=vid)
                             v_obj = aweme_detail.get("video") or {}
                             if variants:
                                 best = variants[0]
@@ -991,6 +1073,40 @@ def reset_batch_cancel_event():
     BATCH_CANCEL_EVENT.clear()
 
 
+def sort_videos_chronological(videos, order="oldest_first"):
+    """
+    Sắp xếp danh sách video Douyin theo thời gian đăng bài / số tập:
+    - 'oldest_first': Video đăng lâu nhất lên đầu (#1), video mới nhất ở cuối cùng (số lớn nhất).
+    - 'newest_first': Video mới nhất lên đầu (#1), video cũ nhất ở cuối cùng.
+    """
+    if not videos or not isinstance(videos, list):
+        return videos
+
+    def get_sort_key(v):
+        if not isinstance(v, dict):
+            return (2, 0)
+        # 1. Ưu tiên mix_order (số tập 1, 2, 3...)
+        m_ord = v.get("mix_order")
+        if m_ord is not None:
+            try:
+                return (0, int(m_ord))
+            except (ValueError, TypeError):
+                pass
+        # 2. Ưu tiên create_time (unix timestamp)
+        ct = v.get("create_time")
+        if ct is not None:
+            try:
+                val = int(ct)
+                if val > 0:
+                    return (1, val)
+            except (ValueError, TypeError):
+                pass
+        return (2, 0)
+
+    reverse = (order == "newest_first")
+    return sorted(videos, key=get_sort_key, reverse=reverse)
+
+
 def download_channel_batch(video_list, output_dir=None, channel_name=None, max_workers=3, connections_per_file=2, prefix_index=True, auto_merge=False, merge_mode="auto", progress_cb=None):
     """
     Tải hàng loạt danh sách video Douyin qua ThreadPoolExecutor với GlobalConnectionPool,
@@ -1030,7 +1146,7 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
     total_count = len(video_list)
     results = []
     completed_count = 0
-    lock = threading.Lock()
+    lock = threading.RLock()
 
     def save_batch_manifest():
         with lock:
@@ -1048,98 +1164,101 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
         vid_id = str(video_info.get("aweme_id") or f"vid_{idx}")
         title = video_info.get("title") or video_info.get("clean_title") or f"video_{vid_id}"
 
-        # Kiểm tra manifest đã thành công chưa
-        if vid_id in manifest["items"] and manifest["items"][vid_id].get("status") == "success":
-            saved_f = manifest["items"][vid_id].get("file_path")
-            if saved_f and os.path.exists(saved_f) and os.path.getsize(saved_f) > 100000:
+        try:
+            # Kiểm tra manifest đã thành công chưa
+            if vid_id in manifest["items"] and manifest["items"][vid_id].get("status") == "success":
+                saved_f = manifest["items"][vid_id].get("file_path")
+                if isinstance(saved_f, (list, tuple)):
+                    saved_f = saved_f[0] if saved_f else ""
+                if saved_f and os.path.exists(saved_f) and os.path.getsize(saved_f) > 100000:
+                    with lock:
+                        completed_count += 1
+                        if progress_cb:
+                            progress_cb(completed_count, total_count, video_info, saved_f, "existed")
+                    return saved_f
+
+            # 1. Nếu là Album Ảnh / Slide Photo Note
+            if video_info.get("is_images") and video_info.get("image_urls"):
+                prefix_str = f"{idx+1:03d}_" if prefix_index else ""
+                album_dir_name = f"{prefix_str}{downloader.sanitize_filename_windows(title, max_len=60)}_Album"
+                album_path = os.path.join(output_dir, album_dir_name)
+                os.makedirs(album_path, exist_ok=True)
+                
+                img_urls = video_info.get("image_urls") or []
+                saved_images = []
+                for img_idx, img_u in enumerate(img_urls):
+                    if BATCH_CANCEL_EVENT.is_set():
+                        break
+                    img_file_path = os.path.join(album_path, f"photo_{img_idx+1:02d}.jpg")
+                    if not os.path.exists(img_file_path):
+                        try:
+                            r = requests.get(img_u, headers={"User-Agent": DEFAULT_USER_AGENT, "Referer": "https://www.douyin.com/"}, timeout=12)
+                            if r.status_code == 200:
+                                with open(img_file_path, 'wb') as im_f:
+                                    im_f.write(r.content)
+                                saved_images.append(img_file_path)
+                        except Exception:
+                            pass
+                    else:
+                        saved_images.append(img_file_path)
+
                 with lock:
                     completed_count += 1
+                    manifest["items"][vid_id] = {
+                        "status": "success",
+                        "file_path": album_path,
+                        "type": "album",
+                        "title": title
+                    }
+                    save_batch_manifest()
                     if progress_cb:
-                        progress_cb(completed_count, total_count, video_info, saved_f, "existed")
-                return saved_f
+                        progress_cb(completed_count, total_count, video_info, album_path, "album_success")
+                return album_path
 
-        # 1. Nếu là Album Ảnh / Slide Photo Note
-        if video_info.get("is_images") and video_info.get("image_urls"):
-            prefix_str = f"{idx+1:03d}_" if prefix_index else ""
-            album_dir_name = f"{prefix_str}{downloader.sanitize_filename_windows(title, max_len=60)}_Album"
-            album_path = os.path.join(output_dir, album_dir_name)
-            os.makedirs(album_path, exist_ok=True)
-            
-            img_urls = video_info.get("image_urls") or []
-            saved_images = []
-            for img_idx, img_u in enumerate(img_urls):
-                if BATCH_CANCEL_EVENT.is_set():
-                    break
-                img_file_path = os.path.join(album_path, f"photo_{img_idx+1:02d}.jpg")
-                if not os.path.exists(img_file_path):
-                    try:
-                        r = requests.get(img_u, headers={"User-Agent": DEFAULT_USER_AGENT, "Referer": "https://www.douyin.com/"}, timeout=12)
-                        if r.status_code == 200:
-                            with open(img_file_path, 'wb') as im_f:
-                                im_f.write(r.content)
-                            saved_images.append(img_file_path)
-                    except Exception:
-                        pass
-                else:
-                    saved_images.append(img_file_path)
+            # 2. Nếu là Video MP4
+            prefix = (idx + 1) if prefix_index else None
+            file_path_res = downloader.resolve_unique_filename(output_dir, title, ext='mp4', prefix_index=prefix)
+            file_path = file_path_res[0] if isinstance(file_path_res, (list, tuple)) else file_path_res
 
-            with lock:
-                completed_count += 1
-                manifest["items"][vid_id] = {
-                    "status": "success",
-                    "file_path": album_path,
-                    "type": "album",
-                    "title": title
-                }
-                save_batch_manifest()
-                if progress_cb:
-                    progress_cb(completed_count, total_count, video_info, album_path, "album_success")
-            return album_path
+            # Tránh tải lại nếu file đã tồn tại và đủ dung lượng
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 100000:
+                with lock:
+                    completed_count += 1
+                    manifest["items"][vid_id] = {
+                        "status": "success",
+                        "file_path": file_path,
+                        "type": "video",
+                        "title": title
+                    }
+                    save_batch_manifest()
+                    if progress_cb:
+                        progress_cb(completed_count, total_count, video_info, file_path, "existed")
+                return file_path
 
-        # 2. Nếu là Video MP4
-        prefix = (idx + 1) if prefix_index else None
-        file_path = downloader.resolve_unique_filename(output_dir, title, ext='mp4', prefix_index=prefix)
+            # Lấy URL tải trực tiếp
+            dl_url = video_info.get("download_url")
+            backup_urls = video_info.get("backup_urls", [])
+            if not dl_url:
+                try:
+                    crawler = DouyinBrowserDownloader()
+                    single_info = crawler.get_single_video_info(video_info.get("url") or vid_id)
+                    dl_url = single_info.get("download_url")
+                    backup_urls = single_info.get("backup_urls", [])
+                except Exception:
+                    pass
 
-        # Tránh tải lại nếu file đã tồn tại và đủ dung lượng
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 100000:
-            with lock:
-                completed_count += 1
-                manifest["items"][vid_id] = {
-                    "status": "success",
-                    "file_path": file_path,
-                    "type": "video",
-                    "title": title
-                }
-                save_batch_manifest()
-                if progress_cb:
-                    progress_cb(completed_count, total_count, video_info, file_path, "existed")
-            return file_path
+            if not dl_url or BATCH_CANCEL_EVENT.is_set():
+                with lock:
+                    manifest["items"][vid_id] = {
+                        "status": "failed",
+                        "error": "No download URL found",
+                        "title": title
+                    }
+                    save_batch_manifest()
+                return None
 
-        # Lấy URL tải trực tiếp
-        dl_url = video_info.get("download_url")
-        backup_urls = video_info.get("backup_urls", [])
-        if not dl_url:
-            try:
-                crawler = DouyinBrowserDownloader()
-                single_info = crawler.get_single_video_info(video_info.get("url") or vid_id)
-                dl_url = single_info.get("download_url")
-                backup_urls = single_info.get("backup_urls", [])
-            except Exception:
-                pass
-
-        if not dl_url or BATCH_CANCEL_EVENT.is_set():
-            with lock:
-                manifest["items"][vid_id] = {
-                    "status": "failed",
-                    "error": "No download URL found",
-                    "title": title
-                }
-                save_batch_manifest()
-            return None
-
-        # Tải stream video với ResumableRangeDownloader
-        time.sleep(random.uniform(0.1, 0.4))
-        try:
+            # Tải stream video với ResumableRangeDownloader
+            time.sleep(random.uniform(0.1, 0.4))
             download_stream_file(
                 video_url=dl_url,
                 output_path=file_path,
@@ -1186,9 +1305,12 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
             if BATCH_CANCEL_EVENT.is_set():
                 executor.shutdown(wait=False, cancel_futures=True)
                 break
-            res = f.result()
-            if res:
-                results.append(res)
+            try:
+                res = f.result()
+                if res:
+                    results.append(res)
+            except Exception:
+                pass
 
     # Tự động gộp tập nếu auto_merge=True
     merged_result_file = None

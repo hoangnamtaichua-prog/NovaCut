@@ -34,6 +34,7 @@ def test_logo_watermark_filter_construction():
     inputs = ['-i', 'test_video.mp4']
     v_filters = []
     curr_v = "0:v"
+    cur_out_w, cur_out_h = 1920, 1080
     
     if logo_enabled and logo_path and os.path.exists(logo_path):
         logo_input_idx = len(inputs) // 2
@@ -45,25 +46,28 @@ def test_logo_watermark_filter_construction():
         h_pct = max(1.0, min(100.0, float(logo_data.get('h_pct', 12.0))))
         opacity = max(0.05, min(1.0, float(logo_data.get('opacity', 100.0)) / 100.0))
 
-        v_filters.append(f"[{logo_input_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f}[logo_alpha]")
-        v_filters.append(f"[logo_alpha][{curr_v}]scale2ref=w='main_w*{w_pct/100:.4f}':h='main_h*{h_pct/100:.4f}':force_original_aspect_ratio=decrease[logo_scaled][v_ref]")
-        v_filters.append(f"[v_ref][logo_scaled]overlay=x='main_w*{x_pct/100:.4f}':y='main_h*{y_pct/100:.4f}'[v_logo]")
+        box_w = max(2, int(round((cur_out_w * w_pct / 100.0) / 2.0) * 2))
+        box_h = max(2, int(round((cur_out_h * h_pct / 100.0) / 2.0) * 2))
+        box_x = int(round(cur_out_w * x_pct / 100.0))
+        box_y = int(round(cur_out_h * y_pct / 100.0))
+
+        v_filters.append(f"[{logo_input_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f},scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2[logo_ready]")
+        v_filters.append(f"[{curr_v}][logo_ready]overlay=x='{box_x}+({box_w}-overlay_w)/2':y='{box_y}+({box_h}-overlay_h)/2'[v_logo]")
         curr_v = "v_logo"
     
     # Assertions
     assert len(inputs) == 4, f"Expected 4 items in inputs (2 pairs of -i <file>), got: {inputs}"
     assert inputs[2] == '-i' and inputs[3] == os.path.abspath(__file__)
-    assert len(v_filters) == 3, f"Expected 3 video filters for logo, got: {v_filters}"
-    assert "[1:v]format=rgba,colorchannelmixer=aa=0.85[logo_alpha]" in v_filters[0]
-    assert "[logo_alpha][0:v]scale2ref=w='main_w*0.2500':h='main_h*0.1000':force_original_aspect_ratio=decrease[logo_scaled][v_ref]" in v_filters[1]
-    assert "[v_ref][logo_scaled]overlay=x='main_w*0.1050':y='main_h*0.1520'[v_logo]" in v_filters[2]
+    assert len(v_filters) == 2, f"Expected 2 video filters for logo, got: {v_filters}"
+    assert "[1:v]format=rgba,colorchannelmixer=aa=0.85,scale=w=480:h=108:force_original_aspect_ratio=decrease:force_divisible_by=2[logo_ready]" in v_filters[0]
+    assert "[0:v][logo_ready]overlay=x='202+(480-overlay_w)/2':y='164+(108-overlay_h)/2'[v_logo]" in v_filters[1]
     assert curr_v == "v_logo"
     
     print("  -> Generated Filter 0:", v_filters[0])
     print("  -> Generated Filter 1:", v_filters[1])
-    print("  -> Generated Filter 2:", v_filters[2])
     print("  -> Inputs:", inputs)
     print("✅ Test Logo Watermark Filter Logic: PASS 100%!")
 
 if __name__ == '__main__':
     test_logo_watermark_filter_construction()
+

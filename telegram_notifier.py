@@ -113,7 +113,6 @@ def format_duration(seconds: float) -> str:
 
 DEFAULT_BOT_TOKEN = "8690443600:AAEB7E0lTZfREZ32PDUmlqlT9rCxrHAJeWc"
 DEFAULT_BOT_USERNAME = "ai_movie_notice_bot"
-DEV_LEGACY_CHAT_ID = "5011367599"
 
 
 class TelegramNotifier:
@@ -158,12 +157,13 @@ class TelegramNotifier:
                             data = json.load(f)
                             self.enabled = bool(data.get("enabled", False))
                             saved_tok = str(data.get("bot_token", "")).strip()
-                            self.bot_token = saved_tok if (saved_tok and len(saved_tok) > 10) else DEFAULT_BOT_TOKEN
+                            # Khôi phục DEFAULT_BOT_TOKEN nếu token bị nhiễm mock test hoặc rỗng
+                            if not saved_tok or saved_tok.startswith("1234567890:") or len(saved_tok) < 15:
+                                self.bot_token = DEFAULT_BOT_TOKEN
+                            else:
+                                self.bot_token = saved_tok
 
                             saved_chat_id = str(data.get("chat_id", "")).strip()
-                            # Loại bỏ hoàn toàn chat_id dev cũ 5011367599
-                            if saved_chat_id == DEV_LEGACY_CHAT_ID:
-                                saved_chat_id = ""
                             self.chat_id = saved_chat_id
 
                             self.notify_per_video = bool(data.get("notify_per_video", True))
@@ -172,7 +172,7 @@ class TelegramNotifier:
                             if isinstance(raw_users, dict):
                                 self.users = {
                                     k: v for k, v in raw_users.items()
-                                    if isinstance(v, dict) and str(v.get("chat_id", "")).strip() != DEV_LEGACY_CHAT_ID
+                                    if isinstance(v, dict)
                                 }
                             loaded = True
                             break
@@ -185,7 +185,7 @@ class TelegramNotifier:
                 self.bot_token = env_token
 
             env_chat_id = os.environ.get("NOVACUT_TELEGRAM_CHAT_ID", "").strip()
-            if env_chat_id and env_chat_id != DEV_LEGACY_CHAT_ID:
+            if env_chat_id:
                 self.chat_id = env_chat_id
 
             env_enabled = os.environ.get("NOVACUT_TELEGRAM_ENABLED", "").strip().lower()
@@ -217,10 +217,7 @@ class TelegramNotifier:
                     self.bot_token = clean_token
 
             if chat_id is not None:
-                clean_chat = str(chat_id).strip()
-                if clean_chat == DEV_LEGACY_CHAT_ID:
-                    clean_chat = ""
-                self.chat_id = clean_chat
+                self.chat_id = str(chat_id).strip()
 
             if notify_per_video is not None:
                 self.notify_per_video = bool(notify_per_video)
@@ -541,8 +538,8 @@ class TelegramNotifier:
         matched_chat = None
         fallback_chat = None
 
-        # Ngưỡng thời gian nhận tin nhắn (nới lỏng tới 15 phút trước để không bị lệch múi giờ hoặc user nhắn trước)
-        time_threshold = min(session_created - 120, now - 900)
+        # Cho phép nhận diện tin nhắn trong vòng 24 giờ gần nhất để người dùng nhắn trước hoặc lệch múi giờ vẫn nhận được
+        time_threshold = now - 86400
 
         # Duyệt updates từ mới nhất về cũ nhất
         for upd in reversed(updates):
@@ -553,14 +550,13 @@ class TelegramNotifier:
             msg_text = (msg.get("text") or "").strip()
             msg_date = msg.get("date", 0)
 
-            # Chỉ xét các tin nhắn trong vòng 15 phút gần nhất
-            if msg_date < time_threshold:
-                continue
-
             chat = msg.get("chat", {})
             chat_id = str(chat.get("id", ""))
             chat_type = chat.get("type", "private")
-            chat_title = chat.get("title") or chat.get("first_name") or chat.get("username") or "Telegram User"
+            from_user = msg.get("from", {})
+            username = from_user.get("username") or chat.get("username") or ""
+            raw_title = chat.get("title") or chat.get("first_name") or from_user.get("first_name") or "Telegram User"
+            chat_title = f"{raw_title} (@{username})" if username else raw_title
             is_group = chat_type in ("group", "supergroup", "channel")
 
             chat_candidate = {
@@ -582,8 +578,8 @@ class TelegramNotifier:
                 matched_chat = chat_candidate
                 break
 
-            # 2. Lưu lại ứng viên fallback (tin nhắn /start hoặc bất kỳ tin nhắn nào gần nhất gửi cho bot)
-            if fallback_chat is None:
+            # 2. Lưu lại ứng viên fallback (tin nhắn /start hoặc bất kỳ tin nhắn nào trong vòng 24h gửi cho bot)
+            if msg_date >= time_threshold and fallback_chat is None:
                 if text_upper.startswith("/START") or text_upper.startswith("/NOVACUT") or msg_text:
                     fallback_chat = chat_candidate
 
@@ -968,8 +964,10 @@ class TelegramNotifier:
         extra_info: Optional[dict] = None,
         task_id: str = "",
         user_id: Optional[str] = None,
+        status_text: str = "Hoàn tất thành công 100%",
+        item_label: str = "",
     ) -> bool:
-        """Gửi thông báo Telegram khi một tác vụ đơn lẻ (Biên tập phim, Review Phim, Narration...) hoàn thành."""
+        """Gửi thông báo Telegram khi một tác vụ (Tải video, Biên tập, ASR, TTS, CapCut, Social...) hoàn thành."""
         if not self.enabled or not self.notify_per_video:
             return False
 
@@ -977,30 +975,47 @@ class TelegramNotifier:
             'editor': ('🎬', 'Biên Tập Phim'),
             'review': ('🍿', 'Review Phim AI'),
             'narration': ('🎙️', 'Kể Lại Phim (Narration)'),
-            'comic': ('📖', 'Review Truyện Tranh'),
+            'comic': ('📖', 'Review Truyện Tranh AI'),
             'batch': ('📦', 'Video Hàng Loạt'),
+            'download': ('⬇️', 'Tải Video'),
+            'download_batch': ('📥', 'Tải Video Hàng Chờ'),
+            'tts': ('🔊', 'Tạo Giọng Đọc AI (TTS)'),
+            'asr': ('📝', 'Trích Xuất Phụ Đề ASR'),
+            'ocr': ('🔍', 'Trích Xuất Phụ Đề OCR'),
+            'subtitle': ('🌐', 'Phụ Đề & Dịch Thuật AI'),
+            'audio': ('🎵', 'Tách Âm Thanh AI'),
+            'clone_voice': ('🧬', 'Clone Voice Studio'),
+            'capcut': ('✂️', 'Đồng Bộ CapCut PC'),
+            'social': ('🚀', 'Đăng Video Mạng Xã Hội'),
+            'general': ('⚡', 'Tiến Trình Hệ Thống'),
         }
-        icon, default_header = type_headers.get(task_type, ('🎬', 'Tác Vụ Video'))
+        icon, default_header = type_headers.get(task_type, ('🎬', 'Tiến Trình Hoàn Tất'))
         display_header = task_title or default_header
 
-        safe_title = html.escape(video_title or "Video không tên")
-        safe_out_name = html.escape(os.path.basename(output_path)) if output_path else "Không rõ"
-        safe_out_dir = html.escape(os.path.dirname(output_path)) if output_path else ""
+        safe_title = html.escape(video_title or "Không tên")
+        safe_out_name = html.escape(os.path.basename(output_path)) if output_path else ""
+        safe_out_dir = html.escape(os.path.dirname(output_path)) if output_path and os.path.dirname(output_path) else ""
 
         duration_str = format_duration(duration_sec) if duration_sec is not None else "N/A"
         size_str = f"{file_size_mb:.1f} MB" if file_size_mb is not None and file_size_mb > 0 else (
-            f"{os.path.getsize(output_path) / (1024*1024):.1f} MB" if output_path and os.path.exists(output_path) else "N/A"
+            f"{os.path.getsize(output_path) / (1024*1024):.1f} MB" if output_path and os.path.isfile(output_path) else ""
         )
+
+        title_label = item_label or ("📹 <b>Tác phẩm:</b>" if task_type in ('editor', 'review', 'narration', 'comic') else "🎯 <b>Mục tiêu:</b>")
 
         lines = [
             f"{icon} <b>NovaCut: {display_header} Hoàn Tất!</b>",
             "",
-            f"📹 <b>Tác phẩm:</b> <code>{safe_title}</code>",
-            f"✅ <b>Trạng thái:</b> Xuất thành công 100%",
-            f"📁 <b>Tệp kết quả:</b> <code>{safe_out_name}</code>",
-            f"💾 <b>Dung lượng:</b> {size_str}",
-            f"⏱️ <b>Thời gian xử lý:</b> {duration_str}",
+            f"{title_label} <code>{safe_title}</code>",
+            f"✅ <b>Trạng thái:</b> {html.escape(status_text)}",
         ]
+
+        if safe_out_name and safe_out_name != "Không rõ":
+            lines.append(f"📁 <b>Tệp kết quả:</b> <code>{safe_out_name}</code>")
+        if size_str:
+            lines.append(f"💾 <b>Dung lượng:</b> {size_str}")
+        if duration_str != "N/A":
+            lines.append(f"⏱️ <b>Thời gian xử lý:</b> {duration_str}")
         if safe_out_dir:
             lines.append(f"📂 <b>Thư mục:</b> <code>{safe_out_dir}</code>")
 
@@ -1011,7 +1026,7 @@ class TelegramNotifier:
 
         lines.extend([
             "",
-            "🌟 <i>Video đã sẵn sàng để đăng tải hoặc chỉnh sửa tiếp.</i>"
+            "🌟 <i>Tiến trình đã được hoàn tất thành công trong NovaCut.</i>"
         ])
 
         msg = "\n".join(lines)
@@ -1029,6 +1044,7 @@ class TelegramNotifier:
         task_title: str = "",
         task_id: str = "",
         user_id: Optional[str] = None,
+        item_label: str = "",
     ) -> bool:
         """Gửi thông báo Telegram khi một tác vụ gặp sự cố hoặc thất bại."""
         if not self.enabled or not self.notify_per_video:
@@ -1038,12 +1054,23 @@ class TelegramNotifier:
             'editor': 'Biên Tập Phim',
             'review': 'Review Phim AI',
             'narration': 'Kể Lại Phim',
-            'comic': 'Review Truyện Tranh',
+            'comic': 'Review Truyện Tranh AI',
             'batch': 'Video Hàng Loạt',
+            'download': 'Tải Video',
+            'download_batch': 'Tải Video Hàng Chờ',
+            'tts': 'Tạo Giọng Đọc AI (TTS)',
+            'asr': 'Trích Xuất Phụ Đề ASR',
+            'ocr': 'Trích Xuất Phụ Đề OCR',
+            'subtitle': 'Phụ Đề & Dịch Thuật AI',
+            'audio': 'Tách Âm Thanh AI',
+            'clone_voice': 'Clone Voice Studio',
+            'capcut': 'Đồng Bộ CapCut PC',
+            'social': 'Đăng Video Mạng Xã Hội',
+            'general': 'Tiến Trình Hệ Thống',
         }
-        display_header = task_title or type_headers.get(task_type, 'Tác Vụ Video')
+        display_header = task_title or type_headers.get(task_type, 'Tiến Trình')
 
-        safe_title = html.escape(video_title or "Video không tên")
+        safe_title = html.escape(video_title or "Không tên")
         clean_err = scrub_sensitive_text(error_message or "Lỗi không xác định")
         clean_err = clean_err.split("\n")[0].strip()
         if len(clean_err) > 180:
@@ -1051,17 +1078,22 @@ class TelegramNotifier:
         safe_err = html.escape(clean_err)
 
         duration_str = format_duration(duration_sec) if duration_sec is not None else "N/A"
+        title_label = item_label or ("📹 <b>Tác phẩm:</b>" if task_type in ('editor', 'review', 'narration', 'comic') else "🎯 <b>Mục tiêu:</b>")
 
         lines = [
             f"⚠️ <b>NovaCut: {display_header} Thất Bại</b>",
             "",
-            f"📹 <b>Tác phẩm:</b> <code>{safe_title}</code>",
+            f"{title_label} <code>{safe_title}</code>",
             f"❌ <b>Trạng thái:</b> Thất bại",
             f"🛑 <b>Nguyên nhân:</b> {safe_err}",
-            f"⏱️ <b>Thời gian trước khi lỗi:</b> {duration_str}",
+        ]
+        if duration_str != "N/A":
+            lines.append(f"⏱️ <b>Thời gian trước khi lỗi:</b> {duration_str}")
+
+        lines.extend([
             "",
             "💡 <i>Vui lòng kiểm tra lại log chi tiết trên giao diện NovaCut để khắc phục.</i>"
-        ]
+        ])
 
         msg = "\n".join(lines)
         dedup = f"task_failure:{task_type}:{task_id or safe_title}:{int(time.time() // 60)}"

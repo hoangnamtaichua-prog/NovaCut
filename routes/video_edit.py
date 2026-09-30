@@ -46,12 +46,19 @@ def _require_permission(feature):
     return None
 
 
-def compute_tts_fingerprint(subtitles, voice_id, speed, video_duration):
+def compute_tts_fingerprint(subtitles, voice_id, speed, video_duration, voice_profile=None):
     """Tạo mã băm SHA-256 fingerprint đại diện cho toàn bộ kịch bản và thông số lồng tiếng."""
+    import custom_voices
+    if not voice_profile:
+        voice_profile = custom_voices.resolve_voice_profile(voice_id)
     h = hashlib.sha256()
     h.update(str(voice_id or '').strip().encode('utf-8'))
     h.update(f"{float(speed or 1.0):.3f}".encode('utf-8'))
     h.update(f"{round(float(video_duration or 0.0), 1)}".encode('utf-8'))
+    h.update(str(voice_profile.get('gender', '')).lower().encode('utf-8'))
+    h.update(str(voice_profile.get('lang', '')).lower().encode('utf-8'))
+    h.update(str(voice_profile.get('provider', '')).lower().encode('utf-8'))
+    h.update(str(voice_profile.get('version', 1)).encode('utf-8'))
     for s in (subtitles or []):
         txt = str(s.get('translation') or s.get('text') or '').strip()
         st = round(float(s.get('startSeconds', 0)), 2)
@@ -358,8 +365,12 @@ def validate_export_payload(data: dict):
 
         video_speed = float(data.get('video_speed', 1.0))
         video_zoom = float(data.get('video_zoom', 1.0))
+        if video_zoom > 5.0:
+            video_zoom = video_zoom / 100.0
         video_pan_x = float(data.get('video_pan_x', 0.0))
         video_pan_y = float(data.get('video_pan_y', 0.0))
+        rotation = int(data.get('rotation', 0)) % 360
+        fit_mode = str(data.get('fit_mode', 'contain')).lower()
         aspect_ratio = str(data.get('aspect_ratio', 'original'))
         mirror_flip = parse_bool(data.get('mirror_flip'), False)
         trim_enabled = parse_bool(data.get('trim_enabled'), False)
@@ -379,10 +390,12 @@ def validate_export_payload(data: dict):
         return jsonify({'success': False, 'error': 'Cấu hình mode/dubbing/subtitles không hợp lệ'}), 400
     if len(subtitles) > 50000:
         return jsonify({'success': False, 'error': 'Danh sách phụ đề quá lớn'}), 413
-    if not 0.25 <= video_speed <= 4.0 or not 1.0 <= video_zoom <= 3.0 or not -100 <= video_pan_x <= 100 or not -100 <= video_pan_y <= 100:
+    if not 0.25 <= video_speed <= 4.0 or not 0.2 <= video_zoom <= 5.0 or not -1200 <= video_pan_x <= 1200 or not -1200 <= video_pan_y <= 1200:
         return jsonify({'success': False, 'error': 'Thông số tốc độ/zoom/pan nằm ngoài giới hạn'}), 400
-    if aspect_ratio not in {'original', '9:16', '1:1', '21:9'} or resolution not in {'original', '720p', '1080p', '4k'}:
+    if aspect_ratio not in {'original', '9:16', '16:9', '1:1', '4:3', '21:9'} or resolution not in {'original', '720p', '1080p', '4k'}:
         return jsonify({'success': False, 'error': 'Tỉ lệ hoặc độ phân giải không hợp lệ'}), 400
+    if fit_mode not in {'contain', 'cover', 'fill'}:
+        return jsonify({'success': False, 'error': 'Chế độ fit_mode không hợp lệ'}), 400
     if encoder not in {'auto', 'libx264', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc', 'h264_mf', 'h264_amf', 'h264_qsv'} or bitrate_mode not in {'VBR', 'CBR'} or not 500 <= bitrate <= 100000:
         return jsonify({'success': False, 'error': 'Encoder hoặc bitrate không hợp lệ'}), 400
     if not input_video or not is_path_allowed(input_video, must_exist=True, extensions=_VIDEO_EXTENSIONS):
@@ -459,7 +472,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
     manual_audio = str(data.get('manualAudio') or '').strip()
     manual_srt = str(data.get('manualSrt') or '').strip()
     dubbing = data.get('dubbing') or {}
-    subtitles = data.get('subtitles') or []
+    subtitles = data.get('subtitles') or data.get('subtitles_for_dubbing') or []
     subtitles_enabled = parse_bool(data.get('subtitles_enabled'), True)
     subtitle_style = data.get('subtitle_style') or {}
     blur_original_subtitles = parse_bool(data.get('blur_original_subtitles'), False)
@@ -471,12 +484,18 @@ def execute_export_pipeline(job: ExportJob, data: dict):
     blur_lead_offset = max(-2.0, min(2.0, float(data.get('blur_lead_offset', -180)) / 1000.0))
     blur_padding = max(0.0, min(2.0, float(data.get('blur_padding', 220)) / 1000.0))
     blur_use_ai_scan = parse_bool(data.get('blur_use_ai_scan'), False)
-    use_cache = parse_bool(data.get('use_cache'), False)
+    fresh_run = parse_bool(data.get('fresh_run'), False)
+    use_cache = False if fresh_run else parse_bool(data.get('use_cache'), False)
+    target_lang = str(data.get('target_lang') or data.get('targetLang') or 'vi').strip()
 
     video_speed = float(data.get('video_speed', 1.0))
     video_zoom = float(data.get('video_zoom', 1.0))
+    if video_zoom > 5.0:
+        video_zoom = video_zoom / 100.0
     video_pan_x = float(data.get('video_pan_x', 0.0))
     video_pan_y = float(data.get('video_pan_y', 0.0))
+    rotation = int(data.get('rotation', 0)) % 360
+    fit_mode = str(data.get('fit_mode', 'contain')).lower()
     aspect_ratio = str(data.get('aspect_ratio', 'original'))
     mirror_flip = parse_bool(data.get('mirror_flip'), False)
     trim_enabled = parse_bool(data.get('trim_enabled'), False)
@@ -512,6 +531,22 @@ def execute_export_pipeline(job: ExportJob, data: dict):
 
     editor_temp_dir = get_editor_temp_dir(output_dir, input_video)
     os.makedirs(editor_temp_dir, exist_ok=True)
+
+    if fresh_run:
+        # Dọn sạch toàn bộ artifact cũ để fresh run chạy lại từ đầu 100%
+        for old_fn in ['dubbed_timeline.wav', 'stem_cleaned.wav', 'ai_blur_boxes.json', 'tts_manifest.json', 'editor_subtitles.srt', 'rendered_subtitles.ass']:
+            old_f = os.path.join(editor_temp_dir, old_fn)
+            if os.path.exists(old_f):
+                try:
+                    os.remove(old_f)
+                except Exception:
+                    pass
+        d_temp = os.path.join(editor_temp_dir, 'dubbing_temp')
+        if os.path.exists(d_temp):
+            try:
+                shutil.rmtree(d_temp, ignore_errors=True)
+            except Exception:
+                pass
 
     def emit(msg):
         if not msg:
@@ -567,8 +602,6 @@ def execute_export_pipeline(job: ExportJob, data: dict):
 
         if not use_cache and os.path.exists(editor_temp_dir):
             for item in os.listdir(editor_temp_dir):
-                if item in ('dubbed_timeline.wav', 'tts_manifest.json'):
-                    continue
                 try:
                     ip = os.path.join(editor_temp_dir, item)
                     if os.path.isfile(ip) or os.path.islink(ip):
@@ -651,7 +684,14 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         # --- Generate temp SRT from subtitles array for Burn-In (ƯU TIÊN CHỮ DỊCH TIẾNG VIỆT) ---
         temp_srt_path = None
         filter_script_path = None
-        if subtitles and isinstance(subtitles, list) and len(subtitles) > 0:
+        if subtitles_enabled and subtitles and isinstance(subtitles, list) and len(subtitles) > 0:
+            import subtitle_postprocessor
+            is_val, v_errs, inv_ids = subtitle_postprocessor.validate_subtitles_for_export(subtitles, target_lang=target_lang)
+            if not is_val:
+                emit(f"🛑 [LỖI PHỤ ĐỀ] Không thể burn-in phụ đề: Phát hiện câu chưa dịch hoặc không đạt chuẩn (ID: {', '.join(inv_ids)}). Dừng xuất video.")
+                job.set_failed(f"Phụ đề câu {', '.join(inv_ids)} chưa được dịch hợp lệ", {"invalid_ids": inv_ids})
+                return
+
             temp_srt_path = os.path.join(output_dir, f'temp_subs_{int(time.time())}.srt')
             def format_srt_time(seconds):
                 hrs = int(seconds // 3600)
@@ -663,10 +703,12 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             try:
                 with open(temp_srt_path, 'w', encoding='utf-8') as f:
                     for i, sub in enumerate(subtitles, 1):
-                        t_start = format_srt_time(float(sub.get('startSeconds', 0)))
-                        t_end = format_srt_time(float(sub.get('endSeconds', 0)))
-                        translated_txt = sub.get('translation', '').strip()
-                        orig_txt = sub.get('text', '').strip() or sub.get('original_text', '').strip()
+                        raw_st = sub.get('startSeconds') if sub.get('startSeconds') is not None else sub.get('start_sec', sub.get('start', 0))
+                        raw_et = sub.get('endSeconds') if sub.get('endSeconds') is not None else sub.get('end_sec', sub.get('end', 0))
+                        t_start = format_srt_time(float(subtitle_postprocessor.time_to_seconds(raw_st)))
+                        t_end = format_srt_time(float(subtitle_postprocessor.time_to_seconds(raw_et)))
+                        translated_txt = str(sub.get('translation') or '').strip()
+                        orig_txt = str(sub.get('text') or sub.get('original_text') or '').strip()
                         display_text = translated_txt if translated_txt else orig_txt
                         if parse_bool(subtitle_style.get('uppercase'), False):
                             display_text = display_text.upper()
@@ -818,14 +860,14 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         is_dubbing_enabled = dubbing.get('enabled', False)
         dubbing_mode = dubbing.get('mode', 'tts')
         
-        # Ưu tiên lấy phụ đề từ subtitles gửi lên; nếu trống hoặc dính chữ Hán, tự động phục hồi từ editor_subtitles.srt đã dịch
-        subs_for_dubbing = subtitles or []
+        # Ưu tiên lấy phụ đề từ data.get('subtitles_for_dubbing'), sau đó đến subtitles gửi lên; nếu trống hoặc dính chữ Hán, tự động phục hồi từ editor_subtitles.srt đã dịch
+        subs_for_dubbing = data.get('subtitles_for_dubbing') or subtitles or []
         editor_sub_file = os.path.join(editor_temp_dir, 'editor_subtitles.srt')
         
         # Kiểm tra xem danh sách hiện tại có bị trống hoặc toàn chữ Hán chưa dịch không
         needs_translation_recovery = (not subs_for_dubbing) or (
             len(subs_for_dubbing) > 0 and all(
-                any(0x4E00 <= ord(c) <= 0x9FFF for c in str(s.get('text', '') or s.get('translation', '')))
+                any(0x4E00 <= ord(c) <= 0x9FFF for c in str(s.get('translation', '') or s.get('text', '')))
                 for s in subs_for_dubbing[:min(20, len(subs_for_dubbing))]
             )
         )
@@ -865,19 +907,21 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         if is_dubbing_enabled:
             cached_dub_file = os.path.join(editor_temp_dir, 'dubbed_timeline.wav')
             if dubbing_mode == 'tts':
-                voice_id = dubbing.get('voice_id') or 'local_clone_1787245769140'
+                voice_id = dubbing.get('voice_id') or 'local_minh_duc'
                 speed_dub = float(dubbing.get('speed', 1.1))
                 tts_fingerprint = compute_tts_fingerprint(subs_for_dubbing, voice_id, speed_dub, video_duration)
-                is_manifest_match = is_tts_manifest_valid(editor_temp_dir, tts_fingerprint)
+                is_manifest_match = False if (fresh_run or not use_cache) else is_tts_manifest_valid(editor_temp_dir, tts_fingerprint)
 
                 if not subs_for_dubbing:
                     emit("🛑 [LỖI LỒNG TIẾNG] Danh sách phụ đề trống! Vui lòng nạp hoặc dịch phụ đề trước khi xuất video có lồng tiếng.")
-                elif is_manifest_match or (use_cache and os.path.exists(cached_dub_file) and os.path.getsize(cached_dub_file) > 1000):
+                    job.set_failed("Danh sách phụ đề trống, không thể tạo lồng tiếng AI", {})
+                    return
+                elif not fresh_run and use_cache and (is_manifest_match or (os.path.exists(cached_dub_file) and os.path.getsize(cached_dub_file) > 1000)):
                     dub_track = cached_dub_file
                     emit(f"💚 [AI Dubbing] Đã tìm thấy track lồng tiếng AI hoàn chỉnh từ lần chạy trước ({os.path.basename(dub_track)}) khớp kịch bản, tái sử dụng ngay lập tức (0s)!")
                     job.set_stage(JobStage.TTS_GENERATING, 100, "Đã tái sử dụng track lồng tiếng AI")
                 else:
-                    voice_id = dubbing.get('voice_id') or 'local_clone_1787245769140'
+                    voice_id = dubbing.get('voice_id') or 'local_minh_duc'
                     speed_dub = float(dubbing.get('speed', 1.1))
                     emit(f"🎙️ Đang tiến hành tạo giọng lồng tiếng AI cho {len(subs_for_dubbing)} câu phụ đề (Giọng: {voice_id})...")
                     import ai_dubbing
@@ -933,8 +977,12 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                             gc.collect()
                         else:
                             emit("🛑 [LỖI LỒNG TIẾNG] Không tạo được track âm thanh lồng tiếng AI! Vui lòng kiểm tra lại giọng đọc hoặc API key.")
+                            job.set_failed("Không tạo được track âm thanh lồng tiếng AI", {"voice_id": voice_id})
+                            return
                     except Exception as e:
                         emit(f"🛑 [LỖI LỒNG TIẾNG] Lỗi ngoại lệ: {str(e)}")
+                        job.set_failed(f"Lỗi tạo giọng đọc lồng tiếng AI: {str(e)}", {"voice_id": voice_id})
+                        return
             elif dubbing_mode == 'manual' and (dubbing.get('manual_audio') or manual_audio):
                 dub_track = dubbing.get('manual_audio') or manual_audio
                 if os.path.exists(dub_track):
@@ -986,6 +1034,8 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             and abs(video_zoom - 1.0) < 0.001
             and video_pan_x == 0
             and video_pan_y == 0
+            and rotation == 0
+            and fit_mode == 'contain'
             and not mirror_flip
             and aspect_ratio == 'original'
             and resolution == 'original'
@@ -1086,17 +1136,28 @@ def execute_export_pipeline(job: ExportJob, data: dict):
 
         # 3.0 Video Zoom & Crop
         if video_zoom > 1.01:
-            crop_w = f"iw/{video_zoom:.4f}"
-            crop_h = f"ih/{video_zoom:.4f}"
+            crop_w = f"trunc(iw/{video_zoom:.4f}/2)*2"
+            crop_h = f"trunc(ih/{video_zoom:.4f}/2)*2"
             crop_x = f"(iw-{crop_w})/2 - ({video_pan_x:.1f}*(iw/800))"
             crop_y = f"(ih-{crop_h})/2 - ({video_pan_y:.1f}*(ih/450))"
-            v_filters.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,{crop_x}))':y='max(0,min(ih-oh,{crop_y}))'[v_cropped]")
+            v_filters.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,trunc(({crop_x})/2)*2))':y='max(0,min(ih-oh,trunc(({crop_y})/2)*2))',scale={src_vw}:{src_vh}:flags=lanczos[v_cropped]")
             curr_v = "v_cropped"
 
         # 3.1 Speed
         if abs(video_speed - 1.0) > 0.01:
             v_filters.append(f"[{curr_v}]setpts=PTS/{video_speed:.4f}[v_speed]")
             curr_v = "v_speed"
+
+        # 3.1.5 Rotation
+        if rotation == 90:
+            v_filters.append(f"[{curr_v}]transpose=1[v_rot]")
+            curr_v = "v_rot"
+        elif rotation == 180:
+            v_filters.append(f"[{curr_v}]hflip,vflip[v_rot]")
+            curr_v = "v_rot"
+        elif rotation == 270:
+            v_filters.append(f"[{curr_v}]transpose=2[v_rot]")
+            curr_v = "v_rot"
 
         # 3.2 Mirror Flip
         if mirror_flip:
@@ -1105,29 +1166,32 @@ def execute_export_pipeline(job: ExportJob, data: dict):
 
         # 3.3 Aspect Ratio & Resolution
         cur_out_w, cur_out_h = src_vw, src_vh
+        target_w, target_h = None, None
         if aspect_ratio == '9:16':
-            cur_out_w, cur_out_h = 1080, 1920
-            v_filters.append(f"[{curr_v}]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
-            curr_v = "v_aspect"
+            target_w, target_h = 1080, 1920
+        elif aspect_ratio == '16:9':
+            target_w, target_h = 1920, 1080
         elif aspect_ratio == '1:1':
-            cur_out_w, cur_out_h = 1080, 1080
-            v_filters.append(f"[{curr_v}]scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
-            curr_v = "v_aspect"
+            target_w, target_h = 1080, 1080
+        elif aspect_ratio == '4:3':
+            target_w, target_h = 1440, 1080
         elif aspect_ratio == '21:9':
-            cur_out_w, cur_out_h = 1920, 822
-            v_filters.append(f"[{curr_v}]scale=1920:822:force_original_aspect_ratio=decrease,pad=1920:822:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
-            curr_v = "v_aspect"
+            target_w, target_h = 1920, 822
         elif resolution == '1080p':
-            cur_out_w, cur_out_h = 1920, 1080
-            v_filters.append(f"[{curr_v}]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
-            curr_v = "v_aspect"
+            target_w, target_h = 1920, 1080
         elif resolution == '720p':
-            cur_out_w, cur_out_h = 1280, 720
-            v_filters.append(f"[{curr_v}]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
-            curr_v = "v_aspect"
+            target_w, target_h = 1280, 720
         elif resolution == '4k':
-            cur_out_w, cur_out_h = 3840, 2160
-            v_filters.append(f"[{curr_v}]scale=3840:2160:force_original_aspect_ratio=decrease,pad=3840:2160:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
+            target_w, target_h = 3840, 2160
+
+        if target_w and target_h:
+            cur_out_w, cur_out_h = target_w, target_h
+            if fit_mode == 'cover':
+                v_filters.append(f"[{curr_v}]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,crop={target_w}:{target_h}[v_aspect]")
+            elif fit_mode == 'fill':
+                v_filters.append(f"[{curr_v}]scale={target_w}:{target_h}[v_aspect]")
+            else:
+                v_filters.append(f"[{curr_v}]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
             curr_v = "v_aspect"
 
         output_geometry = compute_output_geometry(src_vw, src_vh, cur_out_w, cur_out_h)
@@ -1213,7 +1277,9 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}'[v_sub]")
                     curr_v = "v_sub"
         else:
-            emit("ℹ️ [Phụ đề] Tùy chọn chèn phụ đề đang TẮT -> Video xuất ra sẽ KHÔNG có phụ đề.")
+            emit("ℹ️ [Phụ đề] Tùy chọn chèn phụ đề đang TẮT -> Video xuất ra hoàn toàn KHÔNG có phụ đề (không burn-in, không gắn filter subtitles/ass).")
+            emit("ℹ️ Lưu ý: Nếu video gốc đã có sẵn phụ đề cứng (hardcoded), tắt phụ đề sẽ không che phụ đề gốc; hãy bật tính năng 'Làm mờ phụ đề gốc' nếu muốn che.")
+            v_filters = [f for f in v_filters if 'subtitles=' not in f and not f.startswith('[v_sub')]
 
         # Inputs initialization
         inputs = ['-i', input_video]
@@ -1233,9 +1299,13 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             h_pct = max(1.0, min(100.0, float(logo_data.get('h_pct', 12.0))))
             opacity = max(0.05, min(1.0, float(logo_data.get('opacity', 100.0)) / 100.0))
 
-            v_filters.append(f"[{logo_input_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f}[logo_alpha]")
-            v_filters.append(f"[logo_alpha][{curr_v}]scale2ref=w='main_w*{w_pct/100:.4f}':h='main_h*{h_pct/100:.4f}':force_original_aspect_ratio=decrease[logo_scaled][v_ref]")
-            v_filters.append(f"[v_ref][logo_scaled]overlay=x='main_w*{x_pct/100:.4f}':y='main_h*{y_pct/100:.4f}'[v_logo]")
+            box_w = max(2, (int(round(cur_out_w * (w_pct / 100.0))) // 2) * 2)
+            box_h = max(2, (int(round(cur_out_h * (h_pct / 100.0))) // 2) * 2)
+            box_x = max(0, int(round(cur_out_w * (x_pct / 100.0))))
+            box_y = max(0, int(round(cur_out_h * (y_pct / 100.0))))
+
+            v_filters.append(f"[{logo_input_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f},scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2[logo_scaled]")
+            v_filters.append(f"[{curr_v}][logo_scaled]overlay=x='{box_x}+({box_w}-overlay_w)/2':y='{box_y}+({box_h}-overlay_h)/2'[v_logo]")
             curr_v = "v_logo"
 
         # 3.5.5 Custom Multi-Region Blur & Dynamic Text Overlays
@@ -1438,7 +1508,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             try:
                 job.set_stage(JobStage.STEM_SEPARATING, 0, "Đang tách âm thanh giọng nói (MDX-Net)...")
                 cleaned_sfx = None
-                if precomputed_cleaned_path and os.path.exists(precomputed_cleaned_path) and os.path.getsize(precomputed_cleaned_path) > 1000:
+                if use_cache and precomputed_cleaned_path and os.path.exists(precomputed_cleaned_path) and os.path.getsize(precomputed_cleaned_path) > 1000:
                     cleaned_sfx = precomputed_cleaned_path
                     emit(f"⚡ [Tách âm thanh] Tái sử dụng file âm thanh SFX đã tách sẵn: {cleaned_sfx}")
                 else:
@@ -2129,16 +2199,50 @@ def ocr_extract():
         _ocr_active = True
         STOP_OCR_FLAG = False
 
+    ocr_start_time = time.time()
     def generate():
         global _ocr_active
         import importlib
         import ocr_module
         importlib.reload(ocr_module)
+        primary_srt_result = None
         try:
             for msg in ocr_module.process_ocr(video_path, region, fps, threads, device, lambda: STOP_OCR_FLAG, output_dir=output_dir):
+                if '[RESULT_SRT]' in msg:
+                    primary_srt_result = msg.split('[RESULT_SRT]')[1].strip()
                 yield msg
+
+            # Gửi thông báo Telegram khi OCR hoàn tất
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video and not STOP_OCR_FLAG:
+                    notifier.notify_task_success(
+                        task_type='ocr',
+                        task_title='Trích Xuất Phụ Đề OCR',
+                        video_title=os.path.basename(video_path),
+                        output_path=primary_srt_result or '',
+                        duration_sec=time.time() - ocr_start_time,
+                        extra_info={'FPS quét': fps, 'Thiết bị': device.upper()}
+                    )
+            except Exception as _te:
+                logging.getLogger(__name__).warning(f"[Telegram] Error sending OCR notification: {_te}")
+
         except Exception as e:
             yield f"data: Lỗi xử lý OCR: {str(e)}\n\n"
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video and not STOP_OCR_FLAG:
+                    notifier.notify_task_failure(
+                        task_type='ocr',
+                        task_title='Trích Xuất Phụ Đề OCR',
+                        video_title=os.path.basename(video_path),
+                        error_message=str(e),
+                        duration_sec=time.time() - ocr_start_time
+                    )
+            except Exception:
+                pass
         finally:
             with _ocr_lock:
                 _ocr_active = False
@@ -2301,6 +2405,24 @@ def editor_check_cache():
         })
 
     editor_temp_dir = get_editor_temp_dir(output_dir, input_video)
+
+    fresh_run = parse_bool(data.get('fresh_run'), False)
+    if fresh_run:
+        # Xóa sạch các artifact cache cũ để fresh run 100%
+        if os.path.exists(editor_temp_dir):
+            for stale_fname in ['dubbed_timeline.wav', 'stem_cleaned.wav', 'ai_blur_boxes.json', 'tts_manifest.json', 'editor_subtitles.srt', 'ocr_subtitles.srt']:
+                stale_path = os.path.join(editor_temp_dir, stale_fname)
+                if os.path.exists(stale_path):
+                    try:
+                        os.remove(stale_path)
+                    except OSError:
+                        pass
+        return jsonify({
+            "success": True,
+            "has_cache": False,
+            "files": [],
+            "details": {}
+        })
 
     dubbing = data.get('dubbing')
     has_dubbing_param = isinstance(dubbing, dict)
@@ -2476,8 +2598,17 @@ def review_check_cache():
         return jsonify({"has_cache": False, "files": []})
         
     cached_files = []
-    if os.path.exists(os.path.join(temp_dir, 'script.txt')) and os.path.getsize(os.path.join(temp_dir, 'script.txt')) > 20:
+    cached_script = ""
+    script_p = os.path.join(temp_dir, 'script.txt')
+    if not os.path.exists(script_p):
+        script_p = os.path.join(temp_dir, 'narration_script.txt')
+    if os.path.exists(script_p) and os.path.getsize(script_p) > 20:
         cached_files.append('Kịch bản tóm tắt (script.txt)')
+        try:
+            with open(script_p, 'r', encoding='utf-8') as sf:
+                cached_script = sf.read()
+        except Exception:
+            pass
     if os.path.exists(os.path.join(temp_dir, 'voice_review.wav')) and os.path.getsize(os.path.join(temp_dir, 'voice_review.wav')) > 1000:
         cached_files.append('Giọng đọc AI (voice_review.wav)')
     if os.path.exists(os.path.join(temp_dir, 'voice_review_cleaned.srt')) and os.path.getsize(os.path.join(temp_dir, 'voice_review_cleaned.srt')) > 20:
@@ -2489,8 +2620,34 @@ def review_check_cache():
     
     return jsonify({
         "has_cache": len(cached_files) > 0,
-        "files": cached_files
+        "files": cached_files,
+        "cached_script": cached_script
     })
+
+@video_edit_bp.route('/api/review/save_script', methods=['POST'])
+def review_save_script():
+    permission_error = _require_permission('can_access_review')
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
+    video_path = str(data.get('video_path') or '').strip()
+    output_dir = str(data.get('output_dir') or os.path.join(ROOT_DIR, 'output')).strip()
+    script_text = str(data.get('script') or '').strip()
+    mode = str(data.get('mode', 'api')).lower()
+    
+    if not video_path:
+        return jsonify({'success': False, 'error': 'Chưa chọn video'}), 400
+    if not script_text:
+        return jsonify({'success': False, 'error': 'Nội dung kịch bản rỗng'}), 400
+        
+    import auto_edit_pipeline
+    temp_dir = auto_edit_pipeline.get_review_temp_dir(output_dir, video_path)
+    os.makedirs(temp_dir, exist_ok=True)
+    fname = 'narration_script.txt' if mode == 'narration' else 'script.txt'
+    save_path = os.path.join(temp_dir, fname)
+    with open(save_path, 'w', encoding='utf-8') as f:
+        f.write(script_text)
+    return jsonify({'success': True, 'path': save_path})
 
 @video_edit_bp.route('/api/bgm/list', methods=['GET'])
 def bgm_list():
@@ -2504,12 +2661,58 @@ def bgm_list():
         for f in sorted(os.listdir(preset_dir)):
             if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac')):
                 full_path = os.path.join(preset_dir, f)
+                base_name = os.path.splitext(f)[0]
+                lower_name = f.lower()
+                
+                # Phân loại phong cách & nhãn an toàn bản quyền
+                is_safe = False
+                genre = 'Điện ảnh / Thư giãn'
+                clean_title = base_name
+                
+                if 'kevin macleod' in lower_name:
+                    is_safe = True
+                    # Bỏ tiền tố Kevin MacLeod cho gọn
+                    clean_title = base_name.replace('Kevin MacLeod - ', '').strip()
+                    if 'sneaky' in lower_name:
+                        genre = 'Hài hước / Hóm hỉnh'
+                    elif 'monkeys' in lower_name:
+                        genre = 'Vui nhộn / TikTok viral'
+                    elif 'scheming' in lower_name:
+                        genre = 'Mưu mô / Cà khịa'
+                    elif 'complex' in lower_name:
+                        genre = 'Kịch tính / Hồi hộp'
+                    elif 'hitman' in lower_name:
+                        genre = 'Hành động / Điệp viên'
+                    elif 'volatile' in lower_name:
+                        genre = 'Gay cấn / Dồn dập'
+                    elif 'heartbreaking' in lower_name:
+                        genre = 'Tình cảm / Lắng đọng'
+                    elif 'carefree' in lower_name:
+                        genre = 'Tươi sáng / Nhẹ nhàng'
+                    else:
+                        genre = 'Royalty-Free YouTube'
+                elif 'blade runner' in lower_name:
+                    genre = 'Sci-Fi / Bí ẩn'
+                elif 'la lecon' in lower_name:
+                    genre = 'Hoài niệm / Sâu lắng'
+                elif 'paris' in lower_name:
+                    genre = 'Lãng mạn / Êm dịu'
+                elif 'reality' in lower_name:
+                    genre = 'Cảm xúc / Kịch tính'
+                elif 'stay with me' in lower_name:
+                    genre = 'Piano nhẹ nhàng'
+
+                display_title = f"🛡️ [No-Copyright] {clean_title}" if is_safe else clean_title
+
                 tracks.append({
                     'id': f'preset_{f}',
-                    'name': os.path.splitext(f)[0],
+                    'name': display_title,
+                    'title': display_title,
                     'filename': f,
                     'type': 'preset',
                     'path': full_path,
+                    'genre': genre,
+                    'is_safe': is_safe,
                     'size_mb': round(os.path.getsize(full_path) / (1024 * 1024), 2)
                 })
     # 2. Custom uploads
@@ -2520,13 +2723,22 @@ def bgm_list():
                 tracks.append({
                     'id': f'custom_{f}',
                     'name': os.path.splitext(f)[0],
+                    'title': os.path.splitext(f)[0],
                     'filename': f,
                     'type': 'custom',
                     'path': full_path,
+                    'genre': 'Tải lên riêng',
+                    'is_safe': True,
                     'size_mb': round(os.path.getsize(full_path) / (1024 * 1024), 2)
                 })
                 
-    return jsonify({'success': True, 'tracks': tracks})
+    return jsonify({
+        'success': True,
+        'status': 'success',
+        'tracks': tracks,
+        'files': tracks
+    })
+
 
 @video_edit_bp.route('/api/bgm/upload', methods=['POST'])
 def bgm_upload():
@@ -2714,4 +2926,21 @@ def review_start():
                 _review_active = False
             
     return Response(generate(), mimetype='text/event-stream')
+
+
+def sanitize_filter_complex_graph(v_filters, subtitles_enabled=True):
+    """
+    Loại bỏ triệt để bất kỳ filter burn-in subtitles/ass nào khi subtitles_enabled=False.
+    Hỗ trợ cả list các filter hoặc chuỗi filter_complex graph.
+    """
+    if subtitles_enabled:
+        return v_filters
+    if isinstance(v_filters, list):
+        return [f for f in v_filters if 'subtitles=' not in f and 'ass=' not in f and not f.startswith('[v_sub')]
+    if isinstance(v_filters, str):
+        # Tách từng filter block
+        blocks = [b.strip() for b in v_filters.split(',') if b.strip()]
+        cleaned = [b for b in blocks if 'subtitles=' not in b and 'ass=' not in b]
+        return ','.join(cleaned)
+    return v_filters
 

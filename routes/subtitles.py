@@ -7,9 +7,9 @@ except ImportError:
     try:
         from routes.state import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
     except ImportError:
-        DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.7-flash"
+        DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.8-flash"
         DEFAULT_TRANSLATION_CONFIG = {
-            "model": "qwen/qwen3.7-flash",
+            "model": "qwen/qwen3.8-flash",
             "chunkSize": 80,
             "concurrency": 3,
             "maxRetries": 3,
@@ -129,23 +129,24 @@ def clean_sub_translation(trans: str, target_lang: str = 'vi') -> str:
     if not trans or not isinstance(trans, str):
         return ""
     trans = str(trans).strip()
-    if target_lang == 'vi':
-        # 1. Khử cấu trúc Hán tự kèm chú thích tiếng Việt trong ngoặc đơn / ngoặc toàn giác:
-        trans = re.sub(r'[\u4e00-\u9fff]+\s*[\(\（]([^\)\）]+)[\)\）]', r' \1 ', trans)
-        trans = re.sub(r'[\(\（]([^\)\）]+)[\)\）]\s*[\u4e00-\u9fff]+', r' \1 ', trans)
+    tgt = str(target_lang or 'vi').lower()
+    # 1. Khử cấu trúc Hán tự kèm chú thích trong ngoặc đơn / ngoặc toàn giác:
+    trans = re.sub(r'[\u4e00-\u9fff]+\s*[\(\（]([^\)\）]+)[\)\）]', r' \1 ', trans)
+    trans = re.sub(r'[\(\（]([^\)\）]+)[\)\）]\s*[\u4e00-\u9fff]+', r' \1 ', trans)
 
-        # 2. Xóa các ngoặc chỉ chứa chữ Hán:
-        trans = re.sub(r'[\(\（]\s*[\u4e00-\u9fff]+\s*[\)\）]', '', trans)
+    # 2. Xóa các ngoặc chỉ chứa chữ Hán:
+    trans = re.sub(r'[\(\（]\s*[\u4e00-\u9fff]+\s*[\)\）]', '', trans)
 
-        # 3. Dọn sạch bất kỳ chữ Hán đơn lẻ nào còn sót lại trong bản dịch tiếng Việt:
+    # 3. Dọn sạch bất kỳ chữ Hán đơn lẻ nào còn sót lại khi dịch sang vi hoặc en:
+    if tgt in ('vi', 'vietnamese', 'en', 'english'):
         if re.search(r'[\u4e00-\u9fff]', trans):
             trans = re.sub(r'[\u4e00-\u9fff]+', '', trans)
 
-        # 4. Chuẩn hóa khoảng trắng và dấu câu:
-        trans = re.sub(r'\s+', ' ', trans).strip()
-        trans = re.sub(r'\s+([,.:;?!])', r'\1', trans)
-        if trans and trans[0].islower():
-            trans = trans[0].upper() + trans[1:]
+    # 4. Chuẩn hóa khoảng trắng và dấu câu:
+    trans = re.sub(r'\s+', ' ', trans).strip()
+    trans = re.sub(r'\s+([,.:;?!])', r'\1', trans)
+    if trans and trans[0].islower():
+        trans = trans[0].upper() + trans[1:]
     return trans
 
 def _time_to_seconds(t_str):
@@ -302,6 +303,9 @@ def export_temp_srt():
         out_path = None
         if target_srt_path:
             norm_target = os.path.abspath(str(target_srt_path).strip('"\''))
+            if not replace_original and not norm_target.endswith('_novacut.srt'):
+                base_target, _ = os.path.splitext(norm_target)
+                norm_target = f"{base_target}_novacut.srt"
             if is_path_allowed(norm_target, must_exist=False, extensions={'.srt'}):
                 os.makedirs(os.path.dirname(norm_target), exist_ok=True)
                 out_path = norm_target
@@ -309,7 +313,7 @@ def export_temp_srt():
             if video_path and is_path_allowed(video_path, must_exist=True, extensions={'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'}):
                 base_dir = os.path.dirname(os.path.abspath(video_path))
                 video_name = os.path.splitext(os.path.basename(video_path))[0]
-                filename = f"{video_name}.srt" if replace_original else f"{video_name}_extracted.srt"
+                filename = f"{video_name}.srt" if replace_original else f"{video_name}_novacut.srt"
                 out_path = safe_join(base_dir, filename, extensions={'.srt'})
             else:
                 temp_dir = os.path.join(USER_DATA_DIR, 'temp')
@@ -318,8 +322,10 @@ def export_temp_srt():
             
         with open(out_path, 'w', encoding='utf-8') as f:
             for idx, sub in enumerate(subtitles):
-                start_sec = sub.get('startSeconds', 0.0)
-                end_sec = sub.get('endSeconds', start_sec + 2.0)
+                raw_st = sub.get('startSeconds') if sub.get('startSeconds') is not None else sub.get('start_sec', sub.get('start', 0.0))
+                raw_et = sub.get('endSeconds') if sub.get('endSeconds') is not None else sub.get('end_sec', sub.get('end', 0.0))
+                start_sec = _time_to_seconds(raw_st)
+                end_sec = _time_to_seconds(raw_et)
                 if end_sec <= start_sec:
                     end_sec = start_sec + 2.0
                 text = str(sub.get('translation') or sub.get('text') or sub.get('original_text') or '').strip()[:20000]
@@ -328,6 +334,28 @@ def export_temp_srt():
                 f.write(f"{text}\n\n")
                 
         return jsonify({'success': True, 'srt_path': out_path})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@subtitles_bp.route('/api/subtitles/normalize_dedup', methods=['POST'])
+def api_normalize_dedup_subtitles():
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
+    subtitles = data.get('subtitles', [])
+    min_gap_sec = float(data.get('min_gap_sec', 0.7) or 0.7)
+    if not isinstance(subtitles, list):
+        return jsonify({'success': False, 'error': 'Dữ liệu phụ đề không hợp lệ'}), 400
+    try:
+        import subtitle_postprocessor
+        normalized = subtitle_postprocessor.deterministic_normalize_subtitles(
+            subtitles,
+            dedup_window=min_gap_sec,
+            min_gap_sec=min_gap_sec,
+            reindex=True
+        )
+        return jsonify({'success': True, 'subtitles': normalized})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -403,7 +431,7 @@ def _resolve_openai_credentials(data=None):
     try:
         from translation_config import DEFAULT_TRANSLATION_MODEL
     except Exception:
-        DEFAULT_TRANSLATION_MODEL = 'qwen/qwen3.7-flash'
+        DEFAULT_TRANSLATION_MODEL = 'qwen/qwen3.8-flash'
 
     openai_model = data.get('openai_model') or DEFAULT_TRANSLATION_MODEL
 
@@ -475,10 +503,10 @@ def translate_subtitles():
         if not openai_key:
             return jsonify({'error': 'Vui lòng cung cấp OpenAI API Key.'}), 400
 
-        # Khi dịch phụ đề Online: Bắt buộc định tuyến sang Qwen (mặc định qwen/qwen3.7-flash) nếu yêu cầu gửi lên Luna hoặc không phải Qwen
+        # Khi dịch phụ đề Online: Bắt buộc định tuyến sang Qwen (mặc định qwen/qwen3.8-flash) nếu yêu cầu gửi lên Luna hoặc không phải Qwen
         req_model = (data.get('openai_model') or openai_model or '').strip().lower()
         if not req_model or 'luna' in req_model or 'qwen' not in req_model:
-            openai_model = 'qwen/qwen3.7-flash'
+            openai_model = 'qwen/qwen3.8-flash'
     else:
         openai_key, openai_base_url, openai_model = None, None, None
     
@@ -851,18 +879,58 @@ def translate_subtitles():
                 )
 
             # Đảm bảo 100% tất cả phụ đề trả về đều đã qua bộ lọc clean_sub_translation và đối chiếu glossary hậu kiểm
+            # Nhận diện và xử lý riêng biệt câu rác OCR ngắn (1–5 chữ Hán đơn lẻ)
+            OCR_GARBAGE_MAX_CHARS = 5  # Câu gốc có tổng <= 5 ký tự Hán thì coi là rác OCR
             for s in subtitles:
                 sid = str(s.get('id', '')).strip()
                 trans_val = s.get('translation', '')
-                if not trans_val or (target_lang == 'vi' and re.search(r'[\u4e00-\u9fff]', trans_val)):
-                    # Lưới an toàn cuối cùng: Tự động dịch bổ sung nếu vẫn còn câu sót chữ Hán
+                needs_rescue = (not trans_val) or (target_lang in ('vi', 'en') and re.search(r'[\u4e00-\u9fff]', trans_val))
+                if needs_rescue:
                     raw_txt = str(s.get('text', '')).strip()
-                    if raw_txt:
+                    if not raw_txt:
+                        continue
+
+                    # Phân loại: câu rác OCR (1–5 ký tự Hán thuần túy) vs câu thực sự thiếu dịch
+                    chinese_chars = re.findall(r'[\u4e00-\u9fff]', raw_txt)
+                    non_space_chars = raw_txt.replace(' ', '')
+                    is_ocr_garbage = (
+                        len(chinese_chars) > 0
+                        and len(chinese_chars) == len(non_space_chars)  # chỉ toàn chữ Hán
+                        and len(chinese_chars) <= OCR_GARBAGE_MAX_CHARS
+                    )
+
+                    if is_ocr_garbage:
+                        # Câu rác OCR: thử Google Translate nhưng nếu không được thì gán trống (bỏ qua gracefully)
                         try:
                             from deep_translator import GoogleTranslator
                             src_code = 'zh-CN' if source_lang in ['zh', 'auto'] else source_lang
                             gt = GoogleTranslator(source=src_code, target=target_lang)
                             gt_res = gt.translate(raw_txt)
+                            if gt_res and not any(k in gt_res for k in ['Error 500', 'Server Error', '<!DOCTYPE', '<html']) and not re.search(r'[\u4e00-\u9fff]', gt_res):
+                                s['translation'] = clean_sub_translation(gt_res, target_lang)
+                            else:
+                                # Bỏ qua gracefully – không block video
+                                s['translation'] = ''
+                                s['_ocr_garbage_skipped'] = True
+                                print(f"[OCR-Garbage] ID {sid}: '{raw_txt}' – bo qua gracefully.")
+                        except Exception:
+                            # Bỏ qua gracefully nếu Google Translate cũng thất bại
+                            s['translation'] = ''
+                            s['_ocr_garbage_skipped'] = True
+                            print(f"[OCR-Garbage] ID {sid}: '{raw_txt}' – Google Translate that bai, bo qua gracefully.")
+                    else:
+                        # Lưới an toàn cuối cùng: Tự động dịch bổ sung nếu vẫn còn câu sót chữ Hán
+                        try:
+                            from deep_translator import GoogleTranslator
+                            src_code = 'zh-CN' if source_lang in ['zh', 'auto'] else source_lang
+                            gt = GoogleTranslator(source=src_code, target=target_lang)
+                            # Loại bỏ các mẩu tiếng Anh vụn bám đuôi sau dấu câu tiếng Trung (do OCR quét dính dòng sub tiếng Anh)
+                            clean_src = raw_txt
+                            if bool(re.search(r'[\u4e00-\u9fff]', raw_txt)) and bool(re.search(r'[a-zA-Z]', raw_txt)):
+                                clean_src = re.sub(r'([。，！？\.\,\!\?])\s*[a-zA-Z\s\',.-]+$', r'\1', raw_txt).strip()
+                                if not clean_src:
+                                    clean_src = raw_txt
+                            gt_res = gt.translate(clean_src)
                             if gt_res and not any(k in gt_res for k in ['Error 500', 'Server Error', '<!DOCTYPE', '<html']):
                                 s['translation'] = clean_sub_translation(gt_res, target_lang)
                         except Exception:
@@ -916,15 +984,18 @@ def clean_subtitles_ai():
         if not openai_key:
             return jsonify({'error': 'Chưa cấu hình OpenAI API Key trên hệ thống/máy chủ!'}), 400
 
-        # Làm sạch phụ đề Online: Bắt buộc gọi GPT Luna
+        # Làm sạch phụ đề Online: Bắt buộc gọi GPT Luna (mặc định openai/gpt-6-luna)
         req_model = (data.get('openai_model') or '').strip().lower()
         if not req_model or 'luna' not in req_model:
             if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
-                openai_model = 'openai/gpt-5.6-luna-pro'
+                openai_model = 'openai/gpt-6-luna'
             else:
-                openai_model = 'gpt-5.6-luna-pro-batch'
+                openai_model = 'gpt-6-luna'
         else:
             openai_model = data.get('openai_model')
+            if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
+                if 'gpt-5.6-luna' in openai_model:
+                    openai_model = 'openai/gpt-6-luna'
     
     if not subtitles:
         return jsonify({'error': 'Không có phụ đề nào để làm sạch.'}), 400
@@ -1179,5 +1250,125 @@ def local_ai_pull_model():
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+# =========================================================================
+# AI SUBTITLE INSPECTOR BOT (ĐỐI SOÁT PHỤ ĐỀ VIDEO 2 CHIỀU)
+# =========================================================================
+
+@subtitles_bp.route('/api/subtitles/inspect_stream', methods=['POST'])
+def subtitle_inspect_stream():
+    """API đối soát phụ đề video 2 chiều theo luồng SSE thời gian thực"""
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+
+    data = request.get_json(silent=True) or {}
+    video_path = str(data.get('video_path', '')).strip(' "\'')
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({'error': 'Đường dẫn video không tồn tại hoặc bị bỏ trống'}), 400
+
+    if not is_path_allowed(video_path):
+        return jsonify({'error': 'Đường dẫn video không được phép truy cập'}), 403
+
+    subtitles = data.get('subtitles', [])
+    ocr_region = data.get('ocr_region')
+    options = data.get('options', {})
+
+    import importlib
+    import subtitle_inspector
+    importlib.reload(subtitle_inspector)
+    bot = subtitle_inspector.get_subtitle_inspector()
+
+    def generate():
+        try:
+            for evt in bot.inspect_stream(video_path, subtitles, ocr_region, options):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            traceback.print_exc()
+            err_evt = {"type": "error", "message": f"Lỗi trong quá trình đối soát: {str(e)}"}
+            yield f"data: {json.dumps(err_evt, ensure_ascii=False)}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@subtitles_bp.route('/api/subtitles/inspect', methods=['POST'])
+def subtitle_inspect():
+    """API đối soát phụ đề video 2 chiều đồng bộ trả về kết quả một lần"""
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+
+    data = request.get_json(silent=True) or {}
+    video_path = str(data.get('video_path', '')).strip(' "\'')
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({'error': 'Đường dẫn video không tồn tại hoặc bị bỏ trống'}), 400
+
+    if not is_path_allowed(video_path):
+        return jsonify({'error': 'Đường dẫn video không được phép truy cập'}), 403
+
+    subtitles = data.get('subtitles', [])
+    ocr_region = data.get('ocr_region')
+    options = data.get('options', {})
+
+    import importlib
+    import subtitle_inspector
+    importlib.reload(subtitle_inspector)
+    bot = subtitle_inspector.get_subtitle_inspector()
+    result = bot.inspect(video_path, subtitles, ocr_region, options)
+    return jsonify(result)
+
+
+@subtitles_bp.route('/api/subtitles/apply_inspector_fixes', methods=['POST'])
+def subtitle_apply_inspector_fixes():
+    """Áp dụng các chỉnh sửa từ kết quả đối soát của Bot (Thêm câu sót, xóa câu ảo)"""
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+
+    data = request.get_json(silent=True) or {}
+    subtitles = data.get('subtitles', [])
+    missing_to_add = data.get('missing_to_add')
+    if missing_to_add is None:
+        missing_to_add = data.get('missing_warnings', [])
+
+    ghost_ids_to_remove = set(str(gid) for gid in data.get('ghost_ids_to_remove', []))
+    if not ghost_ids_to_remove and data.get('ghost_warnings'):
+        ghost_ids_to_remove = set(str(g.get('sub_id', '')) for g in data.get('ghost_warnings', []))
+
+    if not isinstance(subtitles, list):
+        return jsonify({'error': 'Dữ liệu phụ đề không hợp lệ'}), 400
+
+    # Lọc bỏ các ghost subs nếu có yêu cầu
+    kept_subs = []
+    for s in subtitles:
+        sid = str(s.get('id', ''))
+        if sid not in ghost_ids_to_remove:
+            kept_subs.append(s)
+
+    # Thêm các missing subs
+    for m in missing_to_add:
+        kept_subs.append({
+            'id': 0,
+            'start': m.get('start'),
+            'end': m.get('end'),
+            'startSeconds': m.get('start_sec', m.get('startSeconds')),
+            'endSeconds': m.get('end_sec', m.get('endSeconds')),
+            'text': m.get('text', ''),
+            'translation': m.get('translation', ''),
+            'is_auto_filled': True
+        })
+
+    from subtitle_postprocessor import deterministic_normalize_subtitles
+    fixed_subtitles = deterministic_normalize_subtitles(kept_subs, dedup_window=0.5, reindex=True)
+
+    return jsonify({
+        'success': True,
+        'subtitles': fixed_subtitles,
+        'fixed_subtitles': fixed_subtitles,
+        'added_count': len(missing_to_add),
+        'removed_count': len(ghost_ids_to_remove)
+    })
+
 
 

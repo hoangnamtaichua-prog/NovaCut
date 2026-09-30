@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
-import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, urllib.parse, uuid
+import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, urllib.parse, uuid, hashlib
 from routes.state import *
 from routes.security import atomic_write_json, is_path_allowed, safe_join
 from werkzeug.utils import secure_filename
@@ -351,13 +351,47 @@ def generate_tts_preview():
         if permission_error:
             return permission_error
         data = request.json or {}
-        voice_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice') or data.get('voice_id') or 'ngoc_huyen'))[:100]
-        text = str(data.get('text', 'Xin chào! Đây là bản nghe thử giọng đọc AI thuyết minh chuẩn phòng thu.')).strip()[:1000]
+        raw_vid = str(data.get('voice') or data.get('voice_id') or 'local_ngoc_huyen').strip()
+        voice_id = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_vid)[:100]
         
+        import custom_voices
+        voice_profile = custom_voices.resolve_voice_profile(voice_id)
+        
+        lang = str(data.get('lang') or voice_profile.get('lang') or 'Vietnamese').strip()
+        locale = str(data.get('locale') or voice_profile.get('locale') or ('en-US' if 'en' in lang.lower() else 'vi-VN')).strip()
+        gender = str(data.get('gender') or voice_profile.get('gender') or 'Female').strip()
+        speed = float(data.get('speed') or 1.0)
+        speed = max(0.5, min(2.0, speed))
+        
+        # Lấy text truyền vào hoặc text mặc định theo đúng locale/ngôn ngữ
+        text = str(data.get('text') or '').strip()
+        default_vi = "Xin chào! Đây là bản nghe thử giọng đọc AI thuyết minh chuẩn phòng thu."
+        is_en_voice = 'en' in lang.lower() or locale.lower().startswith('en')
+        if not text or (is_en_voice and text == default_vi):
+            text = custom_voices.get_default_preview_text(locale or lang)
+        else:
+            # Kiểm tra text có bị lệch ngôn ngữ nghiêm trọng so với voice không
+            is_vi_text = bool(re.search(r'[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]', text, re.IGNORECASE))
+            if is_en_voice and is_vi_text:
+                return jsonify({
+                    'success': False,
+                    'error': f"Language mismatch: Văn bản ('{text[:30]}...') là tiếng Việt, không khớp với voice tiếng Anh '{voice_id}' (locale: {locale})."
+                }), 400
+            if ('vi' in lang.lower() or locale.lower().startswith('vi')) and re.search(r'[\u4e00-\u9fff]', text):
+                return jsonify({
+                    'success': False,
+                    'error': f"Language mismatch: Văn bản chứa chữ Hán, không khớp với voice tiếng Việt '{voice_id}'."
+                }), 400
+        text = text[:1000]
+
         samples_dir = TTS_SAMPLE_DIR
         os.makedirs(samples_dir, exist_ok=True)
         
-        sample_filename = f"{voice_id}.wav"
+        # Cache key phải gồm voice + text + locale + speed + engine version
+        engine_version = "v2_locale_fixed"
+        cache_raw = f"{voice_id}|{text}|{locale.lower()}|{speed:.2f}|{engine_version}"
+        cache_hash = hashlib.sha256(cache_raw.encode('utf-8')).hexdigest()[:16]
+        sample_filename = f"prev_{voice_id}_{cache_hash}.wav"
         sample_path = os.path.join(samples_dir, sample_filename)
         
         # 1. If sample already exists, return instantly
@@ -368,20 +402,9 @@ def generate_tts_preview():
                 'cached': True
             })
             
-        # 2. Check root fallback aliases
-        if voice_id == 'diem_trinh' and os.path.exists(os.path.join(ROOT_DIR, 'sample_hoatngon_diem_trinh.wav')):
-            import shutil
-            shutil.copy(os.path.join(ROOT_DIR, 'sample_hoatngon_diem_trinh.wav'), sample_path)
-            return jsonify({'success': True, 'audio_url': f'/api/file?path={urllib.parse.quote(sample_path)}', 'cached': True})
-            
-        if voice_id == 'mai_linh' and os.path.exists(os.path.join(ROOT_DIR, 'sample_hoatngon_mai_linh.wav')):
-            import shutil
-            shutil.copy(os.path.join(ROOT_DIR, 'sample_hoatngon_mai_linh.wav'), sample_path)
-            return jsonify({'success': True, 'audio_url': f'/api/file?path={urllib.parse.quote(sample_path)}', 'cached': True})
-            
-        # 3. Generate once and cache
+        # 2. Generate and cache
         import ai_dubbing
-        ai_dubbing.synthesize_sentence(text, voice_id, 1.0, sample_path)
+        ai_dubbing.synthesize_sentence(text, voice_id, speed, sample_path)
         
         return jsonify({
             'success': True,
@@ -804,6 +827,32 @@ def generate_tts_kokoro():
             with open(srt_path, 'w', encoding='utf-8') as srt_f:
                 srt_f.write(srt_content)
             
+        # Không bắn Telegram nếu là tác vụ tạo từng câu nhỏ trong chuỗi review / sub-clip
+        skip_notify = data.get('skip_notify', False) or data.get('notify') is False
+        if not skip_notify and filename and str(filename).startswith(('sent_', 'narration_', 'temp_')):
+            skip_notify = True
+        if not skip_notify and output_dir and any(x in str(output_dir).replace('\\', '/').lower() for x in ['auto_edit_temp', 'clips/audio', 'sentences', '/temp']):
+            skip_notify = True
+
+        if not skip_notify:
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    notifier.notify_task_success(
+                        task_type='tts',
+                        task_title='Tạo Giọng Đọc AI (TTS)',
+                        video_title=os.path.basename(audio_path),
+                        output_path=audio_path,
+                        extra_info={
+                            'Giọng đọc': voice_id,
+                            'Tốc độ': f"{speed}x",
+                            'Thời lượng': f"{round(duration, 1)}s"
+                        }
+                    )
+            except Exception as _te:
+                logging.getLogger(__name__).warning(f"[Telegram] Error sending TTS notification: {_te}")
+
         import urllib.parse
         return jsonify({
             'success': True,
@@ -817,6 +866,19 @@ def generate_tts_kokoro():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        if not locals().get('skip_notify', False):
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    notifier.notify_task_failure(
+                        task_type='tts',
+                        task_title='Tạo Giọng Đọc AI (TTS)',
+                        video_title=filename if 'filename' in locals() else "TTS Audio",
+                        error_message=str(e)
+                    )
+            except Exception:
+                pass
         return jsonify({'success': False, 'error': f"Lỗi tạo TTS: {str(e)}"}), 500
 
 @tts_bp.route('/api/tts/openspeaker/voices', methods=['GET'])
@@ -912,6 +974,32 @@ def generate_tts_openspeaker():
         with open(srt_path, 'w', encoding='utf-8') as f:
             f.write(srt_content)
             
+        # Không bắn Telegram nếu là tác vụ tạo từng câu nhỏ trong chuỗi review / sub-clip
+        skip_notify = data.get('skip_notify', False) or data.get('notify') is False
+        if not skip_notify and filename and str(filename).startswith(('sent_', 'narration_', 'temp_')):
+            skip_notify = True
+        if not skip_notify and output_dir and any(x in str(output_dir).replace('\\', '/').lower() for x in ['auto_edit_temp', 'clips/audio', 'sentences', '/temp']):
+            skip_notify = True
+
+        if not skip_notify:
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    notifier.notify_task_success(
+                        task_type='tts',
+                        task_title='Tạo Giọng Đọc AI (OpenSpeaker)',
+                        video_title=os.path.basename(audio_path),
+                        output_path=audio_path,
+                        extra_info={
+                            'Giọng đọc': voice_id,
+                            'Tốc độ': f"{speed}x",
+                            'Thời lượng': f"{round(duration, 1)}s"
+                        }
+                    )
+            except Exception as _te:
+                logging.getLogger(__name__).warning(f"[Telegram] Error sending OpenSpeaker TTS notification: {_te}")
+
         import urllib.parse
         return jsonify({
             'success': True,
@@ -925,6 +1013,19 @@ def generate_tts_openspeaker():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        if not locals().get('skip_notify', False):
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    notifier.notify_task_failure(
+                        task_type='tts',
+                        task_title='Tạo Giọng Đọc AI (OpenSpeaker)',
+                        video_title=filename if 'filename' in locals() else "OpenSpeaker Audio",
+                        error_message=str(e)
+                    )
+            except Exception:
+                pass
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # =========================================================================
@@ -1086,6 +1187,25 @@ def api_clone_voice_save():
             tag=tag or None,
             avatar=avatar or None
         )
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                ref_p = voice_profile.get('ref_audio_path', audio_path) if isinstance(voice_profile, dict) else audio_path
+                notifier.notify_task_success(
+                    task_type='clone_voice',
+                    task_title='Clone Voice Studio',
+                    video_title=name,
+                    output_path=ref_p,
+                    extra_info={
+                        'Mã định danh': voice_profile.get('id', '') if isinstance(voice_profile, dict) else '',
+                        'Giới tính': gender,
+                        'Vùng miền': region
+                    }
+                )
+        except Exception:
+            pass
+
         return jsonify({
             'success': True,
             'message': f'Đã lưu thành công giọng "{name}" vào Thư viện Local Voice!',

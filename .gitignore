@@ -62,3 +62,5 @@ python-nuget/
 .qodo/
 .vscode/
 .DS_Store
+*.sqlite3
+data/

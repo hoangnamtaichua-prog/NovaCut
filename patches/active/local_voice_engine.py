@@ -594,6 +594,49 @@ def validate_and_convert_audio_sample(input_audio_path, output_wav_path=None, re
     except Exception as e:
         return False, f"Lỗi xử lý file âm thanh mẫu: {str(e)}"
 
+def select_preset_for_voice(voice_id=None, gender=None, lang=None) -> str:
+    """
+    Chọn preset cục bộ bảo toàn 100% giới tính và ngôn ngữ:
+    Nam Việt -> Minh Đức
+    Nữ Việt -> Ngọc Huyền
+    Nam Anh -> Adam
+    Nữ Anh -> Không hỗ trợ (ném lỗi)
+    """
+    profile = {}
+    if voice_id:
+        try:
+            import custom_voices
+            profile = custom_voices.resolve_voice_profile(voice_id)
+        except Exception:
+            pass
+
+    # Direct name aliases
+    v_id_low = str(voice_id or '').lower()
+    if any(w in v_id_low for w in ['adam', 'kokoro_am_adam', 'en_adam', 'local_adam']):
+        return "Adam"
+
+    g = (gender or profile.get('gender') or '').strip().lower()
+    l = (lang or profile.get('lang') or '').strip().lower()
+
+    if not g:
+        g = 'male' if any(w in v_id_low for w in ['nam', 'duc', 'dung', 'dat', 'binh', 'son', 'khoa', 'quang', 'male', 'adam']) else 'female'
+    if not l:
+        l = 'en' if any(w in v_id_low for w in ['en', 'english', 'us', 'adam']) else 'vi'
+
+    is_male = (g == 'male')
+    is_en = ('en' in l)
+
+    if voice_id:
+        for p in LOCAL_VOICE_PRESETS:
+            if p["id"] == voice_id:
+                return p.get("preset_name")
+
+    if is_en:
+        if is_male:
+            return "Adam"
+        raise ValueError(f"Local Voice ONNX không có preset nữ Tiếng Anh cho '{voice_id}'")
+    return "Minh Đức" if is_male else "Ngọc Huyền"
+
 def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None, target_sample_rate=None, target_channels=None):
     """
     Sinh giọng nói từ văn bản bằng Local Voice Engine (hỗ trợ cả preset, cloned voice và audio mẫu trực tiếp).
@@ -610,21 +653,29 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None,
     target_preset = None
     target_ref_audio = ref_audio
 
+    import custom_voices
+    resolved_profile = custom_voices.resolve_voice_profile(voice_id) if voice_id else {
+        "gender": "Female", "lang": "Vietnamese"
+    }
+    is_male = (resolved_profile.get("gender", "").lower() == "male")
+    is_en = "en" in resolved_profile.get("lang", "").lower()
+
     # Tìm trong Preset
     if voice_id:
         for p in LOCAL_VOICE_PRESETS:
             if p["id"] == voice_id:
-                target_preset = p.get("preset_name", "Ngọc Huyền")
+                target_preset = p.get("preset_name")
                 break
                 
         # Nếu là cloned voice trong custom_voices.json
         if not target_preset and not target_ref_audio:
-            import custom_voices
-            voice_prof = custom_voices.get_voice_by_id(voice_id)
-            if voice_prof:
-                target_ref_audio = voice_prof.get("reference_audio")
-                if target_ref_audio and not os.path.isabs(target_ref_audio):
-                    target_ref_audio = os.path.join(ROOT_DIR, target_ref_audio)
+            target_ref_audio = resolved_profile.get("reference_audio")
+            if target_ref_audio and not os.path.isabs(target_ref_audio):
+                target_ref_audio = os.path.join(ROOT_DIR, target_ref_audio)
+
+    # Nếu không có ref_audio và chưa có target_preset, bảo toàn giới tính & ngôn ngữ tuyệt đối
+    if not target_preset and not (target_ref_audio and os.path.exists(target_ref_audio)):
+        target_preset = select_preset_for_voice(voice_id, gender=resolved_profile.get("gender"), lang=resolved_profile.get("lang"))
 
     # 2. Xử lý chuẩn hóa text
     try:
@@ -640,9 +691,11 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None,
         if client.is_runtime_available():
             dst_sr = int(target_sample_rate) if target_sample_rate else 48000
             dst_ch = int(target_channels) if target_channels else 1
+            default_vid = "local_adam" if (is_en and is_male) else ("local_minh_duc" if is_male else "local_ngoc_huyen")
+            target_vid = "local_adam" if (is_en and is_male) else (voice_id or default_vid)
             batch_res = client.synthesize_batch(
                 items=[{"id": 0, "text": norm_text, "output_path": output_path}],
-                voice_id=voice_id or "local_ngoc_huyen",
+                voice_id=target_vid,
                 speed=float(speed),
                 batch_size=4,
                 target_sample_rate=dst_sr,
@@ -663,7 +716,8 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None,
         elif target_preset:
             audio_data = tts.infer(text=norm_text, voice=target_preset, apply_watermark=False)
         else:
-            audio_data = tts.infer(text=norm_text, voice="Ngọc Huyền", apply_watermark=False)
+            fallback_preset = "Adam" if (is_en and is_male) else ("Minh Đức" if is_male else "Ngọc Huyền")
+            audio_data = tts.infer(text=norm_text, voice=fallback_preset, apply_watermark=False)
     finally:
         pool.put(tts)
 

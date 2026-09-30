@@ -240,8 +240,15 @@ class TestExportHistoryApiIntegration(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
         self.temp_dir = tempfile.mkdtemp(prefix='novacut_test_api_')
+        self.db_path = os.path.join(self.temp_dir, 'test_export_history.sqlite3')
+        import export_history
+        self._orig_service = export_history._service_instance
+        self.service = export_history.ExportHistoryService(db_path=self.db_path)
+        export_history._service_instance = self.service
 
     def tearDown(self):
+        import export_history
+        export_history._service_instance = self._orig_service
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_get_export_history_api(self):
@@ -276,6 +283,35 @@ class TestExportHistoryApiIntegration(unittest.TestCase):
 
         res_reveal = self.client.post('/api/export-history/non_existent_uuid_12345/reveal')
         self.assertEqual(res_reveal.status_code, 404)
+
+    def test_reveal_path_with_spaces_and_diacritics(self):
+        """Kiểm tra mở thư mục với đường dẫn có dấu tiếng Việt và khoảng trắng gọi đúng lệnh explorer /select,"path"."""
+        folder_with_space = os.path.join(self.temp_dir, 'thư mục video đã xuất')
+        os.makedirs(folder_with_space, exist_ok=True)
+        video_file = os.path.join(folder_with_space, 'tập 01 review.mp4')
+        with open(video_file, 'wb') as f:
+            f.write(b'dummy video content')
+
+        from export_history import get_export_history_service
+        svc = get_export_history_service()
+        rec_id = svc.record_export(output_path=video_file, source_tool='editor', export_run_id='test_reveal_space')
+
+        from unittest.mock import patch
+        with patch('subprocess.Popen') as mock_popen, patch('os.startfile', create=True) as mock_startfile:
+            res = self.client.post(f'/api/export-history/{rec_id}/reveal')
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertTrue(data['success'])
+
+            # Xác minh trên Windows gọi lệnh explorer /select,"path" (chuỗi không bọc quote ngoài /select)
+            if os.name == 'nt':
+                explorer_calls = [c for c in mock_popen.call_args_list if c[0] and isinstance(c[0][0], str) and c[0][0].startswith('explorer')]
+                self.assertEqual(len(explorer_calls), 1, f"Expected 1 explorer call, got {len(explorer_calls)}: {mock_popen.call_args_list}")
+                called_cmd = explorer_calls[0][0][0]
+                self.assertIsInstance(called_cmd, str)
+                self.assertTrue(called_cmd.startswith('explorer /select,"'), f"Lệnh không đúng chuẩn: {called_cmd}")
+                self.assertTrue(called_cmd.endswith('"'), f"Lệnh thiếu đóng nháy kép: {called_cmd}")
+                self.assertNotIn('"/select,', called_cmd, "Lỗi: Không được có nháy kép trước /select")
 
     def test_delete_api(self):
         """Kiểm tra API DELETE /api/export-history/<id>."""

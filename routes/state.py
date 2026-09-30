@@ -14,9 +14,9 @@ from flask import Flask, send_from_directory, Response, jsonify, request, send_f
 try:
     from translation_config import DEFAULT_TRANSLATION_MODEL, DEFAULT_TRANSLATION_CONFIG
 except ImportError:
-    DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.7-flash"
+    DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.8-flash"
     DEFAULT_TRANSLATION_CONFIG = {
-        "model": "qwen/qwen3.7-flash",
+        "model": "qwen/qwen3.8-flash",
         "chunkSize": 80,
         "concurrency": 3,
         "maxRetries": 3,

@@ -106,7 +106,8 @@ class MockDouyinHttpServer:
                     self.wfile.write(parent.payload[start:end + 1])
 
         # Find random available port
-        self.server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        self.server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -329,6 +330,79 @@ class TestDouyinDownloader(unittest.TestCase):
         for u, expected in urls:
             extracted = douyin_browser_downloader.extract_mix_id(u)
             self.assertEqual(extracted, expected)
+
+    def test_09_download_channel_batch_safe_paths(self):
+        """Kiểm tra download_channel_batch xử lý đường dẫn an toàn không bị lỗi tuple _path_exists"""
+        video_list = [
+            {
+                "aweme_id": "7111222333444",
+                "title": "Tập 1: Phim Hay Douyin",
+                "download_url": f"http://127.0.0.1:{self.mock_server.port}/stream.mp4"
+            },
+            {
+                "aweme_id": "7111222333445",
+                "title": "Tập 2: Phim Hay Douyin",
+                "download_url": f"http://127.0.0.1:{self.mock_server.port}/stream.mp4"
+            }
+        ]
+
+        batch_out = os.path.join(self.temp_dir, "batch_test")
+        progress_events = []
+        def on_prog(completed, total, v_info, file_path, tag):
+            progress_events.append((completed, total, file_path, tag))
+
+        result = douyin_browser_downloader.download_channel_batch(
+            video_list=video_list,
+            output_dir=batch_out,
+            channel_name="TestChannel",
+            max_workers=2,
+            connections_per_file=2,
+            prefix_index=True,
+            auto_merge=False,
+            progress_cb=on_prog
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["downloaded_files"]), 2)
+        for f in result["downloaded_files"]:
+            self.assertIsInstance(f, str)
+            self.assertTrue(os.path.exists(f))
+            self.assertTrue(os.path.getsize(f) > 0)
+
+        # Check manifest
+        self.assertTrue(os.path.exists(result["manifest_path"]))
+        with open(result["manifest_path"], "r", encoding="utf-8") as mf:
+            m_data = json.load(mf)
+        self.assertEqual(m_data["total_count"], 2)
+        self.assertEqual(m_data["items"]["7111222333444"]["status"], "success")
+
+    def test_10_sort_videos_chronological(self):
+        """Kiểm tra sắp xếp video: đăng lâu nhất (#1) đến mới nhất (#N)."""
+        raw_videos = [
+            {"aweme_id": "vid_newest", "title": "Tập 3 mới nhất", "create_time": 1720000300},
+            {"aweme_id": "vid_middle", "title": "Tập 2 giữa", "create_time": 1720000200},
+            {"aweme_id": "vid_oldest", "title": "Tập 1 đăng lâu nhất", "create_time": 1720000100},
+        ]
+
+        # 1. oldest_first (mặc định theo yêu cầu người dùng)
+        sorted_oldest = douyin_browser_downloader.sort_videos_chronological(raw_videos, order="oldest_first")
+        self.assertEqual(sorted_oldest[0]["aweme_id"], "vid_oldest")
+        self.assertEqual(sorted_oldest[1]["aweme_id"], "vid_middle")
+        self.assertEqual(sorted_oldest[2]["aweme_id"], "vid_newest")
+
+        # 2. newest_first
+        sorted_newest = douyin_browser_downloader.sort_videos_chronological(raw_videos, order="newest_first")
+        self.assertEqual(sorted_newest[0]["aweme_id"], "vid_newest")
+        self.assertEqual(sorted_newest[2]["aweme_id"], "vid_oldest")
+
+        # 3. Ưu tiên mix_order (tập phim 1..N)
+        series_videos = [
+            {"aweme_id": "v3", "title": "Tập 3", "mix_order": 3, "create_time": 1720000300},
+            {"aweme_id": "v1", "title": "Tập 1", "mix_order": 1, "create_time": 1720000100},
+            {"aweme_id": "v2", "title": "Tập 2", "mix_order": 2, "create_time": 1720000200},
+        ]
+        sorted_series = douyin_browser_downloader.sort_videos_chronological(series_videos, order="oldest_first")
+        self.assertEqual([v["mix_order"] for v in sorted_series], [1, 2, 3])
 
 
 if __name__ == "__main__":

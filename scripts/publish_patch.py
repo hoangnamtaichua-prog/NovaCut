@@ -104,6 +104,9 @@ PATCH_INCLUDE_FILES = [
     "rvc_bridge.py",
     "audio_separator.py",
     "mdx_separator.py",
+    "douyin_cookie_manager.py",
+    "subtitle_inspector.py",
+    "subtitle_postprocessor.py",
     "requirements.txt",
     "version.json"
 ]

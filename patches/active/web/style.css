@@ -5359,6 +5359,57 @@ body.modal-open .terminal-overlay {
     border-bottom: 1px solid #334155 !important;
 }
 
+/* Tối ưu hóa bảng trong layout chia đôi màn hình 50/50 (#viewBatchQueue) */
+#queueEditorTableContainer.batch-table-container {
+    height: auto !important;
+    max-height: none !important;
+    flex: 1 1 0 !important;
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+}
+
+#queueEditorTableContainer table.batch-editor-table {
+    width: 100% !important;
+    min-width: 100% !important;
+}
+
+/* Tối ưu hóa cột cài đặt Review Phim hàng loạt (#viewBatchQueue) */
+.batch-settings-col {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: #38bdf8 #0f172a !important;
+}
+
+.batch-settings-col::-webkit-scrollbar {
+    width: 8px !important;
+}
+
+.batch-settings-col::-webkit-scrollbar-track {
+    background: #0f172a !important;
+    border-radius: 4px !important;
+}
+
+.batch-settings-col::-webkit-scrollbar-thumb {
+    background: #0284c7 !important;
+    border-radius: 4px !important;
+    border: 1px solid rgba(56, 189, 248, 0.3) !important;
+}
+
+.batch-settings-col::-webkit-scrollbar-thumb:hover {
+    background: #38bdf8 !important;
+}
+
+.batch-settings-col .settings-card {
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
+    min-height: auto !important;
+    height: auto !important;
+    box-sizing: border-box !important;
+}
+
+
+
 #batchEmptyZone {
     min-height: calc(48vh - 60px);
     display: flex;
@@ -5859,6 +5910,376 @@ body.is-admin-mode .header-tabs .nav-tab[data-admin-only="true"] {
     display: flex !important;
 }
 
+/* ═════════════════════════════════════════════════════════════
+   ⚡ MULTI VIDEO DOWNLOAD QUEUE (HÀNG CHỜ TẢI VIDEO)
+   ═════════════════════════════════════════════════════════════ */
+.download-queue-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+    background: transparent;
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
 
+.download-queue-row:hover {
+    background: rgba(30, 41, 59, 0.5);
+}
 
+.download-queue-row:last-child {
+    border-bottom: none;
+}
 
+.download-queue-row.status-downloading {
+    background: rgba(14, 165, 233, 0.08);
+    border-left: 3px solid #38bdf8;
+}
+
+.download-queue-row.status-completed {
+    background: rgba(16, 185, 129, 0.05);
+    border-left: 3px solid #10b981;
+}
+
+.download-queue-row.status-error {
+    background: rgba(239, 68, 68, 0.06);
+    border-left: 3px solid #ef4444;
+}
+
+.queue-col-index {
+    width: 32px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.queue-col-platform {
+    width: 90px;
+    flex-shrink: 0;
+}
+
+.queue-platform-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: 0.3px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.queue-platform-badge.platform-youtube {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.queue-platform-badge.platform-tiktok {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+.queue-platform-badge.platform-douyin {
+    background: rgba(168, 85, 247, 0.15);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.queue-platform-badge.platform-bilibili {
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.queue-platform-badge.platform-facebook {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.queue-platform-badge.platform-generic {
+    background: rgba(148, 163, 184, 0.15);
+    color: #94a3b8;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.queue-col-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.queue-item-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f8fafc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queue-item-url {
+    font-size: 11.5px;
+    color: #64748b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.queue-col-status {
+    width: 200px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.queue-status-text {
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.queue-status-text.waiting { color: #94a3b8; }
+.queue-status-text.downloading { color: #38bdf8; font-weight: 700; }
+.queue-status-text.completed { color: #34d399; font-weight: 700; }
+.queue-status-text.error { color: #f87171; font-weight: 700; }
+.queue-status-text.cancelled { color: #fbbf24; }
+
+.queue-item-progress-track {
+    background: #0f172a;
+    border-radius: 4px;
+    height: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(51, 65, 85, 0.6);
+}
+
+.queue-item-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+    transition: width 0.25s ease;
+    border-radius: 4px;
+}
+
+.queue-col-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.queue-action-btn {
+    padding: 6px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    background: rgba(15, 23, 42, 0.6);
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.queue-action-btn:hover {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: #38bdf8;
+    color: #38bdf8;
+}
+
+.queue-action-btn.btn-remove:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #ef4444;
+    color: #f87171;
+}
+
+/* ========================================================== */
+/* REVIEW SCRIPT EDITOR SUITE                                 */
+/* ========================================================== */
+.review-script-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.review-script-table th {
+    position: sticky;
+    top: 0;
+    background: #0f172a;
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--card-border);
+    z-index: 10;
+}
+
+.review-script-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
+    vertical-align: middle;
+}
+
+.review-script-table tbody tr:hover {
+    background: rgba(56, 189, 248, 0.05);
+}
+
+.review-script-idx {
+    text-align: center;
+    color: #64748b;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
+.review-script-actions {
+    text-align: center;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.review-script-action-btn {
+    background: transparent;
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    color: #94a3b8;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+
+.review-script-action-btn:hover {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: #38bdf8;
+    color: #38bdf8;
+}
+
+.review-script-action-btn.btn-voice:hover {
+    background: rgba(56, 189, 248, 0.2);
+    border-color: #38bdf8;
+    color: #38bdf8;
+}
+
+.review-script-action-btn.btn-del:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #ef4444;
+    color: #f87171;
+}
+
+.review-script-text-cell {
+    cursor: pointer;
+    line-height: 1.55;
+    font-size: 13px;
+    color: #f1f5f9;
+    word-break: break-word;
+    border-radius: 4px;
+    padding: 4px 6px;
+    transition: background 0.15s;
+}
+
+.review-script-text-cell:hover {
+    background: rgba(56, 189, 248, 0.08);
+}
+
+.review-script-inline-input {
+    width: 100%;
+    background: #030712;
+    color: #f8fafc;
+    border: 1px solid #38bdf8;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.5;
+    outline: none;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+    box-sizing: border-box;
+}
+
+/* Review Top Row Layout (50/50 Video Preview & Script/SRT Table) */
+.review-top-row {
+    display: flex;
+    gap: 16px;
+    height: 720px;
+    min-height: 650px;
+    flex-shrink: 0;
+    margin-bottom: 20px;
+}
+
+.review-top-row > .video-player-card {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.review-top-row > #reviewScriptEditorCard {
+    flex: 1;
+    min-width: 0;
+    display: flex !important;
+    flex-direction: column;
+    height: 100%;
+    margin-top: 0 !important;
+}
+
+.review-bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    align-items: start;
+    margin-bottom: 20px;
+}
+
+@media (max-width: 1200px) {
+    .review-top-row {
+        flex-direction: column;
+        height: auto;
+    }
+    .review-top-row > .video-player-card {
+        height: 500px;
+    }
+    .review-top-row > #reviewScriptEditorCard {
+        height: 550px;
+    }
+    .review-bottom-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.review-script-action-btn.btn-play:hover {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: #10b981;
+    color: #34d399;
+}
+
+.review-script-time {
+    color: #94a3b8;
+    font-size: 0.76rem;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    white-space: nowrap;
+    text-align: center;
+}

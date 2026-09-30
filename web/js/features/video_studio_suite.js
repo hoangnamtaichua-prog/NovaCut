@@ -595,6 +595,13 @@ export class VideoStudioSuite {
                 }
             }
         }
+
+        if (typeof window.renderReviewLogo === 'function') {
+            window.renderReviewLogo();
+        }
+        if (typeof renderLogo === 'function') {
+            renderLogo();
+        }
     }
 
     setFitMode(fitModeId) {
@@ -812,6 +819,10 @@ export class VideoStudioSuite {
                 this.state.zoom = newZoom;
                 this.applyTransforms();
                 this.updateTransformBadge(true);
+                this.notifyChange();
+                if (typeof window !== 'undefined') {
+                    window.currentVideoZoom = newZoom;
+                }
             }
         }, { passive: false });
 
@@ -1105,6 +1116,22 @@ export class VideoStudioSuite {
         showToast('🎯 Đã khôi phục khung hình video về vị trí chuẩn tâm (Fit 100%)', 'info', 2000);
     }
 
+    setZoom(zoomFactor, notify = true) {
+        const factor = Math.max(0.15, Math.min(5.0, Math.round(zoomFactor * 100) / 100));
+        this.state.zoom = factor;
+        this.applyTransforms();
+        this.updateTransformBadge(false);
+        if (notify) this.notifyChange();
+    }
+
+    setPan(panX, panY, notify = true) {
+        this.state.panX = panX;
+        this.state.panY = panY;
+        this.applyTransforms();
+        this.updateTransformBadge(false);
+        if (notify) this.notifyChange();
+    }
+
     applyTransforms() {
         const flipX = this.state.flipH ? -1 : 1;
         const flipY = this.state.flipV ? -1 : 1;
@@ -1216,6 +1243,32 @@ export function initVideoStudioSuite() {
                 if (editAspect && config.aspectRatio) {
                     editAspect.value = config.aspectRatio;
                 }
+                const editMirror = document.getElementById('editToolMirrorFlip');
+                if (editMirror && typeof config.flipH === 'boolean') {
+                    editMirror.checked = config.flipH;
+                }
+                if (typeof window !== 'undefined' && typeof config.zoom === 'number') {
+                    window.currentVideoZoom = config.zoom;
+                    const zPct = Math.round(config.zoom * 100);
+                    const editZoomSlider = document.getElementById('editToolZoomSlider');
+                    const editZoomVal = document.getElementById('editToolZoomVal');
+                    if (editZoomSlider) editZoomSlider.value = zPct;
+                    if (editZoomVal) {
+                        editZoomVal.textContent = (Math.abs(config.zoom - 1.0) < 0.01) ? '100% (Gốc)' : `${zPct}%`;
+                    }
+                    document.querySelectorAll('.edit-zoom-preset-btn').forEach(btn => {
+                        const pz = parseInt(btn.dataset.zoom);
+                        const isActive = (pz === zPct);
+                        btn.classList.toggle('active', isActive);
+                        if (isActive) {
+                            btn.style.borderColor = '#38bdf8';
+                            btn.style.color = '#38bdf8';
+                        } else {
+                            btn.style.borderColor = '';
+                            btn.style.color = '';
+                        }
+                    });
+                }
             }
         });
     }
@@ -1237,6 +1290,28 @@ export function initVideoStudioSuite() {
                 // Đồng bộ sang biến toàn cục Review config
                 if (config.aspectRatio) {
                     window.reviewAspectRatio = config.aspectRatio;
+                }
+
+                if (typeof config.zoom === 'number') {
+                    const zPct = Math.round(config.zoom * 100);
+                    const rZoomSlider = document.getElementById('reviewVideoZoom');
+                    const rZoomVal = document.getElementById('reviewVideoZoomVal');
+                    if (rZoomSlider) rZoomSlider.value = zPct;
+                    if (rZoomVal) {
+                        rZoomVal.textContent = `${zPct}%` + (zPct === 105 ? ' (Khuyên dùng)' : (zPct === 100 ? ' (Gốc)' : ''));
+                    }
+                    document.querySelectorAll('.btn-review-zoom-preset').forEach(btn => {
+                        const pz = parseInt(btn.dataset.zoom);
+                        const isActive = (pz === zPct);
+                        btn.classList.toggle('active', isActive);
+                        if (isActive) {
+                            btn.style.borderColor = '#38bdf8';
+                            btn.style.color = '#38bdf8';
+                        } else {
+                            btn.style.borderColor = '';
+                            btn.style.color = '';
+                        }
+                    });
                 }
 
                 // Đồng bộ trạng thái active với 2 nút ở Phần 4: CẤU HÌNH DỰNG PHIM & XUẤT FILE

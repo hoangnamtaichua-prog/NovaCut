@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import requests
@@ -19,6 +20,21 @@ import asyncio
 import hashlib
 import concurrent.futures
 from typing import List, Dict, Tuple, Any, Optional
+
+def get_app_root_dir():
+    """Xác định chính xác tuyệt đối thư mục gốc của ứng dụng NovaCut."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    curr = os.path.dirname(os.path.abspath(__file__))
+    while curr and os.path.dirname(curr) != curr:
+        if os.path.exists(os.path.join(curr, 'web', 'index.html')):
+            norm_curr = os.path.normpath(curr).lower()
+            if not norm_curr.endswith(os.path.normpath('patches/active').lower()) and not norm_curr.endswith(os.path.normpath('release/novacut').lower()):
+                return os.path.abspath(curr)
+        curr = os.path.dirname(curr)
+    return os.path.dirname(os.path.abspath(__file__))
+
+ROOT_DIR = get_app_root_dir()
 
 def get_stealth_subprocess_kwargs():
     try:
@@ -83,6 +99,38 @@ def parse_bool(value, default=False):
         if lowered in ('false', '0', 'no', 'off', ''):
             return False
     return default
+
+LANGUAGE_NAMES = {
+    'vi': ('Tiếng Việt', 'Vietnamese'),
+    'en': ('Tiếng Anh', 'English'),
+    'zh': ('Tiếng Trung', 'Chinese'),
+    'ja': ('Tiếng Nhật', 'Japanese'),
+    'ko': ('Tiếng Hàn', 'Korean'),
+    'fr': ('Tiếng Pháp', 'French'),
+    'es': ('Tiếng Tây Ban Nha', 'Spanish'),
+    'de': ('Tiếng Đức', 'German'),
+    'ru': ('Tiếng Nga', 'Russian'),
+    'th': ('Tiếng Thái', 'Thai'),
+    'id': ('Tiếng Indonesia', 'Indonesian'),
+    'ms': ('Tiếng Malaysia', 'Malay'),
+    'pt': ('Tiếng Bồ Đào Nha', 'Portuguese'),
+    'hi': ('Tiếng Hindi', 'Hindi')
+}
+
+def get_language_directive(lang_code):
+    if not lang_code:
+        return ""
+    code = str(lang_code).lower().strip()
+    if code in ('vi', 'vietnamese'):
+        return ""
+    lang_info = LANGUAGE_NAMES.get(code, (code, code))
+    lang_vn, lang_en = lang_info
+    return (
+        f"MANDATORY OUTPUT LANGUAGE REQUIREMENT:\n"
+        f"- Toàn bộ kịch bản voice-over review phim phải được viết 100% bằng {lang_vn.upper()} ({lang_en.upper()}).\n"
+        f"- Mọi lời thoại, phân tích, dẫn dắt, hook mở đầu, câu giữ chân khán giả và outro đều phải sử dụng {lang_en} tự nhiên, chuẩn ngữ pháp, đúng ngữ cảnh bản xứ của một kênh YouTube Movie Recap / Review chuyên nghiệp.\n"
+        f"- TUYỆT ĐỐI KHÔNG xuất văn bản bằng tiếng Việt hay bất kỳ ngôn ngữ nào khác ngoài {lang_en}."
+    )
 
 def parse_srt_time(t_str):
     t_str = t_str.strip().replace(',', '.')
@@ -396,6 +444,99 @@ def generate_dynamic_blur_ass_mask(raw_boxes, output_ass_path, play_res_x=10000,
         f.write("\n".join(ass_lines))
         
     return output_ass_path
+
+def generate_styled_ass(srt_source_path: str, ass_dest_path: str, cur_out_w: int, cur_out_h: int, subtitle_style: dict = None, speed: float = 1.0) -> str:
+    """Chuyển đổi file SRT sang ASS với hệ quy chiếu PlayResX/PlayResY chuẩn xác 1:1 với kích thước video xuất.
+    Tính toán font size, viền (outline), màu sắc, lề và vị trí chuẩn."""
+    if subtitle_style is None:
+        subtitle_style = {}
+    entries = parse_srt_entries(srt_source_path)
+    font_name = re.sub(r'[^\w .-]', '', str(subtitle_style.get('font', 'Montserrat')))[:80] or 'Montserrat'
+
+    base_font_size = max(8, min(120, int(subtitle_style.get('size', 24))))
+    font_size = max(12, int(round(base_font_size * (cur_out_h / 720.0))))
+
+    def hex_to_ass(hex_val, default='&H00FFFFFF'):
+        if not hex_val:
+            return default
+        h = str(hex_val).lstrip('#')
+        if len(h) == 6:
+            return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+        return default
+
+    primary_col = hex_to_ass(subtitle_style.get('color'), '&H00FFFFFF')
+    outline_col = hex_to_ass(subtitle_style.get('outline_color'), '&H00000000')
+
+    raw_outline = subtitle_style.get('outline')
+    if raw_outline is not None and int(raw_outline) == 0:
+        outline_w = 0
+    else:
+        outline_val = int(raw_outline) if raw_outline is not None else 1
+        outline_w = max(0, min(15, int(round(outline_val * (cur_out_h / 720.0)))))
+
+    bold_flag = -1 if parse_bool(subtitle_style.get('bold'), True) else 0
+    italic_flag = -1 if parse_bool(subtitle_style.get('italic'), False) else 0
+    is_uppercase = parse_bool(subtitle_style.get('uppercase'), False)
+
+    sub_region = subtitle_style.get('region') or {}
+    sub_align = str(subtitle_style.get('align') or 'center').lower()
+    sub_x = float(sub_region.get('x', 10.0))
+    sub_y = float(sub_region.get('y', 81.5))
+    sub_w = float(sub_region.get('w', 80.0))
+    sub_h = float(sub_region.get('h', 9.5))
+
+    box_x = cur_out_w * sub_x / 100.0
+    box_y = cur_out_h * sub_y / 100.0
+    box_w = max(10.0, cur_out_w * sub_w / 100.0)
+    box_h = max(10.0, cur_out_h * sub_h / 100.0)
+    center_x = box_x + box_w / 2.0
+    center_y = box_y + box_h / 2.0
+    if sub_align == 'left':
+        ass_align, an_tag, pos_x = 4, r'\an4', round(box_x)
+    elif sub_align == 'right':
+        ass_align, an_tag, pos_x = 6, r'\an6', round(box_x + box_w)
+    else:
+        ass_align, an_tag, pos_x = 5, r'\an5', round(center_x)
+    pos_y = round(center_y)
+    margin_v = max(5, int(round(cur_out_h - (box_y + box_h))))
+    margin_l = max(5, int(round(box_x)))
+    margin_r = max(5, int(round(cur_out_w - (box_x + box_w))))
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {cur_out_w}\n"
+        f"PlayResY: {cur_out_h}\n"
+        "ScaledBorderAndShadow: yes\n"
+        "WrapStyle: 0\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{font_name},{font_size},{primary_col},&H000000FF,{outline_col},&H80000000,"
+        f"{bold_flag},{italic_flag},0,0,100,100,0,0,1,{outline_w},0,"
+        f"{ass_align},{margin_l},{margin_r},{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    spd = max(0.01, float(speed))
+    events = []
+    override_tag = f"{{{an_tag}\\pos({pos_x},{pos_y})}}"
+    for s, e, txt in entries:
+        t_start = format_ass_time(s / spd)
+        t_end = format_ass_time(e / spd)
+        txt_display = txt.upper() if is_uppercase else txt
+        txt_display = txt_display.replace('\\N', ' ').replace('\n', '\\N')
+        events.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{override_tag}{txt_display}\n")
+
+    os.makedirs(os.path.dirname(os.path.abspath(ass_dest_path)), exist_ok=True)
+    with open(ass_dest_path, 'w', encoding='utf-8') as f:
+        f.write(header + "".join(events))
+
+    return ass_dest_path
 
 def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_ratio=0.815, h_ratio=0.095, center_x_ratio=0.50, lead_sec=0.18, pad_sec=0.22, manual_mode=False, manual_w=None, engine='auto', temp_dir=None, frame_w=10000, frame_h=10000, content_h=None):
     """Xây dựng filter FFmpeg blur tự động bám sát chữ phụ đề theo độ dài và thời gian.
@@ -765,16 +906,16 @@ def split_text_to_sentences(text):
     text = sanitize_review_script(text)
     if not text:
         return []
-    # Tách theo dấu câu kết thúc (.!?) hoặc xuống dòng kép
-    raw_parts = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
+    # Tách theo dấu câu kết thúc (.!? hoặc 。！？) hoặc xuống dòng kép
+    raw_parts = re.split(r'(?<=[.!?。！？])\s*|\n{2,}', text)
     sentences = []
     for part in raw_parts:
         part = part.strip()
         if not part:
             continue
-        # Nếu câu quá dài (>80 ký tự), cố tách thêm ở dấu phẩy/chấm phẩy
+        # Nếu câu quá dài (>80 ký tự), cố tách thêm ở dấu phẩy/chấm phẩy (kể cả CJK ，；)
         if len(part) > 80:
-            sub_parts = re.split(r'(?<=[,;])\s+', part)
+            sub_parts = re.split(r'(?<=[,;，；])\s*', part)
             buffer = ""
             for sp in sub_parts:
                 if buffer and len(buffer) + len(sp) > 70:
@@ -891,6 +1032,36 @@ def get_video_duration_ffprobe(video_path):
 
     return 0.0
 
+def get_video_dimensions_fast(video_path, ffmpeg_path=None):
+    """Lấy kích thước chiều rộng/cao video chuẩn xác."""
+    if not video_path or not os.path.exists(video_path):
+        return 1920, 1080
+    if not ffmpeg_path:
+        ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
+    ffprobe_candidates = []
+    if os.name == 'nt':
+        ffprobe_candidates.append(os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe.exe'))
+    ffprobe_candidates.append('ffprobe')
+    for ff_p in ffprobe_candidates:
+        if os.path.exists(ff_p) or ff_p == 'ffprobe':
+            try:
+                cmd = [
+                    ff_p, '-v', 'error', '-select_streams', 'v:0',
+                    '-show_entries', 'stream=width,height', '-of', 'json', video_path
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, **get_stealth_subprocess_kwargs())
+                if res.returncode == 0:
+                    data = json.loads(res.stdout)
+                    streams = data.get('streams', [])
+                    if streams:
+                        w = int(streams[0].get('width', 0) or 0)
+                        h = int(streams[0].get('height', 0) or 0)
+                        if w > 0 and h > 0:
+                            return w, h
+            except Exception:
+                pass
+    return 1920, 1080
+
 def run_ffmpeg_with_progress_yield(cmd, total_duration, start_pct, end_pct, desc, check_stop_func=None):
     """Chạy FFmpeg và yield % tiến độ dựa trên time= trong output."""
     process = subprocess.Popen(
@@ -1003,7 +1174,8 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
             "voice_id": voice_id,
             "speed": speed,
             "output_dir": sentence_dir,
-            "filename": filename
+            "filename": filename,
+            "skip_notify": True
         }
         if not is_kokoro and api_key_openspeaker:
             tts_payload['api_key'] = api_key_openspeaker
@@ -1697,6 +1869,83 @@ def run_timeline_map_reduce_pipeline_sync(
 
     return final_timeline
 
+def run_audio_separator_with_progress(
+    video_path,
+    output_dir,
+    mode="mdx_net_hq4",
+    device="auto",
+    log_func=None,
+    check_stop_func=None
+):
+    """
+    Chạy tách âm thanh AI (Stem Separator / MDX-Net) trong background worker thread và
+    stream liên tục số % tiến độ ('Đang tách âm AI (21%): đoạn 10/543 [còn ~1808s]')
+    trực tiếp vào System Log qua generator SSE.
+    """
+    import queue
+    import threading
+    import audio_separator
+
+    q = queue.Queue()
+
+    def _prog(pct, msg):
+        q.put(('progress', pct, msg))
+
+    def _log(msg):
+        q.put(('log', msg))
+
+    def _worker():
+        try:
+            res = audio_separator.separate_audio_stems(
+                video_path,
+                output_dir=output_dir,
+                mode=mode,
+                device=device,
+                progress_cb=_prog,
+                logger_cb=_log,
+                cancel_check_cb=check_stop_func
+            )
+            q.put(('done', res))
+        except Exception as e:
+            q.put(('error', e))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    last_pct = -1
+    last_msg = ""
+    last_emit_time = 0
+    result = None
+
+    while t.is_alive() or not q.empty():
+        try:
+            item = q.get(timeout=0.25)
+            kind = item[0]
+            if kind == 'progress':
+                pct, msg = item[1], item[2]
+                now = time.time()
+                # Báo số % vào System Log: "🎛️ Đang tách âm AI (21%): đoạn 10/543 [còn ~1808s]"
+                if msg and (pct != last_pct or msg != last_msg or (now - last_emit_time) >= 2.5):
+                    last_pct = pct
+                    last_msg = msg
+                    last_emit_time = now
+                    if log_func:
+                        yield log_func(f"🎛️ {msg}")
+            elif kind == 'log':
+                pass
+            elif kind == 'done':
+                result = item[1]
+                break
+            elif kind == 'error':
+                raise item[1]
+        except queue.Empty:
+            if check_stop_func and check_stop_func():
+                if log_func:
+                    yield log_func("🛑 Đã dừng tách âm thanh theo yêu cầu.")
+                return None
+
+    return result
+
 def run_auto_edit_workflow(payload, check_stop_func):
     start_time_auto_edit = time.time()
     video_path = payload.get('video_path')
@@ -1736,34 +1985,23 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 if api_key_openspeaker:
                     break
 
-    if not openai_key:
-        yield "data: 🛑 Lỗi: Chưa tìm thấy OpenAI API Key. Vui lòng vào Cài đặt để nhập Key cá nhân hoặc bấm [Lấy API Cấp Sẵn] nếu bạn dùng gói VIP/1 Năm!\n\n"
-        return
+    continue_from_script = parse_bool(payload.get('continue_from_script'), False)
+    pause_after_script = parse_bool(payload.get('pause_after_script', True), True)
+    custom_script = payload.get('custom_script')
+    custom_srt_content = payload.get('custom_srt_content') or payload.get('narration_srt_content')
+    use_cache = bool(payload.get('use_cache', False))
 
-    if not srt_path or not os.path.exists(srt_path):
-        yield "data: 🛑 Lỗi: Không tìm thấy file SRT đầu vào. Phải có SRT gốc để GPT làm việc!\n\n"
-        return
+    if not continue_from_script and not custom_script:
+        if not openai_key:
+            yield "data: 🛑 Lỗi: Chưa tìm thấy OpenAI API Key. Vui lòng vào Cài đặt để nhập Key cá nhân hoặc bấm [Lấy API Cấp Sẵn] nếu bạn dùng gói VIP/1 Năm!\n\n"
+            return
+        if not srt_path or not os.path.exists(srt_path):
+            yield "data: 🛑 Lỗi: Không tìm thấy file SRT đầu vào. Phải có SRT gốc để GPT làm việc!\n\n"
+            return
+
     if not video_path or not os.path.exists(video_path):
         yield "data: 🛑 Lỗi: Không tìm thấy file Video đầu vào.\n\n"
         return
-
-    # Luôn đọc nội dung SRT đầu vào ngay từ đầu để dùng cho tất cả các bước (kể cả khi dùng cache)
-    with open(srt_path, 'r', encoding='utf-8') as f:
-        srt_content = f.read()
-
-    # Luôn đảm bảo ffmpeg_path và cấu hình OpenAI sẵn sàng cho toàn bộ workflow
-    ffmpeg_path = None
-    try:
-        ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
-    except Exception as e:
-        yield f"data: 🛑 Lỗi kiểm tra FFmpeg: {e}\n\n"
-        return
-
-    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-    if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
-        headers["HTTP-Referer"] = "https://novacut.app"
-        headers["X-Title"] = "NovaCut AI"
-    url = f"{openai_base_url.rstrip('/')}/chat/completions"
 
     os.makedirs(output_dir, exist_ok=True)
     custom_temp = payload.get('temp_dir')
@@ -1780,14 +2018,52 @@ def run_auto_edit_workflow(payload, check_stop_func):
     else:
         temp_dir = get_review_temp_dir(output_dir, video_path)
     os.makedirs(temp_dir, exist_ok=True)
-    
+
+    # Đọc nội dung SRT đầu vào nếu có, hoặc tạo SRT fallback từ kịch bản thuyết minh
+    srt_content = ""
+    if srt_path and os.path.exists(srt_path):
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            srt_content = f.read()
+    elif continue_from_script or custom_script or custom_srt_content:
+        srt_path = os.path.join(temp_dir, 'uploaded_narration.srt')
+        if custom_srt_content and str(custom_srt_content).strip():
+            srt_content = str(custom_srt_content).strip()
+            with open(srt_path, 'w', encoding='utf-8') as sf:
+                sf.write(srt_content)
+        else:
+            script_lines = [s.strip() for s in split_text_to_sentences(str(custom_script or '')) if s.strip()]
+            if not script_lines:
+                script_lines = ["Kịch bản thuyết minh review phim"]
+            srt_blocks = []
+            for s_idx, s_txt in enumerate(script_lines, 1):
+                t_s = (s_idx - 1) * 4.0
+                t_e = s_idx * 4.0
+                srt_blocks.append(f"{s_idx}\n{seconds_to_srt_time(t_s)} --> {seconds_to_srt_time(t_e)}\n{s_txt}\n")
+            srt_content = "\n".join(srt_blocks)
+            with open(srt_path, 'w', encoding='utf-8') as sf:
+                sf.write(srt_content)
+
+    # Luôn đảm bảo ffmpeg_path và cấu hình OpenAI sẵn sàng cho toàn bộ workflow
+    ffmpeg_path = None
+    try:
+        ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
+    except Exception as e:
+        yield f"data: 🛑 Lỗi kiểm tra FFmpeg: {e}\n\n"
+        return
+
+    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+    if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
+        headers["HTTP-Referer"] = "https://novacut.app"
+        headers["X-Title"] = "NovaCut AI"
+    url = f"{openai_base_url.rstrip('/')}/chat/completions"
+
     def log(msg, step=None):
         if step:
             return f"data: [STEP] {step}\n\ndata: {msg}\n\n"
         return f"data: {msg}\n\n"
 
-    use_cache = bool(payload.get('use_cache', False))
-    if not use_cache and os.path.exists(temp_dir):
+    if not use_cache and not continue_from_script and os.path.exists(temp_dir):
+
         yield log("🧹 Đang dọn dẹp tài liệu cũ để tạo mới hoàn toàn...")
         undeleted = []
         try:
@@ -1825,63 +2101,99 @@ def run_auto_edit_workflow(payload, check_stop_func):
         script_meta_path = os.path.join(temp_dir, 'script_meta.json')
         review_style = payload.get('review_style', 'dramatic')
         custom_style_prompt = payload.get('custom_style_prompt', '')
+        script_language = payload.get('script_language') or payload.get('target_lang') or 'vi'
         target_minutes = payload.get('target_minutes', 5)
-        current_script_fingerprint = hashlib.md5((srt_content + str(target_minutes) + str(review_style) + str(custom_style_prompt) + str(openai_model)).encode('utf-8')).hexdigest()
+        current_script_fingerprint = hashlib.md5((srt_content + str(target_minutes) + str(review_style) + str(custom_style_prompt) + str(script_language) + str(openai_model)).encode('utf-8')).hexdigest()
 
-        cache_valid = False
-        if use_cache and os.path.exists(script_txt_path) and os.path.exists(script_meta_path):
-            try:
-                with open(script_meta_path, 'r', encoding='utf-8') as mf:
-                    meta_data = json.load(mf)
-                    if meta_data.get('fingerprint') == current_script_fingerprint:
-                        cache_valid = True
-            except Exception:
-                cache_valid = False
-
-        if cache_valid:
-            with open(script_txt_path, 'r', encoding='utf-8') as f:
-                review_script = sanitize_review_script(f.read())
-            yield log(f"💚 Đã tìm thấy kịch bản cũ, tái sử dụng tại {script_txt_path}")
-            yield log("[PROGRESS] 20")
-        else:
-            import prompt_vault
-            import review_styles
-            prompt_map = prompt_vault.get_prompt('prompt_map_chunk')
-            prompt_reduce = prompt_vault.get_prompt('prompt_reduce_script')
-            if not prompt_map or not prompt_reduce:
-                yield log("🛑 Không tìm thấy nội dung kịch bản mẫu prompt_map_chunk hoặc prompt_reduce_script!")
-                return
-                
-            style_info = review_styles.get_style_by_id(review_style)
-            style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
-            yield log(f"🎭 Phong cách Review: {style_info.get('icon', '🎬')} {style_info.get('name', 'Mặc định')}")
-
-            target_words = int(target_minutes * 210)  # 3.5 từ/giây = 210 từ/phút
-            condensed_srt = condense_srt_for_llm(srt_content, max_chars=40000)
-            
-            yield log("Đang phân chia file phụ đề thành các chunk...")
-            srt_chunks = split_srt_by_tokens(condensed_srt, max_tokens=6000, model_name=openai_model)
-            if not srt_chunks:
-                yield log("🛑 File phụ đề rỗng sau khi xử lý!")
-                return
-                
-            review_script = yield from run_map_reduce_pipeline_sync(
-                openai_key, openai_base_url, openai_model, srt_chunks, 
-                target_words, prompt_map, prompt_reduce, temp_dir, log,
-                style_directive=style_directive,
-                use_cache=use_cache
-            )
-            
-            if not review_script:
-                return
-                
-            review_script = sanitize_review_script(review_script)
+        if custom_script and str(custom_script).strip():
+            review_script = sanitize_review_script(str(custom_script).strip())
             with open(script_txt_path, 'w', encoding='utf-8') as f:
                 f.write(review_script)
             with open(script_meta_path, 'w', encoding='utf-8') as mf:
-                json.dump({'fingerprint': current_script_fingerprint}, mf)
-            yield log(f"✅ Đã viết kịch bản xong, lưu tại {script_txt_path}")
+                json.dump({'fingerprint': current_script_fingerprint, 'custom': True}, mf)
+            yield log(f"💚 Sử dụng kịch bản đã chỉnh sửa của người dùng ({len(review_script.split())} từ).")
             yield log("[PROGRESS] 20")
+        else:
+            cache_valid = False
+            if use_cache and os.path.exists(script_txt_path) and os.path.exists(script_meta_path):
+                try:
+                    with open(script_meta_path, 'r', encoding='utf-8') as mf:
+                        meta_data = json.load(mf)
+                        if meta_data.get('fingerprint') == current_script_fingerprint:
+                            cache_valid = True
+                except Exception:
+                    cache_valid = False
+
+            if cache_valid:
+                with open(script_txt_path, 'r', encoding='utf-8') as f:
+                    review_script = sanitize_review_script(f.read())
+                yield log(f"💚 Đã tìm thấy kịch bản cũ, tái sử dụng tại {script_txt_path}")
+                yield log("[PROGRESS] 20")
+            else:
+                import prompt_vault
+                import review_styles
+                prompt_map = prompt_vault.get_prompt('prompt_map_chunk')
+                prompt_reduce = prompt_vault.get_prompt('prompt_reduce_script')
+                if not prompt_map or not prompt_reduce:
+                    yield log("🛑 Không tìm thấy nội dung kịch bản mẫu prompt_map_chunk hoặc prompt_reduce_script!")
+                    return
+                    
+                style_info = review_styles.get_style_by_id(review_style)
+                style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
+                yield log(f"🎭 Phong cách Review: {style_info.get('icon', '🎬')} {style_info.get('name', 'Mặc định')}")
+
+                lang_code = str(script_language).lower().strip()
+                lang_info = LANGUAGE_NAMES.get(lang_code, ('Tiếng Việt', 'Vietnamese'))
+                lang_directive = get_language_directive(lang_code)
+                yield log(f"🌐 Ngôn ngữ kịch bản đầu ra: {lang_info[0]} ({lang_info[1]})")
+
+                if lang_directive:
+                    prompt_map = f"{lang_directive}\n\n{prompt_map}"
+                    prompt_reduce = f"{lang_directive}\n\n{prompt_reduce}"
+
+                target_words = int(target_minutes * 210)  # 3.5 từ/giây = 210 từ/phút
+                condensed_srt = condense_srt_for_llm(srt_content, max_chars=40000)
+                
+                yield log("Đang phân chia file phụ đề thành các chunk...")
+                srt_chunks = split_srt_by_tokens(condensed_srt, max_tokens=6000, model_name=openai_model)
+                if not srt_chunks:
+                    yield log("🛑 File phụ đề rỗng sau khi xử lý!")
+                    return
+                    
+                review_script = yield from run_map_reduce_pipeline_sync(
+                    openai_key, openai_base_url, openai_model, srt_chunks, 
+                    target_words, prompt_map, prompt_reduce, temp_dir, log,
+                    style_directive=style_directive,
+                    use_cache=use_cache
+                )
+                
+                if not review_script:
+                    return
+                    
+                review_script = sanitize_review_script(review_script)
+                with open(script_txt_path, 'w', encoding='utf-8') as f:
+                    f.write(review_script)
+                with open(script_meta_path, 'w', encoding='utf-8') as mf:
+                    json.dump({'fingerprint': current_script_fingerprint}, mf)
+                yield log(f"✅ Đã viết kịch bản xong, lưu tại {script_txt_path}")
+                yield log("[PROGRESS] 20")
+
+        # Tách câu và gửi sự kiện [SCRIPT_READY] cho Frontend
+        sentences = split_text_to_sentences(review_script)
+        script_info = {
+            "script": review_script,
+            "sentences": sentences,
+            "word_count": len(review_script.split()),
+            "sentence_count": len(sentences),
+            "est_minutes": round(len(review_script.split()) / 210.0, 1)
+        }
+        yield f"data: [SCRIPT_READY] {json.dumps(script_info, ensure_ascii=False)}\n\n"
+
+        if pause_after_script and not continue_from_script:
+            yield log(f"⏸️ [TẠM DỪNG DUYỆT KỊCH BẢN] Đã tạo xong kịch bản ({len(sentences)} câu, {len(review_script.split())} từ).")
+            yield log("📝 Hệ thống đã nạp kịch bản vào bảng bên dưới để bạn xem và chỉnh sửa.")
+            yield log("👉 Hãy kiểm tra các câu thoại, nghe thử giọng đọc nếu muốn, sau đó bấm [TIẾP TỤC DỰNG VIDEO] để hoàn tất!")
+            return
         
         # --- BƯỚC 2: TẠO GIỌNG ĐỌC (TỪNG CÂU - CHÍNH XÁC TIMESTAMP) ---
         yield log("Đang tạo giọng đọc (Bước 2 - Tách câu TTS)...", step=2)
@@ -1890,7 +2202,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
         voice_speed = float(payload.get('voice_speed', 1.0))
         tts_threads = int(payload.get('tts_threads', 8))
         
-        if use_cache and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path) and os.path.getsize(voice_audio_path) > 1000:
+        if use_cache and not continue_from_script and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path) and os.path.getsize(voice_audio_path) > 1000:
             yield log("💚 Đã tìm thấy file giọng đọc cũ, tái sử dụng.")
             yield log("[PROGRESS] 40")
         else:
@@ -2122,11 +2434,15 @@ def run_auto_edit_workflow(payload, check_stop_func):
         blur_ai_boxes = payload.get('ai_boxes') or []
 
         # Video Zoom parameter
-        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False))
-        video_zoom = float(payload.get('video_zoom', 100.0))
-        zoom_factor = max(1.0, min(2.0, video_zoom / 100.0)) if enable_zoom else 1.0
-        if zoom_factor > 1.0:
+        raw_zoom = float(payload.get('video_zoom', 100.0))
+        zoom_val = (raw_zoom / 100.0) if raw_zoom > 5.0 else raw_zoom
+        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False) or zoom_val > 1.005)
+        zoom_factor = max(1.0, min(5.0, zoom_val)) if enable_zoom else 1.0
+        if zoom_factor > 1.005:
             yield log(f"🔍 Kích hoạt phóng to video (Zoom: {zoom_factor*100:.0f}%)...")
+
+        video_pan_x = float(payload.get('video_pan_x', 0.0))
+        video_pan_y = float(payload.get('video_pan_y', 0.0))
 
         orig_sub_entries = parse_srt_entries(srt_path) if blur_orig_subs else []
         if blur_orig_subs and orig_sub_entries and blur_ai_boxes and isinstance(blur_ai_boxes, list):
@@ -2188,9 +2504,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
             filter_chain = []
             curr_v = "0:v"
 
-            # 1. Phóng to Video (Zoom & Center Crop)
-            if zoom_factor > 1.0:
-                filter_chain.append(f"[{curr_v}]crop=w='iw/{zoom_factor:.4f}':h='ih/{zoom_factor:.4f}':x='(iw-iw/{zoom_factor:.4f})/2':y='(ih-ih/{zoom_factor:.4f})/2',scale=iw:ih:flags=lanczos[v_zoomed]")
+            # 1. Phóng to Video (Zoom & Center Crop & Upscale)
+            if zoom_factor > 1.005:
+                clip_vw, clip_vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+                crop_w = f"trunc(iw/{zoom_factor:.4f}/2)*2"
+                crop_h = f"trunc(ih/{zoom_factor:.4f}/2)*2"
+                crop_x = f"(iw-{crop_w})/2 - ({video_pan_x:.1f}*(iw/800))"
+                crop_y = f"(ih-{crop_h})/2 - ({video_pan_y:.1f}*(ih/450))"
+                filter_chain.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,trunc(({crop_x})/2)*2))':y='max(0,min(ih-oh,trunc(({crop_y})/2)*2))',scale={clip_vw}:{clip_vh}:flags=lanczos[v_zoomed]")
                 curr_v = "v_zoomed"
 
             # 2. Làm mờ động phụ đề gốc
@@ -2215,12 +2536,17 @@ def run_auto_edit_workflow(payload, check_stop_func):
             filter_chain.append(f"[{curr_v}]fps=30,settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v]")
             vf_filter = ";".join(filter_chain)
 
-            # Cấu hình encoder args đồng nhất đảm bảo concat an toàn 100%
             common_enc_args = ['-r', '30', '-video_track_timescale', '90000', '-g', '60', '-keyint_min', '60']
             if encoder == 'h264_nvenc':
                 enc_cmd = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p', *common_enc_args]
+            elif encoder == 'hevc_nvenc':
+                enc_cmd = ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-cq', '24', '-pix_fmt', 'yuv420p', *common_enc_args]
             elif encoder == 'h264_qsv':
                 enc_cmd = ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22', '-pix_fmt', 'yuv420p', *common_enc_args]
+            elif encoder == 'h264_amf':
+                enc_cmd = ['-c:v', 'h264_amf', '-quality', 'speed', '-qp_i', '22', '-qp_p', '22', '-pix_fmt', 'yuv420p', *common_enc_args]
+            elif encoder == 'h264_mf':
+                enc_cmd = ['-c:v', 'h264_mf', '-rate_control', 'vbr', '-b:v', '6000k', '-pix_fmt', 'yuv420p', *common_enc_args]
             else:
                 enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', *common_enc_args, '-threads', '2']
 
@@ -2335,6 +2661,40 @@ def run_auto_edit_workflow(payload, check_stop_func):
         yield log("[PROGRESS] 95")
         if check_stop_func(): return
 
+        # AI Stem Separation (Lọc bỏ lời thoại cũ, giữ lại hiệu ứng SFX nếu bật)
+        stem_sep_data = payload.get('stem_separation', {})
+        stem_enabled = bool(stem_sep_data.get('enabled', False) or payload.get('remove_original_vocals', False))
+        cleaned_sfx_path = None
+        orig_vol = float(payload.get('original_volume', 15 if stem_enabled else 0)) / 100.0
+
+        if stem_enabled:
+            has_orig_audio = True
+            try:
+                p_cmd = [ffmpeg_path, '-i', video_path]
+                p_proc = subprocess.run(p_cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **get_stealth_subprocess_kwargs())
+                has_orig_audio = 'Audio:' in p_proc.stderr
+            except Exception:
+                pass
+
+            if has_orig_audio:
+                yield log("🎛️ Bắt đầu tách âm thanh AI (MDX-Net) để lọc sạch lời thoại cũ & bảo lưu tiếng động SFX...")
+                try:
+                    stem_mode = stem_sep_data.get('mode', 'mdx_net_hq4')
+                    stem_device = stem_sep_data.get('device', 'auto')
+                    sep_res = yield from run_audio_separator_with_progress(
+                        video_path=video_path,
+                        output_dir=temp_dir,
+                        mode=stem_mode,
+                        device=stem_device,
+                        log_func=log,
+                        check_stop_func=check_stop_func
+                    )
+                    if sep_res and sep_res.get('cleaned_path') and os.path.exists(sep_res.get('cleaned_path')):
+                        cleaned_sfx_path = sep_res.get('cleaned_path')
+                        yield log("✅ Đã tách và bảo lưu âm thanh nền SFX thành công!")
+                except Exception as e:
+                    yield log(f"⚠️ Lỗi tách âm thanh: {e} (Tiếp tục xử lý)")
+
         if not output_name.lower().endswith('.mp4'):
             output_name += '.mp4'
         final_output = os.path.join(output_dir, output_name)
@@ -2366,6 +2726,12 @@ def run_auto_edit_workflow(payload, check_stop_func):
                         bgm_file = random.choice(preset_files)
 
         overlay_inputs = ['-i', concat_silent_path, '-i', voice_audio_path]
+        sfx_input_idx = None
+        if cleaned_sfx_path and os.path.exists(cleaned_sfx_path) and orig_vol > 0.01:
+            yield log(f"🔊 Đang mix âm thanh hiệu ứng SFX gốc (Âm lượng: {int(orig_vol*100)}%)...")
+            sfx_input_idx = len(overlay_inputs) // 2
+            overlay_inputs.extend(['-stream_loop', '-1', '-i', cleaned_sfx_path])
+
         bgm_input_idx = None
         if bgm_file and os.path.exists(bgm_file):
             yield log(f"🎵 Đang mix nhạc nền: {os.path.basename(bgm_file)} (Âm lượng: {int(bgm_vol*100)}%)...")
@@ -2376,9 +2742,30 @@ def run_auto_edit_workflow(payload, check_stop_func):
         curr_v = "0:v"
 
         if auto_subtitles and os.path.exists(voice_srt_cleaned_path):
-            escaped_srt = voice_srt_cleaned_path.replace('\\', '/').replace(':', '\\:')
-            v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=25,MarginL=20,MarginR=20,WrapStyle=0'[v_sub]")
-            curr_v = "v_sub"
+            sub_style = payload.get('subtitle_style') or {}
+            if payload.get('sub_font') and 'font' not in sub_style:
+                sub_style['font'] = payload['sub_font']
+            vw, vh = get_video_dimensions_fast(concat_silent_path, ffmpeg_path)
+            ass_target = os.path.join(temp_dir, 'rendered_review_subtitles.ass')
+            sub_applied = False
+            try:
+                generate_styled_ass(voice_srt_cleaned_path, ass_target, vw, vh, sub_style)
+                if os.path.exists(ass_target) and os.path.getsize(ass_target) > 20:
+                    escaped_ass = ass_target.replace('\\', '/').replace(':', '\\:')
+                    fonts_dir = os.path.join(ROOT_DIR, 'resources', 'fonts')
+                    escaped_fonts = fonts_dir.replace('\\', '/').replace(':', '\\:')
+                    if os.path.isdir(fonts_dir):
+                        v_filters.append(f"[{curr_v}]subtitles=filename='{escaped_ass}':fontsdir='{escaped_fonts}'[v_sub]")
+                    else:
+                        v_filters.append(f"[{curr_v}]subtitles=filename='{escaped_ass}'[v_sub]")
+                    curr_v = "v_sub"
+                    sub_applied = True
+            except Exception as e_ass:
+                pass
+            if not sub_applied:
+                escaped_srt = voice_srt_cleaned_path.replace('\\', '/').replace(':', '\\:')
+                v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=25,MarginL=20,MarginR=20,WrapStyle=0'[v_sub]")
+                curr_v = "v_sub"
 
         if logo_enabled and logo_path and os.path.exists(logo_path):
             logo_idx = len(overlay_inputs) // 2
@@ -2389,9 +2776,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
             h_pct = max(1.0, min(100.0, float(logo_data.get('h_pct', 12.0))))
             opacity = max(0.05, min(1.0, float(logo_data.get('opacity', 100.0)) / 100.0))
 
-            v_filters.append(f"[{logo_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f}[logo_alpha]")
-            v_filters.append(f"[logo_alpha][{curr_v}]scale2ref=w='main_w*{w_pct/100:.4f}':h='main_h*{h_pct/100:.4f}':force_original_aspect_ratio=decrease[logo_scaled][v_ref]")
-            v_filters.append(f"[v_ref][logo_scaled]overlay=x='main_w*{x_pct/100:.4f}':y='main_h*{y_pct/100:.4f}'[v_logo]")
+            vw, vh = get_video_dimensions_fast(concat_silent_path, ffmpeg_path)
+            box_w = max(2, (int(round(vw * (w_pct / 100.0))) // 2) * 2)
+            box_h = max(2, (int(round(vh * (h_pct / 100.0))) // 2) * 2)
+            box_x = max(0, int(round(vw * (x_pct / 100.0))))
+            box_y = max(0, int(round(vh * (y_pct / 100.0))))
+
+            v_filters.append(f"[{logo_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f},scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2[logo_scaled]")
+            v_filters.append(f"[{curr_v}][logo_scaled]overlay=x='{box_x}+({box_w}-overlay_w)/2':y='{box_y}+({box_h}-overlay_h)/2'[v_logo]")
             curr_v = "v_logo"
 
         if not v_filters:
@@ -2401,7 +2793,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
             vf_complex = ";".join(v_filters)
 
         audio_filter = ""
-        if bgm_input_idx is not None:
+        if sfx_input_idx is not None and bgm_input_idx is not None:
+            if bgm_ducking:
+                audio_filter = f"[1:a]volume=1.0[v_aud];[{sfx_input_idx}:a]volume={orig_vol:.2f}[sfx_raw];[{bgm_input_idx}:a]volume={bgm_vol:.2f}[bgm_raw];[bgm_raw][v_aud]sidechaincompress=threshold=0.08:ratio=4:attack=200:release=800[bgm_duck];[v_aud][sfx_raw][bgm_duck]amix=inputs=3:duration=first:dropout_transition=2[a_out]"
+            else:
+                audio_filter = f"[1:a]volume=1.0[v_aud];[{sfx_input_idx}:a]volume={orig_vol:.2f}[sfx_raw];[{bgm_input_idx}:a]volume={bgm_vol:.2f}[bgm_raw];[v_aud][sfx_raw][bgm_raw]amix=inputs=3:duration=first:dropout_transition=2[a_out]"
+        elif sfx_input_idx is not None:
+            audio_filter = f"[1:a]volume=1.0[v_aud];[{sfx_input_idx}:a]volume={orig_vol:.2f}[sfx_raw];[v_aud][sfx_raw]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
+        elif bgm_input_idx is not None:
             if bgm_ducking:
                 audio_filter = f"[1:a]volume=1.0[v_aud];[{bgm_input_idx}:a]volume={bgm_vol:.2f}[bgm_raw];[bgm_raw][v_aud]sidechaincompress=threshold=0.08:ratio=4:attack=200:release=800[bgm_duck];[v_aud][bgm_duck]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
             else:
@@ -2419,7 +2818,8 @@ def run_auto_edit_workflow(payload, check_stop_func):
         else:
             final_enc_cmd = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
 
-        map_args = ['-map', '[v_out]', '-map', '[a_out]' if bgm_input_idx is not None else '1:a']
+        has_audio_out = (sfx_input_idx is not None or bgm_input_idx is not None)
+        map_args = ['-map', '[v_out]', '-map', '[a_out]' if has_audio_out else '1:a']
 
         cmd_overlay = [
             ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
@@ -2468,6 +2868,13 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if not os.path.exists(final_output):
             yield log(f"🛑 Không tìm thấy file video đầu ra: {final_output}")
             return
+
+        out_srt = os.path.splitext(final_output)[0] + '.srt'
+        if os.path.exists(voice_srt_cleaned_path):
+            try:
+                shutil.copy2(voice_srt_cleaned_path, out_srt)
+            except Exception:
+                pass
 
         # --- BƯỚC 7: POST-RENDER VALIDATOR (KIỂM TRA ĐỒNG BỘ VÀ PTS) ---
         expected_total_dur = tl_report.get('total_voice_duration', 0.0) if 'tl_report' in locals() else None
@@ -2547,7 +2954,6 @@ def run_narration_workflow(payload, check_stop_func):
     
     openai_key, openai_base_url, openai_model = resolve_openai_credentials(payload)
     api_key_openspeaker = payload.get('openspeaker_api_key', '')
-    encoder = payload.get('encoder', 'libx264')
     auto_subtitles = payload.get('auto_subtitles', False)
     blur_orig_subs = parse_bool(payload.get('blur_original_subtitles'), False)
     orig_volume = float(payload.get('original_volume', 15)) / 100.0  # 0.0 - 1.0
@@ -2570,19 +2976,28 @@ def run_narration_workflow(payload, check_stop_func):
                 if api_key_openspeaker:
                     break
 
-    if not openai_key:
-        yield "data: 🛑 Lỗi: Chưa tìm thấy OpenAI API Key. Vui lòng vào Cài đặt để nhập Key cá nhân hoặc bấm [Lấy API Cấp Sẵn] nếu bạn dùng gói VIP/1 Năm!\n\n"
-        return
+    continue_from_script = parse_bool(payload.get('continue_from_script'), False)
+    pause_after_script = parse_bool(payload.get('pause_after_script', True), True)
+    custom_script = payload.get('custom_script')
+    custom_srt_content = payload.get('custom_srt_content') or payload.get('narration_srt_content')
+    use_cache = bool(payload.get('use_cache', False))
+
+    if not continue_from_script and not custom_script:
+        if not openai_key:
+            yield "data: 🛑 Lỗi: Chưa tìm thấy OpenAI API Key. Vui lòng vào Cài đặt để nhập Key cá nhân hoặc bấm [Lấy API Cấp Sẵn] nếu bạn dùng gói VIP/1 Năm!\n\n"
+            return
+        if not srt_path or not os.path.exists(srt_path):
+            yield "data: 🛑 Lỗi: Không tìm thấy file SRT đầu vào. Cần SRT gốc để GPT phân tích!\n\n"
+            return
 
     if not video_path or not os.path.exists(video_path):
         yield "data: 🛑 Lỗi: Không tìm thấy file Video đầu vào.\n\n"
         return
-    if not srt_path or not os.path.exists(srt_path):
-        yield "data: 🛑 Lỗi: Không tìm thấy file SRT đầu vào. Cần SRT gốc để GPT phân tích!\n\n"
-        return
 
-    with open(srt_path, 'r', encoding='utf-8') as f:
-        srt_content = f.read()
+    srt_content = ""
+    if srt_path and os.path.exists(srt_path):
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            srt_content = f.read()
 
     ffmpeg_path = None
     try:
@@ -2590,6 +3005,15 @@ def run_narration_workflow(payload, check_stop_func):
     except Exception as e:
         yield f"data: 🛑 Lỗi kiểm tra FFmpeg: {e}\n\n"
         return
+
+    # Tự động nhận diện phần cứng GPU hoặc theo encoder chỉ định
+    req_encoder = payload.get('encoder')
+    if not req_encoder or str(req_encoder).strip().lower() == 'auto':
+        detected_enc, is_gpu_enc, _ = detect_hardware_encoder(ffmpeg_path)
+        encoder = detected_enc
+    else:
+        encoder = str(req_encoder).strip()
+        is_gpu_enc = (encoder != 'libx264')
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
     if 'openrouter.ai' in str(openai_base_url) or str(openai_key).startswith('sk-or-'):
@@ -2618,8 +3042,8 @@ def run_narration_workflow(payload, check_stop_func):
             return f"data: [STEP] {step}\n\ndata: {msg}\n\n"
         return f"data: {msg}\n\n"
 
-    use_cache = bool(payload.get('use_cache', False))
-    if not use_cache and os.path.exists(temp_dir):
+    if not use_cache and not continue_from_script and os.path.exists(temp_dir):
+
         yield log("🧹 Đang dọn dẹp tài liệu cũ để tạo mới hoàn toàn...")
         undeleted = []
         try:
@@ -2643,6 +3067,7 @@ def run_narration_workflow(payload, check_stop_func):
     voice_audio_path = os.path.join(temp_dir, 'voice_narration.wav')
     voice_srt_path = os.path.join(temp_dir, 'voice_narration.srt')
     voice_srt_cleaned_path = os.path.join(temp_dir, 'voice_narration_cleaned.srt')
+    filter_script_path = None
 
     try:
         # --- BƯỚC 1: ĐỌC VIDEO DURATION & LÊN KỊCH BẢN ---
@@ -2659,7 +3084,12 @@ def run_narration_workflow(payload, check_stop_func):
         yield log("[PROGRESS] 5")
 
         narration_script = ""
-        if use_cache and os.path.exists(script_txt_path):
+        if custom_script and str(custom_script).strip():
+            narration_script = sanitize_review_script(str(custom_script).strip())
+            with open(script_txt_path, 'w', encoding='utf-8') as f:
+                f.write(narration_script)
+            yield log(f"💚 Sử dụng kịch bản kể lại đã chỉnh sửa của người dùng ({len(narration_script.split())} từ).")
+        elif use_cache and os.path.exists(script_txt_path):
             with open(script_txt_path, 'r', encoding='utf-8') as f:
                 narration_script = sanitize_review_script(f.read())
             yield log(f"💚 Đã tìm thấy kịch bản cũ, tái sử dụng tại {script_txt_path}")
@@ -2674,9 +3104,15 @@ def run_narration_workflow(payload, check_stop_func):
 
             review_style = payload.get('review_style', 'dramatic')
             custom_style_prompt = payload.get('custom_style_prompt', '')
+            script_language = payload.get('script_language') or payload.get('target_lang') or 'vi'
             style_info = review_styles.get_style_by_id(review_style)
             style_directive = review_styles.get_style_directive(review_style, custom_style_prompt)
             yield log(f"🎭 Phong cách Kể lại: {style_info.get('icon', '🎙️')} {style_info.get('name', 'Mặc định')}")
+
+            lang_code = str(script_language).lower().strip()
+            lang_info = LANGUAGE_NAMES.get(lang_code, ('Tiếng Việt', 'Vietnamese'))
+            lang_directive = get_language_directive(lang_code)
+            yield log(f"🌐 Ngôn ngữ kịch bản đầu ra: {lang_info[0]} ({lang_info[1]})")
 
             condensed_srt = condense_srt_for_llm(srt_content, max_chars=45000)
             target_words = int(video_minutes * 200)  # ~200 từ/phút (chậm hơn recap để vừa xem)
@@ -2685,6 +3121,8 @@ def run_narration_workflow(payload, check_stop_func):
                                            .replace("{SỐ_GIÂY}", f"{video_duration:.0f}") \
                                            .replace("{SỐ_TỪ}", str(target_words))
 
+            if lang_directive:
+                prompt_final = f"{lang_directive}\n\n{prompt_final}"
             if style_directive:
                 prompt_final = f"{style_directive}\n\n{prompt_final}"
 
@@ -2694,10 +3132,11 @@ def run_narration_workflow(payload, check_stop_func):
                 headers["X-Title"] = "NovaCut AI"
             url = f"{openai_base_url.rstrip('/')}/chat/completions"
 
+            sys_content = f"Bạn là chuyên gia review phim, viết kịch bản voice-over kể lại nội dung phim bằng {lang_info[0]} ({lang_info[1]})." if lang_code != 'vi' else "Bạn là chuyên gia review phim, viết kịch bản voice-over kể lại nội dung phim."
             payload_gpt = {
                 "model": openai_model,
                 "messages": [
-                    {"role": "system", "content": "Bạn là chuyên gia review phim, viết kịch bản voice-over kể lại nội dung phim."},
+                    {"role": "system", "content": sys_content},
                     {"role": "user", "content": prompt_final}
                 ]
             }
@@ -2722,11 +3161,28 @@ def run_narration_workflow(payload, check_stop_func):
 
         yield log("[PROGRESS] 20")
 
+        # Tách câu và gửi sự kiện [SCRIPT_READY] cho Frontend
+        sentences = split_text_to_sentences(narration_script)
+        script_info = {
+            "script": narration_script,
+            "sentences": sentences,
+            "word_count": len(narration_script.split()),
+            "sentence_count": len(sentences),
+            "est_minutes": round(len(narration_script.split()) / 200.0, 1)
+        }
+        yield f"data: [SCRIPT_READY] {json.dumps(script_info, ensure_ascii=False)}\n\n"
+
+        if pause_after_script and not continue_from_script:
+            yield log(f"⏸️ [TẠM DỪNG DUYỆT KỊCH BẢN] Đã tạo xong kịch bản kể lại ({len(sentences)} câu, {len(narration_script.split())} từ).")
+            yield log("📝 Hệ thống đã nạp kịch bản vào bảng bên dưới để bạn xem và chỉnh sửa.")
+            yield log("👉 Hãy kiểm tra các câu thoại, nghe thử giọng đọc nếu muốn, sau đó bấm [TIẾP TỤC DỰNG VIDEO] để hoàn tất!")
+            return
+
         # --- BƯỚC 2: TẠO GIỌNG ĐỌC (TỪNG CÂU) ---
         yield log("Đang tạo giọng đọc (Bước 2 - Tách câu TTS)...", step=2)
         if check_stop_func(): return
 
-        if use_cache and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path):
+        if use_cache and not continue_from_script and os.path.exists(voice_audio_path) and os.path.exists(voice_srt_path):
             yield log("💚 Đã tìm thấy file giọng đọc cũ, tái sử dụng.")
         else:
             if is_api_voice(voice_id) and api_key_openspeaker:
@@ -2820,14 +3276,23 @@ def run_narration_workflow(payload, check_stop_func):
         curr_v = "0:v"
 
         # Video Zoom parameter
-        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False))
-        video_zoom = float(payload.get('video_zoom', 100.0))
-        zoom_factor = max(1.0, min(2.0, video_zoom / 100.0)) if enable_zoom else 1.0
+        raw_zoom = float(payload.get('video_zoom', 100.0))
+        zoom_val = (raw_zoom / 100.0) if raw_zoom > 5.0 else raw_zoom
+        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False) or zoom_val > 1.005)
+        zoom_factor = max(1.0, min(5.0, zoom_val)) if enable_zoom else 1.0
+
+        video_pan_x = float(payload.get('video_pan_x', 0.0))
+        video_pan_y = float(payload.get('video_pan_y', 0.0))
 
         # Phóng to video nếu bật
-        if zoom_factor > 1.0:
+        if zoom_factor > 1.005:
             yield log(f"🔍 Kích hoạt phóng to video (Zoom: {zoom_factor*100:.0f}%)...")
-            filter_parts.append(f"[{curr_v}]crop=w='iw/{zoom_factor:.4f}':h='ih/{zoom_factor:.4f}':x='(iw-iw/{zoom_factor:.4f})/2':y='(ih-ih/{zoom_factor:.4f})/2',scale=iw:ih:flags=lanczos[v_zoomed]")
+            vw, vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+            crop_w = f"trunc(iw/{zoom_factor:.4f}/2)*2"
+            crop_h = f"trunc(ih/{zoom_factor:.4f}/2)*2"
+            crop_x = f"(iw-{crop_w})/2 - ({video_pan_x:.1f}*(iw/800))"
+            crop_y = f"(ih-{crop_h})/2 - ({video_pan_y:.1f}*(ih/450))"
+            filter_parts.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,trunc(({crop_x})/2)*2))':y='max(0,min(ih-oh,trunc(({crop_y})/2)*2))',scale={vw}:{vh}:flags=lanczos[v_zoomed]")
             curr_v = "v_zoomed"
 
         # Làm mờ phụ đề gốc nếu bật
@@ -2873,9 +3338,30 @@ def run_narration_workflow(payload, check_stop_func):
 
         # Burn-in subtitle mới
         if auto_subtitles and os.path.exists(voice_srt_cleaned_path):
-            escaped_srt = voice_srt_cleaned_path.replace('\\', '/').replace(':', '\\:')
-            filter_parts.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=25,MarginL=20,MarginR=20,WrapStyle=0'[v_sub]")
-            curr_v = "v_sub"
+            sub_style = payload.get('subtitle_style') or {}
+            if payload.get('sub_font') and 'font' not in sub_style:
+                sub_style['font'] = payload['sub_font']
+            vw, vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+            ass_target = os.path.join(temp_dir, 'rendered_review_subtitles.ass')
+            sub_applied = False
+            try:
+                generate_styled_ass(voice_srt_cleaned_path, ass_target, vw, vh, sub_style)
+                if os.path.exists(ass_target) and os.path.getsize(ass_target) > 20:
+                    escaped_ass = ass_target.replace('\\', '/').replace(':', '\\:')
+                    fonts_dir = os.path.join(ROOT_DIR, 'resources', 'fonts')
+                    escaped_fonts = fonts_dir.replace('\\', '/').replace(':', '\\:')
+                    if os.path.isdir(fonts_dir):
+                        filter_parts.append(f"[{curr_v}]subtitles=filename='{escaped_ass}':fontsdir='{escaped_fonts}'[v_sub]")
+                    else:
+                        filter_parts.append(f"[{curr_v}]subtitles=filename='{escaped_ass}'[v_sub]")
+                    curr_v = "v_sub"
+                    sub_applied = True
+            except Exception as e_ass:
+                pass
+            if not sub_applied:
+                escaped_srt = voice_srt_cleaned_path.replace('\\', '/').replace(':', '\\:')
+                filter_parts.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=25,MarginL=20,MarginR=20,WrapStyle=0'[v_sub]")
+                curr_v = "v_sub"
 
         # Inputs cho FFmpeg
         inputs_list = ['-i', video_path, '-i', voice_audio_path]
@@ -2893,9 +3379,14 @@ def run_narration_workflow(payload, check_stop_func):
             h_pct = max(1.0, min(100.0, float(logo_data.get('h_pct', 12.0))))
             opacity = max(0.05, min(1.0, float(logo_data.get('opacity', 100.0)) / 100.0))
 
-            filter_parts.append(f"[{logo_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f}[logo_alpha]")
-            filter_parts.append(f"[logo_alpha][{curr_v}]scale2ref=w='main_w*{w_pct/100:.4f}':h='main_h*{h_pct/100:.4f}':force_original_aspect_ratio=decrease[logo_scaled][v_ref]")
-            filter_parts.append(f"[v_ref][logo_scaled]overlay=x='main_w*{x_pct/100:.4f}':y='main_h*{y_pct/100:.4f}'[v_logo]")
+            vw, vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+            box_w = max(2, (int(round(vw * (w_pct / 100.0))) // 2) * 2)
+            box_h = max(2, (int(round(vh * (h_pct / 100.0))) // 2) * 2)
+            box_x = max(0, int(round(vw * (x_pct / 100.0))))
+            box_y = max(0, int(round(vh * (y_pct / 100.0))))
+
+            filter_parts.append(f"[{logo_idx}:v]format=rgba,colorchannelmixer=aa={opacity:.2f},scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2[logo_scaled]")
+            filter_parts.append(f"[{curr_v}][logo_scaled]overlay=x='{box_x}+({box_w}-overlay_w)/2':y='{box_y}+({box_h}-overlay_h)/2'[v_logo]")
             curr_v = "v_logo"
 
         # Hoàn tất video filter
@@ -2920,15 +3411,22 @@ def run_narration_workflow(payload, check_stop_func):
         stem_enabled = bool(stem_sep_data.get('enabled', False) or payload.get('remove_original_vocals', False))
         sfx_idx = None
         if stem_enabled and has_orig_audio:
-            yield log("🎛️ Đang chạy AI Stem Separator để lọc sạch lời thoại cũ & bảo lưu tiếng động hiện trường (SFX)...")
+            yield log("🎛️ Bắt đầu tách âm thanh AI (MDX-Net) để lọc sạch lời thoại cũ & bảo lưu tiếng động SFX...")
             try:
-                import audio_separator
                 stem_mode = stem_sep_data.get('mode', 'mdx_net_hq4')
                 stem_device = stem_sep_data.get('device', 'auto')
-                sep_res = audio_separator.separate_audio_stems(video_path, output_dir=temp_dir, mode=stem_mode, device=stem_device)
-                if sep_res.get('cleaned_path') and os.path.exists(sep_res.get('cleaned_path')):
+                sep_res = yield from run_audio_separator_with_progress(
+                    video_path=video_path,
+                    output_dir=temp_dir,
+                    mode=stem_mode,
+                    device=stem_device,
+                    log_func=log,
+                    check_stop_func=check_stop_func
+                )
+                if sep_res and sep_res.get('cleaned_path') and os.path.exists(sep_res.get('cleaned_path')):
                     sfx_idx = len(inputs_list) // 2
                     inputs_list.extend(['-i', sep_res.get('cleaned_path')])
+                    yield log("✅ Đã tách và bảo lưu âm thanh nền SFX thành công!")
             except Exception as e:
                 yield log(f"⚠️ Lỗi tách âm thanh: {e} (Tiếp tục với âm thanh gốc)")
 
@@ -2964,31 +3462,80 @@ def run_narration_workflow(payload, check_stop_func):
         temp_no_bgm = os.path.join(temp_dir, 'narration_no_bgm.mp4')
         render_target = temp_no_bgm if bgm_file else os.path.join(output_dir, output_name)
 
-        filter_args = ['-filter_complex', full_filter] if full_filter else []
+        filter_script_path = None
+        filter_args = []
+        if full_filter:
+            try:
+                filter_script_path = os.path.join(temp_dir, f'narration_filter_{int(time.time()*1000)}.txt')
+                with open(filter_script_path, 'w', encoding='utf-8') as f_fc:
+                    f_fc.write(full_filter)
+                fc_flag = ffmpeg_installer.get_filter_script_flag(ffmpeg_path)
+                filter_args = [fc_flag, filter_script_path]
+            except Exception:
+                filter_script_path = None
+                filter_args = ['-filter_complex', full_filter]
+
+        # Cấu hình tham số encoder video linh hoạt theo GPU / CPU
+        if encoder == 'h264_nvenc':
+            enc_v_args = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p']
+        elif encoder == 'hevc_nvenc':
+            enc_v_args = ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-cq', '24', '-pix_fmt', 'yuv420p']
+        elif encoder == 'h264_qsv':
+            enc_v_args = ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '22', '-pix_fmt', 'yuv420p']
+        elif encoder == 'h264_amf':
+            enc_v_args = ['-c:v', 'h264_amf', '-quality', 'speed', '-qp_i', '22', '-qp_p', '22', '-pix_fmt', 'yuv420p']
+        elif encoder == 'h264_mf':
+            enc_v_args = ['-c:v', 'h264_mf', '-rate_control', 'vbr', '-b:v', '6000k', '-pix_fmt', 'yuv420p']
+        else:
+            enc_v_args = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
 
         cmd = [
             ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info',
             *inputs_list,
             *filter_args,
             '-map', '[vout]', '-map', '[aout]',
-            '-c:v', encoder, '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+            *enc_v_args,
             '-c:a', 'aac', '-b:a', '192k',
             '-shortest',
             render_target
         ]
 
-        yield log(f"🎬 Đang render video gốc với giọng đọc và phụ đề ({video_duration:.0f}s)...")
+        enc_display = f"GPU ({encoder})" if encoder != 'libx264' else "CPU (libx264)"
+        yield log(f"🎬 Đang render video gốc với giọng đọc và phụ đề [{enc_display}] ({video_duration:.0f}s)...")
         render_success = yield from run_ffmpeg_with_progress_yield(
             cmd,
             total_duration=video_duration,
             start_pct=55,
             end_pct=90,
-            desc="Render video",
+            desc=f"Render video ({encoder})",
             check_stop_func=check_stop_func
         )
+
+        # Cơ chế dự phòng: Tự động fallback về CPU libx264 nếu GPU gặp sự cố driver / out-of-memory
+        if not render_success and encoder != 'libx264' and not check_stop_func():
+            yield log(f"⚠️ Bộ mã hóa GPU {encoder} gặp sự cố, tự động chuyển sang chế độ dự phòng CPU (libx264)...")
+            cmd_fallback = [
+                ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info',
+                *inputs_list,
+                *filter_args,
+                '-map', '[vout]', '-map', '[aout]',
+                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-shortest',
+                render_target
+            ]
+            render_success = yield from run_ffmpeg_with_progress_yield(
+                cmd_fallback,
+                total_duration=video_duration,
+                start_pct=55,
+                end_pct=90,
+                desc="Render video (CPU Fallback)",
+                check_stop_func=check_stop_func
+            )
         if filter_script_path and os.path.exists(filter_script_path):
             try:
                 os.remove(filter_script_path)
+                filter_script_path = None
             except Exception:
                 pass
 
@@ -3024,6 +3571,13 @@ def run_narration_workflow(payload, check_stop_func):
         if not os.path.exists(final_output):
             yield log(f"🛑 Không tìm thấy file đầu ra: {final_output}")
             return
+
+        out_srt = os.path.splitext(final_output)[0] + '.srt'
+        if os.path.exists(voice_srt_cleaned_path):
+            try:
+                shutil.copy2(voice_srt_cleaned_path, out_srt)
+            except Exception:
+                pass
 
         if not payload.get('skip_history_recording'):
             try:
@@ -3080,3 +3634,9 @@ def run_narration_workflow(payload, check_stop_func):
         except Exception as te:
             pass
         yield log(f"🛑 Lỗi không xác định trong Narration: {str(e)} | {traceback.format_exc()}")
+    finally:
+        if 'filter_script_path' in locals() and filter_script_path and os.path.exists(filter_script_path):
+            try:
+                os.remove(filter_script_path)
+            except Exception:
+                pass

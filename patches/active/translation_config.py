@@ -4,10 +4,10 @@ Cấu hình trung tâm cho dịch thuật AI NovaCut
 Central Configuration for Subtitle Translation Pipeline
 """
 
-DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.7-flash"
+DEFAULT_TRANSLATION_MODEL = "qwen/qwen3.8-flash"
 
 DEFAULT_TRANSLATION_CONFIG = {
-    "model": "qwen/qwen3.7-flash",
+    "model": "qwen/qwen3.8-flash",
     "chunkSize": 80,
     "concurrency": 3,
     "maxRetries": 3,

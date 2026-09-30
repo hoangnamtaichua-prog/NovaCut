@@ -326,4 +326,44 @@ def detect_hardware_encoder(ffmpeg_path=None):
     return ('libx264', False, ['-c:v', 'libx264', '-preset', 'faster', '-crf', '20'])
 
 
+_filter_script_flag = None
+
+def get_filter_script_flag(ffmpeg_exe=None):
+    """
+    Phát hiện tùy chọn truyền filter graph qua tệp tin phù hợp với phiên bản FFmpeg:
+    - FFmpeg 7.0+ / 8.0+: Hỗ trợ cú pháp chuẩn -/filter_complex <tệp>
+    - FFmpeg cũ (< 7.0): Hỗ trợ -filter_complex_script <tệp>
+    """
+    global _filter_script_flag
+    if _filter_script_flag is not None:
+        return _filter_script_flag
+    if not ffmpeg_exe:
+        ffmpeg_exe = get_ffmpeg_path()
+    try:
+        import tempfile
+        import subprocess
+        t_file = os.path.join(tempfile.gettempdir(), f'_probe_fc_{os.getpid()}.txt')
+        with open(t_file, 'w', encoding='utf-8') as f:
+            f.write('nullsrc=s=16x16:d=0.1[v]')
+        r = subprocess.run(
+            [ffmpeg_exe, '-y', '-/filter_complex', t_file, '-map', '[v]', '-f', 'null', '-'],
+            capture_output=True,
+            timeout=5,
+            **get_stealth_subprocess_kwargs()
+        )
+        if os.path.exists(t_file):
+            try:
+                os.remove(t_file)
+            except Exception:
+                pass
+        if r.returncode == 0:
+            _filter_script_flag = '-/filter_complex'
+        else:
+            _filter_script_flag = '-filter_complex_script'
+    except Exception:
+        _filter_script_flag = '-filter_complex_script'
+    return _filter_script_flag
+
+
+
 

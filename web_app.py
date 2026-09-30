@@ -302,8 +302,32 @@ def main():
 
         def open_in_explorer(self, path):
             import subprocess
-            if os.path.exists(path):
-                subprocess.Popen(['explorer', '/select,', os.path.normpath(path)])
+            if not path:
+                return None
+            norm = os.path.normpath(path)
+            if os.name == 'nt' and len(norm) >= 2 and norm[1] == ':':
+                norm = norm[0].upper() + norm[1:]
+            if os.path.isdir(norm):
+                try:
+                    os.startfile(norm)
+                except Exception:
+                    subprocess.Popen(f'explorer "{norm}"')
+            elif os.path.isfile(norm):
+                if norm.upper().startswith(('G:', '\\\\')):
+                    try:
+                        os.startfile(os.path.dirname(norm))
+                    except Exception:
+                        subprocess.Popen(f'explorer "{os.path.dirname(norm)}"')
+                else:
+                    try:
+                        subprocess.Popen(f'explorer /select,"{norm}"')
+                    except Exception:
+                        os.startfile(os.path.dirname(norm))
+            elif os.path.exists(os.path.dirname(norm)):
+                try:
+                    os.startfile(os.path.dirname(norm))
+                except Exception:
+                    subprocess.Popen(f'explorer "{os.path.dirname(norm)}"')
             return None
 
         def toggle_fullscreen(self):

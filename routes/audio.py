@@ -64,6 +64,7 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
         with _separation_lock:
             return _cancel_requested
 
+    start_time = time.time()
     try:
         res = audio_separator.separate_audio_stems(
             input_media_path=media_path,
@@ -105,6 +106,28 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
             _separation_progress["message"] = "Hoàn tất tách âm thanh!"
             _separation_progress["result"] = result_payload
 
+        # Gửi thông báo Telegram khi tách âm thanh hoàn tất
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                out_target = cleaned_path or vocals_path or inst_path
+                notifier.notify_task_success(
+                    task_type='audio',
+                    task_title='Tách Âm Thanh AI',
+                    video_title=os.path.basename(media_path),
+                    output_path=out_target,
+                    duration_sec=time.time() - start_time,
+                    extra_info={
+                        'Mô hình': mode,
+                        'Thiết bị': str(res.get("device", device)).upper(),
+                        'Lọc giọng thoại': 'Bật' if remove_vocals else 'Tắt',
+                        'Lọc nhạc nền': 'Bật' if remove_bgm else 'Tắt'
+                    }
+                )
+        except Exception as _te:
+            logging.getLogger(__name__).warning(f"[Telegram] Error sending audio separation notification: {_te}")
+
     except Exception as e:
         with _separation_lock:
             is_cancelled = "dừng tác vụ" in str(e).lower() or _cancel_requested
@@ -113,6 +136,20 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
             _separation_progress["error"] = str(e)
             _separation_progress["message"] = "🛑 Đã dừng khẩn cấp theo yêu cầu." if is_cancelled else f"Lỗi: {str(e)}"
         _add_log(f"⚠️ {_separation_progress['message']}")
+        if not is_cancelled:
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    notifier.notify_task_failure(
+                        task_type='audio',
+                        task_title='Tách Âm Thanh AI',
+                        video_title=os.path.basename(media_path),
+                        error_message=str(e),
+                        duration_sec=time.time() - start_time
+                    )
+            except Exception as _te:
+                logging.getLogger(__name__).warning(f"[Telegram] Error sending audio separation failure notification: {_te}")
 
 
 @audio_bp.route('/api/audio/separate', methods=['POST'])

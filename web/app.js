@@ -214,6 +214,12 @@ mainNavTabs.forEach(tab => {
                     window.renderBatchTable();
                 }
             }
+            // Special case for Batch Movie Review Queue
+            if (targetId === 'viewBatchQueue') {
+                if (typeof window.renderBatchQueueTable === 'function') {
+                    window.renderBatchQueueTable();
+                }
+            }
             // Special case for Export History
             if (targetId === 'viewExportHistory') {
                 loadExportHistory(1);
@@ -222,6 +228,12 @@ mainNavTabs.forEach(tab => {
             if (targetId === 'viewSocialPublish') {
                 loadSocialProfiles();
                 loadSocialHistory();
+            }
+            // Special case for Review Phim
+            if (targetId === 'viewReview') {
+                if (typeof window.renderReviewLogo === 'function') {
+                    window.renderReviewLogo();
+                }
             }
         }
     });
@@ -474,6 +486,9 @@ if (btnRunStemSeparationEditor) {
             }
 
             // Vòng lặp lắng nghe tiến trình thời gian thực
+            let lastSepLogMsg = '';
+            let lastSepLogPct = -1;
+            let lastSepLogTime = 0;
             await new Promise((resolve) => {
                 pollTimer = setInterval(async () => {
                     try {
@@ -484,6 +499,12 @@ if (btnRunStemSeparationEditor) {
                         if (progressBarFill && pData.percent !== undefined) progressBarFill.style.width = `${pData.percent}%`;
                         if (progressPercent && pData.percent !== undefined) progressPercent.textContent = `${pData.percent}%`;
                         if (progressStatus && pData.message) progressStatus.textContent = pData.message;
+                        if (pData.message && (pData.percent !== lastSepLogPct || pData.message !== lastSepLogMsg || (Date.now() - lastSepLogTime) >= 3000)) {
+                            lastSepLogMsg = pData.message;
+                            lastSepLogPct = pData.percent;
+                            lastSepLogTime = Date.now();
+                            appendLog(`🎛️ ${pData.message}`, 'info');
+                        }
                         if (pData.logs && logBox) {
                             logBox.textContent = pData.logs.join('\n');
                             logBox.scrollTop = logBox.scrollHeight;
@@ -495,6 +516,7 @@ if (btnRunStemSeparationEditor) {
                             if (progressBarFill) progressBarFill.style.width = '100%';
                             if (progressPercent) progressPercent.textContent = '100%';
                             if (progressStatus) progressStatus.textContent = '✅ Đã hoàn tất tách âm thanh!';
+                            appendLog('✅ Đã hoàn tất tách và lọc âm thanh AI!', 'success');
                             showToast('🎉 Đã tách và lọc âm thanh AI thành công!', 'success');
 
                             const resultBox = document.getElementById('editorStemResultAudio');
@@ -682,12 +704,16 @@ if(document.getElementById('btnSelectEditorInput')) {
                         if (hasAiBoxes) {
                             msg += ` kèm toạ độ quét làm mờ AI Pixel (${aiBoxesCount ? aiBoxesCount + ' câu' : 'đầy đủ'})`;
                         }
-                        msg += `. Bạn có muốn nạp ngay vào bảng biên tập để tiếp tục làm việc mà không cần quét lại không?`;
+                        msg += `.\n\nBạn có muốn DÙNG LẠI không?\n• Có: Nạp vào bảng biên tập để tiếp tục làm tiếp.\n• Không: Bỏ qua và làm mới từ đầu.`;
 
-                        const loadConfirm = await showConfirmModal(
-                            'Nạp dữ liệu đã xử lý trước đó?',
-                            msg
-                        );
+                        const loadConfirm = await showConfirmModal({
+                            title: 'Phát hiện dữ liệu đang làm dở',
+                            message: msg,
+                            icon: '📂',
+                            confirmText: 'Có (Dùng lại)',
+                            cancelText: 'Không (Làm mới từ đầu)',
+                            confirmType: 'primary'
+                        });
                         if (loadConfirm) {
                             await loadSrtToEditor(srtCandidate);
                             
@@ -1049,6 +1075,9 @@ window.buildEditorExportConfig = function(overrides = {}) {
         enabled: isDubbingOn,
         mode: isDubbingTtsTab ? 'tts' : 'manual',
         voice_id: overrides.dubbing?.voice_id || overrides.dubbing?.voice || document.getElementById('dubbingVoiceInput')?.value || 'local_clone_1787245769140',
+        gender: overrides.dubbing?.gender || overrides.dubbing?.voice_gender || document.getElementById('batch_dubbingVoiceInput')?.dataset?.gender || document.getElementById('dubbingVoiceInput')?.dataset?.gender || '',
+        lang: overrides.dubbing?.lang || overrides.dubbing?.voice_lang || document.getElementById('batch_dubbingVoiceInput')?.dataset?.lang || document.getElementById('dubbingVoiceInput')?.dataset?.lang || '',
+        provider: overrides.dubbing?.provider || overrides.dubbing?.voice_provider || document.getElementById('batch_dubbingVoiceInput')?.dataset?.provider || document.getElementById('dubbingVoiceInput')?.dataset?.provider || '',
         speed: parseFloat(overrides.dubbing?.speed ?? (document.getElementById('dubbingSpeed')?.value || 1.1)),
         threads: parseInt(overrides.dubbing?.threads ?? (document.getElementById('dubbingThreads')?.value || 16)),
         voice_volume: (overrides.dubbing?.voice_volume !== undefined)
@@ -1072,21 +1101,27 @@ window.buildEditorExportConfig = function(overrides = {}) {
         manual_original_volume: (overrides.dubbing?.manual_original_volume !== undefined) ? Number(overrides.dubbing.manual_original_volume) : (parseInt(document.getElementById('dubbingManualOrigVol')?.value || 30) / 100)
     };
 
-    const isSubEnabled = overrides.subtitles_enabled ?? (document.getElementById('subtitlesEnabled')?.checked ?? true);
-    const blurEnabled = overrides.blur_original_subtitles ?? (isSubEnabled && Boolean(document.getElementById('reviewBlurOriginalSubtitles')?.checked));
+    const isSubEnabled = (overrides.subtitles_enabled !== undefined) ? Boolean(overrides.subtitles_enabled) : (document.getElementById('subtitlesEnabled')?.checked ?? true);
+    const blurEnabled = (overrides.blur_original_subtitles !== undefined) ? Boolean(overrides.blur_original_subtitles) : (Boolean(document.getElementById('reviewBlurOriginalSubtitles')?.checked));
     const blurIntensity = parseInt(overrides.blur_intensity ?? (document.getElementById('dynBlurIntensity')?.value || document.getElementById('subBgBlur')?.value || 15));
 
     let subs = overrides.subtitles;
-    if (!subs) {
-        subs = (typeof srtData !== 'undefined' && Array.isArray(srtData)) ? srtData.map(s => {
-            let orig = (s.text || '').trim();
-            let trans = (s.translation || '').trim();
-            if (!trans && orig && !/[\u4e00-\u9fff]/.test(orig)) {
-                trans = orig;
-            }
-            return { ...s, text: orig, translation: trans };
-        }) : [];
+    if (subs === undefined) {
+        if (overrides.source_tool === 'batch_editor') {
+            subs = [];
+        } else {
+            subs = (typeof srtData !== 'undefined' && Array.isArray(srtData)) ? srtData.map(s => {
+                let orig = (s.text || '').trim();
+                let trans = (s.translation || '').trim();
+                if (!trans && orig && !/[\u4e00-\u9fff]/.test(orig)) {
+                    trans = orig;
+                }
+                return { ...s, text: orig, translation: trans };
+            }) : [];
+        }
     }
+
+    const manualSrtVal = isSubEnabled ? (overrides.manualSrt !== undefined ? overrides.manualSrt : (overrides.source_tool === 'batch_editor' ? '' : (typeof manualSrtPath !== 'undefined' && manualSrtPath ? manualSrtPath.value : ''))) : '';
 
     const config = {
         mode: isDubbingOn ? (isDubbingTtsTab ? 'tts' : 'manual') : 'none',
@@ -1101,19 +1136,45 @@ window.buildEditorExportConfig = function(overrides = {}) {
         threads: overrides.threads || document.getElementById('exportThreads')?.value || 'auto',
         preset: overrides.preset || document.getElementById('exportPreset')?.value || 'faster',
         video_speed: parseFloat(overrides.video_speed ?? (document.getElementById('editToolSpeedSlider')?.value || 1.0)),
-        video_zoom: overrides.video_zoom ?? (typeof currentVideoZoom !== 'undefined' ? currentVideoZoom : 1.0),
-        video_pan_x: overrides.video_pan_x ?? (typeof videoPanX !== 'undefined' ? videoPanX : 0),
-        video_pan_y: overrides.video_pan_y ?? (typeof videoPanY !== 'undefined' ? videoPanY : 0),
-        aspect_ratio: overrides.aspect_ratio || document.getElementById('editToolAspectRatio')?.value || 'original',
-        mirror_flip: overrides.mirror_flip ?? (document.getElementById('editToolMirrorFlip')?.checked || false),
+        video_zoom: overrides.video_zoom ?? (() => {
+            const studio = window.videoStudioInstances?.editor;
+            if (studio && studio.state && typeof studio.state.zoom === 'number') {
+                return studio.state.zoom;
+            }
+            return (typeof currentVideoZoom !== 'undefined' ? currentVideoZoom : 1.0);
+        })(),
+        video_pan_x: overrides.video_pan_x ?? (() => {
+            const studio = window.videoStudioInstances?.editor;
+            if (studio && studio.state && typeof studio.state.panX === 'number') {
+                const cW = studio.container?.clientWidth || 800;
+                return (studio.state.panX / cW) * 800;
+            }
+            return (typeof videoPanX !== 'undefined' ? videoPanX : 0);
+        })(),
+        video_pan_y: overrides.video_pan_y ?? (() => {
+            const studio = window.videoStudioInstances?.editor;
+            if (studio && studio.state && typeof studio.state.panY === 'number') {
+                const cH = studio.container?.clientHeight || 450;
+                return (studio.state.panY / cH) * 450;
+            }
+            return (typeof videoPanY !== 'undefined' ? videoPanY : 0);
+        })(),
+        aspect_ratio: overrides.aspect_ratio || window.videoStudioInstances?.editor?.state?.aspectRatio || document.getElementById('editToolAspectRatio')?.value || 'original',
+        fit_mode: overrides.fit_mode || window.videoStudioInstances?.editor?.state?.fitMode || 'contain',
+        rotation: overrides.rotation ?? (window.videoStudioInstances?.editor?.state?.rotation || 0),
+        mirror_flip: overrides.mirror_flip ?? (window.videoStudioInstances?.editor?.state ? window.videoStudioInstances.editor.state.flipH : (document.getElementById('editToolMirrorFlip')?.checked || false)),
         trim_enabled: overrides.trim_enabled ?? (document.getElementById('editToolTrimEnabled')?.checked || false),
         trim_start: overrides.trim_start ?? (document.getElementById('editToolTrimStart')?.value || ''),
         trim_end: overrides.trim_end ?? (document.getElementById('editToolTrimEnd')?.value || ''),
         manualAudio: dubbingConfig.manual_audio,
-        manualSrt: overrides.manualSrt || (typeof manualSrtPath !== 'undefined' && manualSrtPath ? manualSrtPath.value : ''),
+        manualSrt: manualSrtVal,
         dubbing: dubbingConfig,
-        subtitles: subs,
+        subtitles: isSubEnabled ? subs : (overrides.subtitles_for_dubbing || subs),
+        subtitles_for_dubbing: overrides.subtitles_for_dubbing || subs,
+        original_subtitles_for_blur: overrides.original_subtitles_for_blur || subs,
         subtitles_enabled: isSubEnabled,
+        fresh_run: Boolean(overrides.fresh_run),
+        use_cache: overrides.fresh_run ? false : Boolean(overrides.use_cache ?? false),
         subtitle_style: {
             font: overrides.subtitle_style?.font || document.getElementById('subFont')?.value || 'Montserrat',
             size: parseInt(overrides.subtitle_style?.size ?? (document.getElementById('subSize')?.value || 24)),
@@ -1194,11 +1255,15 @@ async function executeExportPipeline() {
         if (cacheRes.ok) {
             const cacheData = await cacheRes.json();
             if (cacheData.has_cache && cacheData.files && cacheData.files.length > 0) {
-                const confirm = await showConfirmModal(
-                    'Tái sử dụng dữ liệu?',
-                    `Hệ thống tìm thấy dữ liệu đã xử lý từ lần chạy trước (${cacheData.files.join(', ')}). Bạn có muốn TÁI SỬ DỤNG chúng để tiết kiệm thời gian (và tiền API) không? Chọn 'Đồng ý' để tiếp tục dùng, hoặc 'Hủy' để làm lại từ đầu.`
-                );
-                config.use_cache = confirm;
+                const confirm = await showConfirmModal({
+                    title: 'Phát hiện tài nguyên đang làm dở',
+                    message: `Hệ thống tìm thấy dữ liệu đã xử lý từ lần chạy trước (${cacheData.files.join(', ')}).\n\nBạn có muốn DÙNG LẠI không?\n• Có: Dùng lại tài nguyên để tiết kiệm thời gian.\n• Không: Xóa sạch dữ liệu cũ và chạy lại từ đầu.`,
+                    icon: '♻️',
+                    confirmText: 'Có (Dùng lại)',
+                    cancelText: 'Không (Chạy lại từ đầu)',
+                    confirmType: 'primary'
+                });
+                config.use_cache = Boolean(confirm);
             }
         }
     } catch(e) {
@@ -2166,9 +2231,17 @@ function updateSubtitleLivePlayback(currentTime) {
             subPreviewBox.style.display = 'none';
         }
         window._lastPreviewSubId = null;
+        window._lastPreviewSubText = null;
         return;
     }
-    if (!Array.isArray(srtData) || srtData.length === 0) return;
+    if (!Array.isArray(srtData) || srtData.length === 0) {
+        if (subPreviewBox.style.display !== 'none') {
+            subPreviewBox.style.display = 'none';
+        }
+        window._lastPreviewSubId = null;
+        window._lastPreviewSubText = null;
+        return;
+    }
     
     // Quick Binary Search for active subtitle in O(log N)
     let low = 0, high = srtData.length - 1;
@@ -2185,11 +2258,16 @@ function updateSubtitleLivePlayback(currentTime) {
             low = mid + 1;
         }
     }
+    // Fallback: Tìm tuyến tính nếu mảng phụ đề chưa được sort tuyệt đối hoặc có khoảng lệch
+    if (!foundSub) {
+        foundSub = srtData.find(s => currentTime >= s.startSeconds && currentTime <= s.endSeconds);
+    }
     
     if (foundSub) {
-        if (window._lastPreviewSubId !== foundSub.id) {
+        const displayText = (foundSub.translation || foundSub.text || '').trim();
+        if (window._lastPreviewSubId !== foundSub.id || window._lastPreviewSubText !== displayText) {
             window._lastPreviewSubId = foundSub.id;
-            const displayText = foundSub.translation || foundSub.text;
+            window._lastPreviewSubText = displayText;
             if (typeof setSubtitlePreviewText === 'function') {
                 setSubtitlePreviewText(displayText);
             } else {
@@ -2207,6 +2285,7 @@ function updateSubtitleLivePlayback(currentTime) {
         if (isDraw || isEdit) {
             if (window._lastPreviewSubId !== '__placeholder__') {
                 window._lastPreviewSubId = '__placeholder__';
+                window._lastPreviewSubText = '__placeholder__';
                 if (typeof setSubtitlePreviewText === 'function') {
                     setSubtitlePreviewText('Phụ đề mẫu');
                 } else {
@@ -2221,6 +2300,7 @@ function updateSubtitleLivePlayback(currentTime) {
         } else {
             if (window._lastPreviewSubId !== null) {
                 window._lastPreviewSubId = null;
+                window._lastPreviewSubText = null;
                 if (typeof setSubtitlePreviewText === 'function') {
                     setSubtitlePreviewText('');
                 } else {
@@ -2260,11 +2340,22 @@ videoPlayer.addEventListener('playing', () => {
 videoPlayer.addEventListener('pause', () => {
     if (blurAnimFrameId) cancelAnimationFrame(blurAnimFrameId);
     updateDynamicBlurOverlayVisibility();
+    if (typeof updateSubtitleLivePlayback === 'function') {
+        updateSubtitleLivePlayback(videoPlayer.currentTime);
+    }
 });
-videoPlayer.addEventListener('seeked', updateDynamicBlurOverlayVisibility);
+videoPlayer.addEventListener('seeked', () => {
+    updateDynamicBlurOverlayVisibility();
+    if (typeof updateSubtitleLivePlayback === 'function') {
+        updateSubtitleLivePlayback(videoPlayer.currentTime);
+    }
+});
 videoPlayer.addEventListener('ended', () => {
     if (blurAnimFrameId) cancelAnimationFrame(blurAnimFrameId);
     updateDynamicBlurOverlayVisibility();
+    if (typeof updateSubtitleLivePlayback === 'function') {
+        updateSubtitleLivePlayback(videoPlayer.currentTime);
+    }
 });
 
 // Slider event listeners for real-time fine-tuning
@@ -2388,6 +2479,9 @@ videoPlayer.addEventListener('timeupdate', () => {
         
         // Dynamic Blur: show/hide blur overlay based on current time
         updateDynamicBlurOverlayVisibility();
+        if (typeof updateSubtitleLivePlayback === 'function') {
+            updateSubtitleLivePlayback(videoPlayer.currentTime);
+        }
     }
 });
 
@@ -2713,6 +2807,19 @@ function updateVideoZoomUI() {
         });
     }
 
+    document.querySelectorAll('.edit-zoom-preset-btn').forEach(btn => {
+        const pz = parseInt(btn.dataset.zoom);
+        const isActive = (Math.abs(pz - pct) < 2);
+        btn.classList.toggle('active', isActive);
+        if (isActive) {
+            btn.style.borderColor = '#38bdf8';
+            btn.style.color = '#38bdf8';
+        } else {
+            btn.style.borderColor = '';
+            btn.style.color = '';
+        }
+    });
+
     if (videoContainer) {
         if (currentVideoZoom > 1.01) {
             videoContainer.classList.add('is-zoomed');
@@ -2744,6 +2851,9 @@ function applyVideoZoomTransform(animate = true) {
 function setVideoZoom(zoomLevel, animate = true) {
     currentVideoZoom = Math.max(0.5, Math.min(3.5, Math.round(zoomLevel * 100) / 100));
     applyVideoZoomTransform(animate);
+    if (window.videoStudioInstances?.editor && Math.abs((window.videoStudioInstances.editor.state.zoom || 1.0) - currentVideoZoom) > 0.01) {
+        window.videoStudioInstances.editor.setZoom(currentVideoZoom, false);
+    }
 }
 
 function zoomVideoIn() {
@@ -3077,9 +3187,36 @@ const btnResetEditTools = document.getElementById('btnResetEditTools');
 // 1. Zoom Slider in Card
 if (editToolZoomSlider) {
     editToolZoomSlider.addEventListener('input', (e) => {
-        setVideoZoom(parseFloat(e.target.value) / 100);
+        const factor = parseFloat(e.target.value) / 100;
+        setVideoZoom(factor);
+        if (window.videoStudioInstances?.editor) {
+            window.videoStudioInstances.editor.setZoom(factor, false);
+        }
+        document.querySelectorAll('.edit-zoom-preset-btn').forEach(btn => {
+            const pz = parseInt(btn.dataset.zoom);
+            const isActive = (pz === parseInt(e.target.value));
+            btn.classList.toggle('active', isActive);
+            if (isActive) {
+                btn.style.borderColor = '#38bdf8';
+                btn.style.color = '#38bdf8';
+            } else {
+                btn.style.borderColor = '';
+                btn.style.color = '';
+            }
+        });
     });
 }
+
+document.querySelectorAll('.edit-zoom-preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const zVal = parseInt(btn.dataset.zoom) || 100;
+        if (editToolZoomSlider) {
+            editToolZoomSlider.value = zVal;
+            editToolZoomSlider.dispatchEvent(new Event('input'));
+        }
+    });
+});
+
 if (btnCardZoomOut) btnCardZoomOut.addEventListener('click', zoomVideoOut);
 if (btnCardZoomIn) btnCardZoomIn.addEventListener('click', zoomVideoIn);
 if (btnCardZoomFit) btnCardZoomFit.addEventListener('click', resetVideoZoom);
@@ -3235,7 +3372,7 @@ async function loadApiKeys() {
                 openaiBaseUrlEl.value = data.openaiBaseUrl;
             }
             if (openaiModelEl) {
-                const currentModel = data.openaiModel || 'qwen/qwen3.7-flash';
+                const currentModel = data.openaiModel || 'qwen/qwen3.8-flash';
                 const modelSelect = document.getElementById('openaiModelSelect');
                 const customRow = document.getElementById('openaiModelCustomRow');
                 const customInput = document.getElementById('openaiModelCustomInput');
@@ -4442,9 +4579,9 @@ if (btnTestApiKey) {
         const openaiKey = document.getElementById('openaiKey')?.value?.trim() || '';
         const modelSelect = document.getElementById('openaiModelSelect');
         const customModelInput = document.getElementById('openaiModelCustomInput');
-        let openaiModel = modelSelect?.value || document.getElementById('openaiModel')?.value || 'qwen/qwen3.7-flash';
+        let openaiModel = modelSelect?.value || document.getElementById('openaiModel')?.value || 'qwen/qwen3.8-flash';
         if (modelSelect && modelSelect.value === 'custom') {
-            openaiModel = customModelInput?.value?.trim() || 'qwen/qwen3.7-flash';
+            openaiModel = customModelInput?.value?.trim() || 'qwen/qwen3.8-flash';
         }
         let openaiBaseUrl = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://openrouter.ai/api/v1';
         if (openaiKey.startsWith('sk-or-')) {
@@ -4532,9 +4669,9 @@ if (saveSettingsBtn) {
         try {
             const mSelect = document.getElementById('openaiModelSelect');
             const customInput = document.getElementById('openaiModelCustomInput');
-            let chosenModel = mSelect?.value || document.getElementById('openaiModel')?.value || 'qwen/qwen3.7-flash';
+            let chosenModel = mSelect?.value || document.getElementById('openaiModel')?.value || 'qwen/qwen3.8-flash';
             if (mSelect && mSelect.value === 'custom') {
-                chosenModel = customInput?.value?.trim() || 'qwen/qwen3.7-flash';
+                chosenModel = customInput?.value?.trim() || 'qwen/qwen3.8-flash';
             }
             let keyVal = document.getElementById('openaiKey')?.value?.trim() || '';
             let baseUrlVal = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://openrouter.ai/api/v1';
@@ -6556,28 +6693,38 @@ async function loadSrtToEditor(path) {
                 if (boxesRes.ok) {
                     const boxesData = await boxesRes.json();
                     if (boxesData.success && Array.isArray(boxesData.boxes) && boxesData.boxes.length > 0) {
-                        let appliedCount = 0;
-                        boxesData.boxes.forEach(item => {
-                            const idx = item.index;
-                            const b = item.box || (Array.isArray(item) && item.length >= 5 ? {
-                                x_pct: (item[3] * 100),
-                                w_pct: (item[4] * 100),
-                                visual_start: item[5],
-                                visual_end: item[6]
-                            } : null);
-                            if (srtData[idx] && b) {
-                                srtData[idx].aiBox = b;
-                                if (b.visual_start !== undefined) srtData[idx].visual_start = b.visual_start;
-                                if (b.visual_end !== undefined) srtData[idx].visual_end = b.visual_end;
-                                appliedCount++;
-                            }
+                        const confirmAi = await showConfirmModal({
+                            title: 'Phát hiện toạ độ AI Pixel',
+                            message: `Hệ thống tìm thấy toạ độ quét làm mờ AI Pixel đã xử lý trước đó (${boxesData.boxes.length} câu) cho video này.\n\nBạn có muốn DÙNG LẠI không?\n• Có: Dùng lại toạ độ AI Pixel đã có.\n• Không: Bỏ qua và quét lại từ đầu khi cần.`,
+                            icon: '🔍',
+                            confirmText: 'Có (Dùng lại)',
+                            cancelText: 'Không (Quét lại từ đầu)',
+                            confirmType: 'primary'
                         });
-                        if (appliedCount > 0) {
-                            const chkAi = document.getElementById('blurUseAiScan');
-                            if (chkAi) chkAi.checked = true;
-                            if (typeof updateAiScanBadge === 'function') updateAiScanBadge();
-                            if (typeof updateDynamicBlurIntervals === 'function') updateDynamicBlurIntervals();
-                            showToast(`⚡ Đã tự động nạp ${appliedCount} toạ độ quét AI Pixel có sẵn!`, 'info');
+                        if (confirmAi) {
+                            let appliedCount = 0;
+                            boxesData.boxes.forEach(item => {
+                                const idx = item.index;
+                                const b = item.box || (Array.isArray(item) && item.length >= 5 ? {
+                                    x_pct: (item[3] * 100),
+                                    w_pct: (item[4] * 100),
+                                    visual_start: item[5],
+                                    visual_end: item[6]
+                                } : null);
+                                if (srtData[idx] && b) {
+                                    srtData[idx].aiBox = b;
+                                    if (b.visual_start !== undefined) srtData[idx].visual_start = b.visual_start;
+                                    if (b.visual_end !== undefined) srtData[idx].visual_end = b.visual_end;
+                                    appliedCount++;
+                                }
+                            });
+                            if (appliedCount > 0) {
+                                const chkAi = document.getElementById('blurUseAiScan');
+                                if (chkAi) chkAi.checked = true;
+                                if (typeof updateAiScanBadge === 'function') updateAiScanBadge();
+                                if (typeof updateDynamicBlurIntervals === 'function') updateDynamicBlurIntervals();
+                                showToast(`⚡ Đã nạp ${appliedCount} toạ độ quét AI Pixel có sẵn!`, 'info');
+                            }
                         }
                     }
                 }
@@ -6937,6 +7084,7 @@ function renderSrtTable() {
         if (activeFilter === 'untranslated' && !isSubtitleUntranslated(sub)) return false;
         if (activeFilter === 'error' && !isSubtitleError(sub)) return false;
         if (activeFilter === 'duplicate' && !isSubtitleDuplicate(sub)) return false;
+        if (activeFilter === 'ai_check' && !sub.ai_flag && !sub.ai_issue && !sub.is_auto_filled) return false;
         
         return true;
     });
@@ -6947,9 +7095,25 @@ function renderSrtTable() {
     filtered.forEach(sub => {
         const tr = document.createElement('tr');
         tr.setAttribute('data-sub-id', sub.id);
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', (e) => {
+            if (e.target.closest('input') || e.target.closest('button') || e.target.closest('.action-icon-toolbar')) return;
+            let targetSecs = typeof sub.startSeconds === 'number' ? sub.startSeconds : parseTimeToSeconds(sub.start || sub.time || 0);
+            safeSeekVideo(targetSecs, false);
+        });
         const errReason = getSubtitleErrorInfo(sub);
         const isUntrans = isSubtitleUntranslated(sub);
-        if (errReason) {
+        if (sub.ai_flag === 'ghost') {
+            tr.classList.add('srt-row-ai-ghost');
+            tr.style.background = 'rgba(245, 158, 11, 0.08)';
+            tr.style.borderLeft = '3px solid #fbbf24';
+            tr.title = `🚫 AI: Nghi phụ đề ảo (Không thấy chữ trên video tại thời điểm này)`;
+        } else if (sub.ai_flag === 'missing_added' || sub.is_auto_filled) {
+            tr.classList.add('srt-row-ai-missing');
+            tr.style.background = 'rgba(56, 189, 248, 0.08)';
+            tr.style.borderLeft = '3px solid #38bdf8';
+            tr.title = `✨ AI: Câu thoại vừa được tự động bổ sung từ video`;
+        } else if (errReason) {
             tr.classList.add('srt-row-has-error');
             tr.title = `⚠️ Có thể lỗi: ${errReason}`;
         } else if (isUntrans) {
@@ -7245,6 +7409,14 @@ function updateBottomBarStats() {
             : 'Chưa dịch';
     }
 
+    const aiCheckCount = srtData.filter(s => s.ai_flag || s.ai_issue || s.is_auto_filled).length;
+    const lblAiCheck = document.getElementById('lblSrtFilterAiCheck');
+    if (lblAiCheck) {
+        lblAiCheck.innerHTML = aiCheckCount > 0 
+            ? `🤖 AI Check <span style="background: rgba(56, 189, 248, 0.25); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 3px; font-weight: 600;">${aiCheckCount}</span>` 
+            : '🤖 AI Check';
+    }
+
     const errorCount = srtData.filter(isSubtitleError).length;
     const lblError = document.getElementById('lblSrtFilterError');
     if (lblError) {
@@ -7270,6 +7442,12 @@ function updateBottomBarStats() {
         } else {
             btnDeleteDuplicates.style.display = 'none';
         }
+    }
+
+    window._lastPreviewSubId = null;
+    window._lastPreviewSubText = null;
+    if (typeof updateSubtitleLivePlayback === 'function' && videoPlayer) {
+        updateSubtitleLivePlayback(videoPlayer.currentTime);
     }
 }
 
@@ -8104,7 +8282,7 @@ if (btnStopTranslate) {
  * 2. 'clean': Chỉ làm sạch SRT
  * 3. 'both': Cả dịch và làm sạch (Làm sạch trước -> Dịch sau)
  */
-function promptTranslateCleanAction() {
+function promptTranslateCleanAction(options = {}) {
     return new Promise((resolve) => {
         const modal = document.getElementById('translateCleanSelectionModal');
         if (!modal) {
@@ -8118,12 +8296,27 @@ function promptTranslateCleanAction() {
         const closeBtn = document.getElementById('closeTranslateCleanModalBtn');
         const cancelBtn = document.getElementById('cancelTranslateCleanModalBtn');
 
+        const titleEl = modal.querySelector('h3');
+        const subTitleEl = modal.querySelector('.modal-header div div:last-child');
+        const origTitle = titleEl ? titleEl.textContent : '';
+        const origSub = subTitleEl ? subTitleEl.textContent : '';
+
+        if (titleEl && options.title) titleEl.textContent = options.title;
+        if (subTitleEl && options.subtitle) subTitleEl.textContent = options.subtitle;
+
+        if (options.hideCleanOnly && cardClean) {
+            cardClean.style.display = 'none';
+        }
+
         modal.style.display = 'flex';
         modal.classList.add('active');
 
         const cleanup = () => {
             modal.style.display = 'none';
             modal.classList.remove('active');
+            if (cardClean) cardClean.style.display = 'flex';
+            if (titleEl && origTitle) titleEl.textContent = origTitle;
+            if (subTitleEl && origSub) subTitleEl.textContent = origSub;
             if (cardBoth) cardBoth.onclick = null;
             if (cardTranslate) cardTranslate.onclick = null;
             if (cardClean) cardClean.onclick = null;
@@ -8188,7 +8381,7 @@ async function executeCleanSubtitles(options = {}) {
 
     let openaiKey = '';
     let openaiBaseUrl = 'https://api.openai.com/v1';
-    let openaiModel = 'gpt-5.6-luna-pro-batch';
+    let openaiModel = 'gpt-6-luna';
 
     if (!isOffline) {
         const hasKey = await ensureAiKeyAvailable('openai', 'Làm sạch phụ đề AI');
@@ -8196,11 +8389,11 @@ async function executeCleanSubtitles(options = {}) {
         openaiKey = document.getElementById('openaiKey')?.value?.trim() || '';
         openaiBaseUrl = document.getElementById('openaiBaseUrl')?.value?.trim() || 'https://api.openai.com/v1';
         
-        // Theo yêu cầu: Phần làm sạch phụ đề Online LUÔN gọi GPT Luna
+        // Theo yêu cầu: Phần làm sạch phụ đề Online LUÔN gọi GPT Luna (gpt-6-luna)
         if (openaiBaseUrl.includes('openrouter.ai') || openaiKey.startsWith('sk-or-')) {
-            openaiModel = 'openai/gpt-5.6-luna-pro';
+            openaiModel = 'openai/gpt-6-luna';
         } else {
-            openaiModel = 'gpt-5.6-luna-pro-batch';
+            openaiModel = 'gpt-6-luna';
         }
     }
 
@@ -8220,7 +8413,7 @@ async function executeCleanSubtitles(options = {}) {
         if (toggleTerminalBtn) toggleTerminalBtn.textContent = 'Thu gọn';
     }
 
-    const modeDesc = isOffline ? `Local GPU (${localModel})` : `Cloud AI (GPT-5.6 Luna)`;
+    const modeDesc = isOffline ? `Local GPU (${localModel})` : `Cloud AI (GPT-6 Luna)`;
     appendLog(`[${timeNow()}] > [Làm sạch SRT] Bắt đầu gộp và làm sạch ${totalSubs} đoạn phụ đề bằng ${modeDesc}...`, 'info');
     showToast(`Bắt đầu làm sạch phụ đề bằng ${modeDesc}...`, 'info');
 
@@ -8378,7 +8571,7 @@ async function executeCleanSubtitles(options = {}) {
                     }
 
                     if (data.usage && !isOffline) {
-                        tokenTracker.record(`Làm sạch mẻ ${chunkIndex + 1}`, data.usage, 'gpt-5.6-luna');
+                        tokenTracker.record(`Làm sạch mẻ ${chunkIndex + 1}`, data.usage, 'gpt-6-luna');
                         totalCleanTokens += (data.usage.total_tokens || 0);
                     }
 
@@ -8544,7 +8737,7 @@ async function handleTranslateAndCleanUnified() {
 
 // Central Translation Configuration
 const DEFAULT_TRANSLATION_CONFIG = {
-    model: "qwen/qwen3.7-flash",
+    model: "qwen/qwen3.8-flash",
     chunkSize: 80,
     concurrency: 3,
     maxRetries: 3,
@@ -8567,7 +8760,7 @@ async function handleTranslateSubtitles(mode = 'ai', options = {}) {
     // HỎI NGƯỜI DÙNG: ONLINE HAY OFFLINE? (Nếu chưa có aiChoice truyền từ ngoài)
     let aiChoice = options.aiChoice;
     if (!aiChoice) {
-        aiChoice = await promptAiExecutionMode('Dịch phụ đề', 'Chọn dịch trực tuyến Online (Qwen3.7 Flash siêu tốc) hoặc dịch cục bộ Offline (Qwen 2.5 trên GPU RTX)', { showLanguageOptions: true });
+        aiChoice = await promptAiExecutionMode('Dịch phụ đề', 'Chọn dịch trực tuyến Online (Qwen 3.8 Flash siêu tốc) hoặc dịch cục bộ Offline (Qwen 2.5 trên GPU RTX)', { showLanguageOptions: true });
         if (!aiChoice) return; // Người dùng hủy/đóng modal
     }
 
@@ -8668,23 +8861,23 @@ async function handleTranslateSubtitles(mode = 'ai', options = {}) {
         const openai_key = openaiKeyEl ? openaiKeyEl.value.trim() : '';
         const openai_base_url = openaiBaseUrlEl ? openaiBaseUrlEl.value.trim() : 'https://api.openai.com/v1';
         
-        // Theo yêu cầu: Khi dịch phụ đề Online luôn gọi Qwen (mặc định qwen/qwen3.7-flash)
-        let openai_model = DEFAULT_TRANSLATION_CONFIG.model || 'qwen/qwen3.7-flash';
+        // Theo yêu cầu: Khi dịch phụ đề Online luôn gọi Qwen (mặc định qwen/qwen3.8-flash)
+        let openai_model = DEFAULT_TRANSLATION_CONFIG.model || 'qwen/qwen3.8-flash';
         const configuredModel = openaiModelEl ? openaiModelEl.value.trim() : '';
         if (configuredModel && configuredModel.toLowerCase().includes('qwen')) {
             openai_model = configuredModel;
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        //  PARALLEL TRANSLATION ENGINE — 6 Worker Song Song, Queue-Based
+        //  PARALLEL TRANSLATION ENGINE — 3 Worker Song Song, Queue-Based
         //  Thiết kế triệt để giải quyết lag UI:
         //  1. Worker chạy ngầm, ghi thẳng vào bộ nhớ mảng srtData
         //  2. Tuyệt đối KHÔNG querySelector, KHÔNG chọc DOM trong lúc worker chạy
         //  3. Chỉ 1 timer heartbeat duy nhất cập nhật số % trên nút bấm
         //  4. Chỉ render lại bảng phụ đề 1 lần duy nhất khi toàn bộ hoàn tất
         // ═══════════════════════════════════════════════════════════════════
-        const CONCURRENCY = isOffline ? 1 : 6;
-        const BATCH_SIZE = 100;
+        const CONCURRENCY = isOffline ? 1 : 3;
+        const BATCH_SIZE = 80;
 
         // Chia targetSubs thành các mẻ (mặc định 100 câu, nếu là dịch subset câu đã chọn thì dùng mẻ 30 câu để ngữ cảnh chuẩn xác hơn)
         const isSubset = targetSubs.length < srtData.length;
@@ -8757,13 +8950,19 @@ async function handleTranslateSubtitles(mode = 'ai', options = {}) {
         function applyChunkResult(chunk, data) {
             if (!data || !Array.isArray(data.subtitles)) return 0;
             const transMap = new Map();
-            data.subtitles.forEach(s => {
-                if (s.translation) transMap.set(String(s.id), s.translation);
+            data.subtitles.forEach((s, idx) => {
+                if (s.translation) {
+                    transMap.set(String(s.id), s.translation);
+                    if (chunk && chunk[idx] && chunk[idx].id !== undefined) {
+                        transMap.set(`__fallback_${chunk[idx].id}`, s.translation);
+                    }
+                }
             });
             let countOk = 0;
             // Ghi trực tiếp vào srtData (không gọi renderSrtTable hay querySelector)
             srtData.forEach(s => {
-                const t = transMap.get(String(s.id));
+                let t = transMap.get(String(s.id));
+                if (!t) t = transMap.get(`__fallback_${s.id}`);
                 if (t) { s.translation = t; countOk++; }
             });
             return countOk;
@@ -9167,6 +9366,386 @@ if (btnApplyGlossaryToCurrentSrt) {
         }
     });
 }
+
+// =========================================================================
+// AI SUBTITLE INSPECTOR BOT (ĐỐI SOÁT PHỤ ĐỀ 2 CHIỀU)
+// =========================================================================
+
+let inspectorAbortController = null;
+let currentInspectorResults = {
+    missing: [],
+    ghost: []
+};
+
+const btnOpenSubtitleInspector = document.getElementById('btnOpenSubtitleInspector');
+const modalSubtitleInspector = document.getElementById('modalSubtitleInspector');
+const btnCloseSubtitleInspectorModal = document.getElementById('btnCloseSubtitleInspectorModal');
+const btnCloseInspectorFooter = document.getElementById('btnCloseInspectorFooter');
+const btnStartSubtitleInspect = document.getElementById('btnStartSubtitleInspect');
+const btnStopSubtitleInspect = document.getElementById('btnStopSubtitleInspect');
+const btnAutoFixAllInspector = document.getElementById('btnAutoFixAllInspector');
+const chkInspectMissing = document.getElementById('chkInspectMissing');
+const chkInspectGhost = document.getElementById('chkInspectGhost');
+const inspectorProgressBox = document.getElementById('inspectorProgressBox');
+const inspectorProgressBar = document.getElementById('inspectorProgressBar');
+const inspectorStatusText = document.getElementById('inspectorStatusText');
+const inspectorPercentText = document.getElementById('inspectorPercentText');
+const badgeMissingCount = document.getElementById('badgeMissingCount');
+const badgeGhostCount = document.getElementById('badgeGhostCount');
+const inspectorTableBody = document.getElementById('inspectorTableBody');
+
+function openSubtitleInspectorModal() {
+    if (typeof checkFeaturePermission === 'function') {
+        if (!checkFeaturePermission('can_access_editor', 'Bot Soát Phụ Đề AI')) {
+            return;
+        }
+    }
+
+    const videoPath = (editorInputVideoPath?.value || '').trim();
+    if (!videoPath) {
+        showToast('Vui lòng chọn hoặc tải video vào trình biên tập trước khi chạy Bot đối soát!', 'warning');
+        return;
+    }
+
+    if (modalSubtitleInspector) {
+        modalSubtitleInspector.style.display = 'flex';
+    }
+}
+
+function closeSubtitleInspectorModal() {
+    if (inspectorAbortController) {
+        inspectorAbortController.abort();
+        inspectorAbortController = null;
+    }
+    setInspectorRunningState(false);
+    if (modalSubtitleInspector) {
+        modalSubtitleInspector.style.display = 'none';
+    }
+}
+
+function setInspectorRunningState(isRunning) {
+    if (btnStartSubtitleInspect) {
+        btnStartSubtitleInspect.style.display = isRunning ? 'none' : 'inline-block';
+    }
+    if (btnStopSubtitleInspect) {
+        btnStopSubtitleInspect.style.display = isRunning ? 'inline-block' : 'none';
+    }
+    if (inspectorProgressBox) {
+        inspectorProgressBox.style.display = isRunning ? 'block' : 'none';
+    }
+}
+
+function renderInspectorTable() {
+    if (!inspectorTableBody) return;
+    const { missing, ghost } = currentInspectorResults;
+
+    if (badgeMissingCount) badgeMissingCount.textContent = `${missing.length} câu bị sót`;
+    if (badgeGhostCount) badgeGhostCount.textContent = `${ghost.length} câu ảo / thừa`;
+
+    const totalIssues = missing.length + ghost.length;
+    if (btnAutoFixAllInspector) {
+        btnAutoFixAllInspector.disabled = (totalIssues === 0);
+    }
+
+    if (totalIssues === 0) {
+        inspectorTableBody.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; padding: 40px; color: #10b981;">
+                    🎉 <strong>Tuyệt vời! Không phát hiện câu sót hoặc câu ảo nào.</strong><br>
+                    <span style="font-size: 11.5px; color: #94a3b8;">Toàn bộ phụ đề đã khớp với khung hình video.</span>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    let rowsHtml = '';
+
+    // Render Missing Subs
+    missing.forEach((item, idx) => {
+        rowsHtml += `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); background: rgba(239, 68, 68, 0.04);">
+                <td style="padding: 8px 12px;">
+                    <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4);">
+                        ⚠️ BỊ SÓT
+                    </span>
+                </td>
+                <td style="padding: 8px 12px; font-family: monospace; font-size: 11.5px; color: #cbd5e1; white-space: nowrap;">
+                    ${escapeHtml(item.start)} ➔ ${escapeHtml(item.end)}
+                </td>
+                <td style="padding: 8px 12px; color: #f8fafc; font-size: 12px;">
+                    <strong style="color: #38bdf8;">"${escapeHtml(item.text)}"</strong>
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">(Phát hiện chữ trên video nhưng chưa có trong SRT)</div>
+                </td>
+                <td style="padding: 8px 12px; text-align: center; white-space: nowrap;">
+                    <button type="button" class="btn primary-cyan small btn-inspector-add-single" data-type="missing" data-index="${idx}" style="padding: 4px 10px; font-size: 11.5px; cursor: pointer;">
+                        + Thêm vào SRT
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+
+    // Render Ghost Subs
+    ghost.forEach((item, idx) => {
+        rowsHtml += `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); background: rgba(245, 158, 11, 0.04);">
+                <td style="padding: 8px 12px;">
+                    <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4);">
+                        🚫 PHỤ ĐỀ ẢO
+                    </span>
+                </td>
+                <td style="padding: 8px 12px; font-family: monospace; font-size: 11.5px; color: #cbd5e1; white-space: nowrap;">
+                    ${escapeHtml(item.start)} ➔ ${escapeHtml(item.end)}
+                </td>
+                <td style="padding: 8px 12px; color: #f8fafc; font-size: 12px;">
+                    <strong style="color: #fbbf24;">"${escapeHtml(item.text)}"</strong>
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">(Không thấy chữ xuất hiện trên video tại đoạn này)</div>
+                </td>
+                <td style="padding: 8px 12px; text-align: center; white-space: nowrap;">
+                    <button type="button" class="btn btn-danger-outline small btn-inspector-remove-single" data-type="ghost" data-sub-id="${item.sub_id}" data-index="${idx}" style="padding: 4px 10px; font-size: 11.5px; cursor: pointer;">
+                        🗑️ Xóa dòng này
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+
+    inspectorTableBody.innerHTML = rowsHtml;
+
+    // Gắn sự kiện cho các nút thêm lẻ
+    inspectorTableBody.querySelectorAll('.btn-inspector-add-single').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const idx = parseInt(btn.dataset.index);
+            const m = currentInspectorResults.missing[idx];
+            if (!m) return;
+
+            // Thêm vào srtData
+            srtData.push({
+                id: srtData.length + 1,
+                start: m.start,
+                end: m.end,
+                startSeconds: m.start_sec,
+                endSeconds: m.end_sec,
+                text: m.text,
+                translation: '',
+                is_auto_filled: true
+            });
+
+            // Sắp xếp lại theo thời gian
+            srtData.sort((a, b) => {
+                const ta = typeof a.startSeconds === 'number' ? a.startSeconds : parseTimeToSeconds(a.start);
+                const tb = typeof b.startSeconds === 'number' ? b.startSeconds : parseTimeToSeconds(b.start);
+                return ta - tb;
+            });
+            srtData.forEach((s, i) => s.id = i + 1);
+
+            renderSrtTable();
+            triggerAutoSaveEditorCache();
+            btn.disabled = true;
+            btn.textContent = '✅ Đã thêm';
+            showToast(`Đã thêm câu: "${m.text}" vào phụ đề!`, 'success');
+        });
+    });
+
+    // Gắn sự kiện cho các nút xóa lẻ
+    inspectorTableBody.querySelectorAll('.btn-inspector-remove-single').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const sid = btn.dataset.subId;
+            const beforeCount = srtData.length;
+            srtData = srtData.filter(s => String(s.id) !== String(sid));
+            if (srtData.length < beforeCount) {
+                srtData.forEach((s, i) => s.id = i + 1);
+                renderSrtTable();
+                triggerAutoSaveEditorCache();
+                btn.disabled = true;
+                btn.textContent = '🗑️ Đã xóa';
+                showToast(`Đã xóa câu phụ đề ảo khỏi danh sách!`, 'success');
+            }
+        });
+    });
+}
+
+async function startSubtitleInspection() {
+    if (typeof checkFeaturePermission === 'function') {
+        if (!checkFeaturePermission('can_access_editor', 'Bot Soát Phụ Đề AI')) return;
+    }
+
+    const videoPath = (editorInputVideoPath?.value || '').trim();
+    if (!videoPath) {
+        showToast('Vui lòng chọn video trước khi chạy Bot đối soát!', 'warning');
+        return;
+    }
+
+    // Lấy vùng OCR hiện tại nếu có
+    let region = { x: 20, y: 81.5, w: 60, h: 9.5 };
+    if (typeof currentOcrRegion === 'object' && currentOcrRegion) {
+        region = currentOcrRegion;
+    }
+
+    currentInspectorResults = { missing: [], ghost: [] };
+    renderInspectorTable();
+    setInspectorRunningState(true);
+
+    if (inspectorProgressBar) inspectorProgressBar.style.width = '0%';
+    if (inspectorPercentText) inspectorPercentText.textContent = '0%';
+    if (inspectorStatusText) inspectorStatusText.textContent = '🤖 Bot đang xem khung hình video...';
+
+    inspectorAbortController = new AbortController();
+
+    try {
+        const response = await fetch('/api/subtitles/inspect_stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_path: videoPath,
+                subtitles: srtData,
+                ocr_region: region,
+                options: {
+                    check_missing: chkInspectMissing ? chkInspectMissing.checked : true,
+                    check_ghost: chkInspectGhost ? chkInspectGhost.checked : true,
+                    scan_mode: document.getElementById('selInspectorSpeedMode')?.value || 'turbo',
+                    auto_fix: false
+                }
+            }),
+            signal: inspectorAbortController.signal
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const rawJson = line.substring(6).trim();
+                    try {
+                        const evt = JSON.parse(rawJson);
+                        if (evt.type === 'progress') {
+                            if (inspectorProgressBar) inspectorProgressBar.style.width = `${evt.percent}%`;
+                            if (inspectorPercentText) inspectorPercentText.textContent = `${evt.percent}%`;
+                            if (inspectorStatusText && evt.message) inspectorStatusText.textContent = evt.message;
+                        } else if (evt.type === 'log') {
+                            if (inspectorStatusText && evt.message) inspectorStatusText.textContent = evt.message;
+                        } else if (evt.type === 'warning' && evt.warning) {
+                            if (evt.warning.type === 'missing') {
+                                currentInspectorResults.missing.push(evt.warning);
+                            } else if (evt.warning.type === 'ghost') {
+                                currentInspectorResults.ghost.push(evt.warning);
+                            }
+                            renderInspectorTable();
+                        } else if (evt.type === 'complete') {
+                            if (inspectorProgressBar) inspectorProgressBar.style.width = '100%';
+                            if (inspectorPercentText) inspectorPercentText.textContent = '100%';
+                            if (inspectorStatusText) inspectorStatusText.textContent = '🎉 Hoàn tất đối soát video!';
+                            if (evt.missing_warnings) currentInspectorResults.missing = evt.missing_warnings;
+                            if (evt.ghost_warnings) currentInspectorResults.ghost = evt.ghost_warnings;
+                            renderInspectorTable();
+                            showToast(`Hoàn tất đối soát! Phát hiện ${currentInspectorResults.missing.length} câu sót, ${currentInspectorResults.ghost.length} câu ảo.`, 'info');
+                        } else if (evt.type === 'error') {
+                            showToast(evt.message || 'Lỗi đối soát', 'error');
+                        }
+                    } catch (pe) {
+                        // Bỏ qua chunk JSON không hợp lệ
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            showToast('Đã dừng đối soát theo lệnh người dùng.', 'warning');
+        } else {
+            showToast('Lỗi đối soát: ' + e.message, 'error');
+        }
+    } finally {
+        setInspectorRunningState(false);
+        inspectorAbortController = null;
+    }
+}
+
+async function applyAllInspectorFixes() {
+    if (typeof checkFeaturePermission === 'function') {
+        if (!checkFeaturePermission('can_access_editor', 'Bot Soát Phụ Đề AI')) return;
+    }
+
+    const { missing, ghost } = currentInspectorResults;
+    if (missing.length === 0 && ghost.length === 0) {
+        showToast('Không có thay đổi nào cần áp dụng!', 'info');
+        return;
+    }
+
+    try {
+        if (btnAutoFixAllInspector) {
+            btnAutoFixAllInspector.disabled = true;
+            btnAutoFixAllInspector.textContent = 'Đang tự động sửa...';
+        }
+
+        const res = await fetch('/api/subtitles/apply_inspector_fixes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                subtitles: srtData,
+                missing_to_add: missing,
+                ghost_ids_to_remove: ghost.map(g => g.sub_id)
+            })
+        });
+
+        const data = await res.json();
+        if (data.success && Array.isArray(data.subtitles)) {
+            srtData = data.subtitles;
+            renderSrtTable();
+            triggerAutoSaveEditorCache();
+            showToast(`🎉 Đã tự động cập nhật! Đã thêm ${data.added_count} câu bị sót, xóa ${data.removed_count} câu ảo!`, 'success');
+            closeSubtitleInspectorModal();
+        } else {
+            showToast('Lỗi áp dụng chỉnh sửa: ' + (data.error || 'Thất bại'), 'error');
+        }
+    } catch (e) {
+        showToast('Lỗi kết nối áp dụng chỉnh sửa: ' + e.message, 'error');
+    } finally {
+        if (btnAutoFixAllInspector) {
+            btnAutoFixAllInspector.disabled = false;
+            btnAutoFixAllInspector.textContent = '⚡ Tự động sửa tất cả (Auto-Fix All)';
+        }
+    }
+}
+
+if (btnOpenSubtitleInspector) {
+    btnOpenSubtitleInspector.addEventListener('click', openSubtitleInspectorModal);
+}
+if (btnCloseSubtitleInspectorModal) {
+    btnCloseSubtitleInspectorModal.addEventListener('click', closeSubtitleInspectorModal);
+}
+if (btnCloseInspectorFooter) {
+    btnCloseInspectorFooter.addEventListener('click', closeSubtitleInspectorModal);
+}
+if (btnStartSubtitleInspect) {
+    btnStartSubtitleInspect.addEventListener('click', startSubtitleInspection);
+}
+if (btnStopSubtitleInspect) {
+    btnStopSubtitleInspect.addEventListener('click', () => {
+        if (inspectorAbortController) {
+            inspectorAbortController.abort();
+            inspectorAbortController = null;
+        }
+    });
+}
+if (btnAutoFixAllInspector) {
+    btnAutoFixAllInspector.addEventListener('click', applyAllInspectorFixes);
+}
+
 
 // Đồng bộ ngôn ngữ đích giữa Header và Bottom Bar
 const bottomSubTargetLang = document.getElementById('bottomSubTargetLang');
@@ -10514,14 +11093,31 @@ function createVoiceCard(v) {
 
         const dubbingVoiceInput = document.getElementById('dubbingVoiceInput');
         const dubbingSelectedVoiceName = document.getElementById('dubbingSelectedVoiceName');
-        if (dubbingVoiceInput) dubbingVoiceInput.value = v.id;
+        if (dubbingVoiceInput) {
+            dubbingVoiceInput.value = v.id;
+            dubbingVoiceInput.dataset.gender = v.gender || '';
+            dubbingVoiceInput.dataset.lang = v.lang || '';
+            dubbingVoiceInput.dataset.provider = v.provider || '';
+            dubbingVoiceInput.dataset.name = v.name || '';
+        }
         window.liveDubbingEngine?.stop();
         if (dubbingSelectedVoiceName) dubbingSelectedVoiceName.textContent = v.name;
 
         const batchDubbingVoiceInput = document.getElementById('batch_dubbingVoiceInput');
         const batchDubbingSelectedVoiceName = document.getElementById('batch_dubbingSelectedVoiceName');
-        if (batchDubbingVoiceInput) batchDubbingVoiceInput.value = v.id;
+        if (batchDubbingVoiceInput) {
+            batchDubbingVoiceInput.value = v.id;
+            batchDubbingVoiceInput.dataset.gender = v.gender || '';
+            batchDubbingVoiceInput.dataset.lang = v.lang || '';
+            batchDubbingVoiceInput.dataset.provider = v.provider || '';
+            batchDubbingVoiceInput.dataset.name = v.name || '';
+        }
         if (batchDubbingSelectedVoiceName) batchDubbingSelectedVoiceName.textContent = v.name;
+
+        const queueVoiceSelect = document.getElementById('queueVoiceSelect');
+        const queueSelectedVoiceName = document.getElementById('queueSelectedVoiceName');
+        if (queueVoiceSelect) queueVoiceSelect.value = v.id;
+        if (queueSelectedVoiceName) queueSelectedVoiceName.textContent = v.name;
 
         voiceModal.style.display = 'none';
         showToast(`Đã chuyển sang giọng đọc: ${v.name}`, 'success');
@@ -10763,7 +11359,7 @@ function setPreviewBtnState(btn, state) {
     }
 }
 
-window.playPreviewVoice = async function(voiceId, btnEl) {
+window.playPreviewVoice = async function(voiceId, btnEl, customText, customOptions = {}) {
     try {
         if (currentPreviewAudio) {
             currentPreviewAudio.pause();
@@ -10782,26 +11378,74 @@ window.playPreviewVoice = async function(voiceId, btnEl) {
             setPreviewBtnState(btnEl, 'loading');
         }
 
-        let sampleUrl = '';
-
-        // 1. Kiểm tra URL nghe thử trực tiếp từ danh sách voice đã nạp
+        // 1. Phân giải metadata voice: lang, locale, gender, speed
+        let voiceMeta = null;
         if (typeof allLoadedVoices !== 'undefined' && Array.isArray(allLoadedVoices)) {
-            const found = allLoadedVoices.find(v => v.id === voiceId);
-            if (found && found.preview_url && found.preview_url.trim()) {
-                sampleUrl = found.preview_url.trim();
+            voiceMeta = allLoadedVoices.find(v => v.id === voiceId);
+        }
+        if (!voiceMeta && Array.isArray(window._cachedVoices)) {
+            voiceMeta = window._cachedVoices.find(v => v.id === voiceId);
+        }
+
+        const vIdLow = String(voiceId || '').toLowerCase();
+        const isMale = voiceMeta?.gender ? (String(voiceMeta.gender).toLowerCase() === 'male') : anyWordMatch(vIdLow, ['nam', 'duc', 'dung', 'dat', 'binh', 'son', 'khoa', 'quang', 'male', 'guy', 'michael', 'adam']);
+        const gender = isMale ? 'Male' : 'Female';
+
+        let lang = voiceMeta?.lang || '';
+        let locale = voiceMeta?.locale || voiceMeta?.region || '';
+        const isEn = (lang && lang.toLowerCase().includes('en')) || (locale && locale.toLowerCase().includes('en')) || anyWordMatch(vIdLow, ['en_', 'en-', 'english', 'adam', 'guy', 'heart', 'michael', 'nicole', 'jenny', 'aria']);
+        const isZh = (lang && lang.toLowerCase().includes('zh')) || (locale && locale.toLowerCase().includes('zh')) || anyWordMatch(vIdLow, ['zh_', 'zh-', 'chinese']);
+
+        if (isEn) {
+            lang = 'English';
+            locale = 'en-US';
+        } else if (isZh) {
+            lang = 'Chinese';
+            locale = 'zh-CN';
+        } else {
+            lang = 'Vietnamese';
+            locale = 'vi-VN';
+        }
+
+        const speed = customOptions.speed || parseFloat(document.getElementById('dubbingSpeed')?.value || document.getElementById('batch_dubbingSpeed')?.value || 1.0);
+
+        // 2. Chọn câu mẫu đúng locale
+        let sampleText = customText;
+        if (!sampleText) {
+            if (isEn) {
+                sampleText = "Hello! This is an AI voice preview with studio quality audio.";
+            } else if (isZh) {
+                sampleText = "你好！这是专业录音室品质的AI语音试听。";
+            } else {
+                sampleText = "Xin chào! Đây là bản nghe thử giọng đọc AI thuyết minh chuẩn phòng thu.";
             }
         }
 
-        // 2. Mẫu âm thanh tĩnh cục bộ
+        let sampleUrl = '';
+        if (voiceMeta && voiceMeta.preview_url && voiceMeta.preview_url.trim()) {
+            sampleUrl = voiceMeta.preview_url.trim();
+        }
+
+        // Tuyệt đối không dùng mẫu tĩnh sai locale (ví dụ voice English dùng mẫu tiếng Việt)
+        if (sampleUrl) {
+            if (isEn && !sampleUrl.includes('en_') && !sampleUrl.includes('adam') && !sampleUrl.includes('heart') && !sampleUrl.includes('michael') && !sampleUrl.includes('nicole')) {
+                sampleUrl = '';
+            }
+        }
+
+        // Mẫu âm thanh tĩnh cục bộ hợp lệ theo ngôn ngữ
         if (!sampleUrl) {
-            if (voiceId === 'diem_trinh') sampleUrl = '/samples/diem_trinh.wav';
-            else if (voiceId === 'mai_linh') sampleUrl = '/samples/mai_linh.wav';
-            else if (voiceId === 'ngoc_huyen') sampleUrl = '/samples/ngoc_huyen.wav';
-            else if (voiceId === 'manh_dung') sampleUrl = '/samples/manh_dung.wav';
-            else if (voiceId === 'thanh_dat') sampleUrl = '/samples/thanh_dat.wav';
-            else if (voiceId === 'en_heart') sampleUrl = '/samples/en_heart.wav';
-            else if (voiceId === 'rvc_ngochuyen_reviewphim') sampleUrl = '/samples/rvc_ngochuyen_reviewphim.wav';
-            else if (voiceId.startsWith('rvc_') || voiceId.startsWith('local_')) sampleUrl = `/samples/${voiceId}.wav`;
+            if (!isEn && !isZh) {
+                if (voiceId === 'diem_trinh') sampleUrl = '/samples/diem_trinh.wav';
+                else if (voiceId === 'mai_linh') sampleUrl = '/samples/mai_linh.wav';
+                else if (voiceId === 'ngoc_huyen') sampleUrl = '/samples/ngoc_huyen.wav';
+                else if (voiceId === 'manh_dung') sampleUrl = '/samples/manh_dung.wav';
+                else if (voiceId === 'thanh_dat') sampleUrl = '/samples/thanh_dat.wav';
+                else if (voiceId === 'rvc_ngochuyen_reviewphim') sampleUrl = '/samples/rvc_ngochuyen_reviewphim.wav';
+            } else if (isEn) {
+                if (voiceId === 'en_heart') sampleUrl = '/samples/en_heart.wav';
+                else if (voiceId === 'local_adam') sampleUrl = '/samples/local_adam.wav';
+            }
         }
 
         // Hàm helper phát âm thanh an toàn bằng Promise
@@ -10809,7 +11453,6 @@ window.playPreviewVoice = async function(voiceId, btnEl) {
             return new Promise((resolve, reject) => {
                 const audio = new Audio(url);
                 currentPreviewAudio = audio;
-                let started = false;
 
                 audio.oncanplay = () => {
                     if (btnEl && activePreviewBtn === btnEl) {
@@ -10829,7 +11472,6 @@ window.playPreviewVoice = async function(voiceId, btnEl) {
                 };
 
                 audio.play().then(() => {
-                    started = true;
                     if (btnEl && activePreviewBtn === btnEl) {
                         setPreviewBtnState(btnEl, 'playing');
                     }
@@ -10841,24 +11483,32 @@ window.playPreviewVoice = async function(voiceId, btnEl) {
 
         let playedSuccessfully = false;
 
-        // Thử phát URL mẫu trước nếu có
+        // Thử phát URL mẫu trước nếu có và đúng ngôn ngữ
         if (sampleUrl) {
             try {
                 await playAudioUrl(sampleUrl);
                 playedSuccessfully = true;
             } catch (err) {
-                console.warn(`[playPreviewVoice] Mẫu file tĩnh (${sampleUrl}) không phát được, tự động chuyển sang /api/tts/preview:`, err);
+                console.warn(`[playPreviewVoice] Mẫu file tĩnh (${sampleUrl}) không phát được, chuyển sang /api/tts/preview:`, err);
                 playedSuccessfully = false;
             }
         }
 
-        // Nếu chưa phát được, gọi API TTS Preview sinh giọng tức thời
+        // Nếu chưa phát được, gọi API TTS Preview sinh giọng tức thời với đầy đủ metadata
         if (!playedSuccessfully) {
             if (btnEl) setPreviewBtnState(btnEl, 'loading');
             const res = await fetch('/api/tts/preview', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ voice: voiceId })
+                body: JSON.stringify({
+                    voice: voiceId,
+                    voice_id: voiceId,
+                    text: sampleText,
+                    lang: lang,
+                    locale: locale,
+                    gender: gender,
+                    speed: speed
+                })
             });
             const data = await res.json();
             if (data.success && data.audio_url) {
@@ -10877,6 +11527,11 @@ window.playPreviewVoice = async function(voiceId, btnEl) {
         showToast('Lỗi nghe thử giọng: ' + e.message, 'warning');
     }
 };
+
+function anyWordMatch(str, words) {
+    if (!str) return false;
+    return words.some(w => str.includes(w));
+}
 
 // Load voice library on startup
 window.addEventListener('DOMContentLoaded', fetchAndRenderVoiceLibrary);
@@ -10968,33 +11623,6 @@ if (reviewTargetMinutes && reviewEstimatedWords) {
         const mins = parseInt(e.target.value) || 5;
         const words = Math.round(mins * 60 * 3.5);
         reviewEstimatedWords.textContent = `~${words.toLocaleString('vi-VN')} từ kịch bản`;
-    });
-}
-
-// Review Style Selector (Tone & Vibe)
-const reviewStyleSelect = document.getElementById('reviewStyleSelect');
-const reviewSelectedStyleBadge = document.getElementById('reviewSelectedStyleBadge');
-const reviewCustomStyleContainer = document.getElementById('reviewCustomStyleContainer');
-
-const styleBadgeMap = {
-    'dramatic': '🎭 Kịch Tính',
-    'humorous': '😂 Hài Hước',
-    'deep_analysis': '🧠 Triết Lý',
-    'fast_paced': '⚡ Mì Ăn Liền',
-    'horror': '👻 Kinh Dị',
-    'emotional': '💖 Tình Cảm',
-    'custom': '✍️ Tùy Chỉnh'
-};
-
-if (reviewStyleSelect) {
-    reviewStyleSelect.addEventListener('change', (e) => {
-        const val = e.target.value;
-        if (reviewSelectedStyleBadge) {
-            reviewSelectedStyleBadge.textContent = styleBadgeMap[val] || '🎭 Kịch Tính';
-        }
-        if (reviewCustomStyleContainer) {
-            reviewCustomStyleContainer.style.display = (val === 'custom') ? 'block' : 'none';
-        }
     });
 }
 
@@ -11093,6 +11721,14 @@ const reviewVideoZoomVal = document.getElementById('reviewVideoZoomVal');
 if (reviewEnableZoom && reviewZoomConfigPanel) {
     reviewEnableZoom.addEventListener('change', (e) => {
         reviewZoomConfigPanel.style.display = e.target.checked ? 'flex' : 'none';
+        if (window.videoStudioInstances?.review) {
+            if (!e.target.checked) {
+                window.videoStudioInstances.review.setZoom(1.0, false);
+            } else {
+                const z = (parseInt(reviewVideoZoom?.value) || 105) / 100;
+                window.videoStudioInstances.review.setZoom(z, false);
+            }
+        }
     });
 }
 
@@ -11101,6 +11737,10 @@ if (reviewVideoZoom && reviewVideoZoomVal) {
         const val = parseInt(e.target.value);
         reviewVideoZoomVal.textContent = val === 105 ? '105% (Khuyên dùng)' : (val === 100 ? '100% (Gốc)' : `${val}%`);
         
+        if (window.videoStudioInstances?.review) {
+            window.videoStudioInstances.review.setZoom(val / 100, false);
+        }
+
         document.querySelectorAll('.btn-review-zoom-preset').forEach(btn => {
             if (parseInt(btn.dataset.zoom) === val) {
                 btn.classList.add('active');
@@ -11220,16 +11860,34 @@ async function loadBgmPresetList() {
         const res = await fetch('/api/bgm/list');
         if (!res.ok) return;
         const data = await res.json();
-        if (data.status === 'success' && Array.isArray(data.files) && data.files.length > 0) {
+        const trackList = Array.isArray(data.tracks) ? data.tracks : (Array.isArray(data.files) ? data.files : []);
+        if (trackList.length > 0) {
             const currentVal = reviewBgmPresetSelect.value || 'random';
             reviewBgmPresetSelect.innerHTML = '<option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>';
-            data.files.forEach(f => {
+            
+            const safeGroup = document.createElement('optgroup');
+            safeGroup.label = '🛡️ AN TOÀN YOUTUBE (NO-COPYRIGHT)';
+            const normalGroup = document.createElement('optgroup');
+            normalGroup.label = '🎬 NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC';
+
+            trackList.forEach(t => {
+                if (t.type === 'custom') return; // Custom uploads handled in custom tab
                 const opt = document.createElement('option');
-                opt.value = f.filename;
-                opt.textContent = `${f.title} (${f.genre})`;
-                reviewBgmPresetSelect.appendChild(opt);
+                opt.value = t.filename;
+                const cleanName = t.name || t.title || t.filename;
+                opt.textContent = `${cleanName}${t.genre ? ` (${t.genre})` : ''}`;
+                
+                if (t.is_safe || (t.filename && t.filename.toLowerCase().includes('kevin macleod'))) {
+                    safeGroup.appendChild(opt);
+                } else {
+                    normalGroup.appendChild(opt);
+                }
             });
-            if (data.files.some(f => f.filename === currentVal)) {
+
+            if (safeGroup.children.length > 0) reviewBgmPresetSelect.appendChild(safeGroup);
+            if (normalGroup.children.length > 0) reviewBgmPresetSelect.appendChild(normalGroup);
+
+            if (trackList.some(t => t.filename === currentVal)) {
                 reviewBgmPresetSelect.value = currentVal;
             }
         }
@@ -11238,6 +11896,7 @@ async function loadBgmPresetList() {
     }
 }
 loadBgmPresetList();
+
 
 // Preset BGM Preview Player
 if (btnPreviewBgm && reviewBgmPreviewAudio && reviewBgmPresetSelect) {
@@ -11394,6 +12053,38 @@ if (reviewMinClipDur && reviewMinClipDurVal) {
     });
 }
 
+// Review Style Selector & Custom Prompt toggle
+const reviewStyleSelect = document.getElementById('reviewStyleSelect');
+const reviewSelectedStyleBadge = document.getElementById('reviewSelectedStyleBadge');
+const reviewCustomStyleContainer = document.getElementById('reviewCustomStyleContainer');
+if (reviewStyleSelect) {
+    reviewStyleSelect.addEventListener('change', () => {
+        if (reviewSelectedStyleBadge) {
+            const opt = reviewStyleSelect.options[reviewStyleSelect.selectedIndex];
+            if (opt) {
+                reviewSelectedStyleBadge.textContent = opt.text.split(' (')[0];
+            }
+        }
+        if (reviewCustomStyleContainer) {
+            reviewCustomStyleContainer.style.display = reviewStyleSelect.value === 'custom' ? 'block' : 'none';
+        }
+    });
+}
+
+// Review Script Output Language Selector
+const reviewScriptLang = document.getElementById('reviewScriptLang');
+const reviewSelectedLangBadge = document.getElementById('reviewSelectedLangBadge');
+if (reviewScriptLang) {
+    reviewScriptLang.addEventListener('change', () => {
+        if (reviewSelectedLangBadge) {
+            const opt = reviewScriptLang.options[reviewScriptLang.selectedIndex];
+            if (opt) {
+                reviewSelectedLangBadge.textContent = opt.text.split(' (')[0];
+            }
+        }
+    });
+}
+
 // Video selection & Insight Badge
 // reviewInputVideoPath already declared at top
 const btnSelectReviewInput = document.getElementById('btnSelectReviewInput');
@@ -11404,11 +12095,51 @@ const handleSelectReviewVideo = async () => {
     const path = await selectFile('video');
     if (path) {
         if (reviewInputVideoPath) reviewInputVideoPath.value = path;
+        const reviewHeaderVideoPath = document.getElementById('reviewHeaderVideoPath');
+        if (reviewHeaderVideoPath) reviewHeaderVideoPath.value = path;
         loadReviewVideoPlayer(path);
         if (reviewVideoInsightBox) {
             reviewVideoInsightBox.style.display = 'flex';
             const filename = path.split('\\').pop().split('/').pop();
             if (reviewInsightDuration) reviewInsightDuration.textContent = `🎬 ${filename}`;
+        }
+        // Tự động kiểm tra kịch bản có sẵn của video này
+        try {
+            const outDir = document.getElementById('reviewOutputFolder')?.value?.trim() || 'output';
+            const cRes = await fetch('/api/review/check_cache', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ video_path: path, output_dir: outDir })
+            });
+            if (cRes.ok) {
+                const cData = await cRes.json();
+                let shouldReuseScript = false;
+                if (cData.cached_script) {
+                    shouldReuseScript = await showConfirmModal({
+                        title: 'Phát hiện kịch bản đang làm dở',
+                        message: `Hệ thống tìm thấy kịch bản review đã tạo trước đó cho video này.\n\nBạn có muốn DÙNG LẠI không?\n• Có: Dùng lại kịch bản này để chỉnh sửa hoặc làm tiếp.\n• Không: Bỏ qua và tạo kịch bản mới từ đầu.`,
+                        icon: '📝',
+                        confirmText: 'Có (Dùng lại)',
+                        cancelText: 'Không (Tạo mới từ đầu)',
+                        confirmType: 'primary'
+                    });
+                }
+                if (shouldReuseScript && cData.cached_script) {
+                    loadReviewScriptData({ script: cData.cached_script });
+                } else {
+                    window.reviewScriptSentences = [];
+                    window.reviewScriptFullText = '';
+                    const scCard = document.getElementById('reviewScriptEditorCard');
+                    if (scCard) scCard.style.display = 'flex';
+                    renderReviewScriptTable();
+                    const btnStart = document.getElementById('btnStartReview');
+                    if (btnStart) {
+                        btnStart.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>BẮT ĐẦU LÀM VIDEO (AUTO-EDIT)</span>`;
+                    }
+                }
+            }
+        } catch(e) {
+            console.error("Lỗi khi kiểm tra kịch bản có sẵn:", e);
         }
     }
 };
@@ -11420,6 +12151,15 @@ if (btnSelectReviewInput) {
 const btnSelectReviewVideoHeader = document.getElementById('btnSelectReviewVideoHeader');
 if (btnSelectReviewVideoHeader) {
     btnSelectReviewVideoHeader.addEventListener('click', handleSelectReviewVideo);
+}
+
+const reviewHeaderVideoPath = document.getElementById('reviewHeaderVideoPath');
+if (reviewHeaderVideoPath) {
+    reviewHeaderVideoPath.addEventListener('change', (e) => {
+        const val = e.target.value.trim();
+        if (reviewInputVideoPath) reviewInputVideoPath.value = val;
+        if (val) loadReviewVideoPlayer(val);
+    });
 }
 
 const btnSelectReviewVideoPlaceholder = document.getElementById('btnSelectReviewVideoPlaceholder');
@@ -11476,6 +12216,889 @@ function checkLocalVoiceWarning(voiceId) {
     });
 }
 
+// ==========================================================
+// REVIEW SCRIPT & SUBTITLE EDITOR LOGIC (BẢNG DUYỆT & SỬA KỊCH BẢN REVIEW)
+// ==========================================================
+window.reviewScriptSentences = [];
+window.reviewScriptFullText = '';
+window.isReviewScriptFullTextMode = false;
+window._currentReviewSentenceAudio = null;
+window.currentReviewScriptTab = 'script'; // 'script' | 'original'
+window.reviewEditedSentenceIndices = new Set();
+
+function updateReviewScriptStats() {
+    const countBadge = document.getElementById('reviewScriptCountBadge');
+    const estMinutesEl = document.getElementById('reviewScriptEstMinutes');
+    const curVoiceEl = document.getElementById('reviewScriptCurrentVoiceName');
+
+    if (window.currentReviewScriptTab === 'original') {
+        const subs = window.reviewParsedSubtitles || [];
+        const totalSubs = subs.length;
+        let totalWords = 0;
+        subs.forEach(s => {
+            const t = (s.text || s.content || '').trim();
+            if (t) totalWords += t.split(/\s+/).length;
+        });
+        if (countBadge) countBadge.innerText = `${totalSubs} câu phụ đề • ${totalWords.toLocaleString()} từ`;
+        if (estMinutesEl) {
+            const lastSub = subs[subs.length - 1];
+            const maxSecs = lastSub ? (lastSub.endSeconds || lastSub.end || 0) : 0;
+            estMinutesEl.innerText = formatVideoTime(maxSecs);
+        }
+        if (curVoiceEl) curVoiceEl.innerText = 'Phụ đề gốc';
+        return;
+    }
+
+    const totalSentences = window.reviewScriptSentences ? window.reviewScriptSentences.length : 0;
+    const combinedText = window.reviewScriptSentences ? window.reviewScriptSentences.join(' ') : '';
+    const totalWords = combinedText.trim() ? combinedText.trim().split(/\s+/).length : 0;
+    const estMins = (totalWords / 210.0).toFixed(1);
+
+    if (countBadge) countBadge.innerText = `${totalSentences} câu • ${totalWords.toLocaleString()} từ`;
+    if (estMinutesEl) estMinutesEl.innerText = `~${estMins} phút`;
+    if (curVoiceEl) {
+        const voiceNameEl = document.getElementById('reviewSelectedVoiceName');
+        curVoiceEl.innerText = voiceNameEl ? voiceNameEl.innerText : 'Ngọc Huyền';
+    }
+}
+
+function loadReviewScriptData(scriptData) {
+    if (!scriptData) return;
+    if (Array.isArray(scriptData.sentences) && scriptData.sentences.length > 0) {
+        window.reviewScriptSentences = scriptData.sentences.map(s => String(s || '').trim()).filter(Boolean);
+    } else if (scriptData.script) {
+        const matches = String(scriptData.script).match(/[^.!?\n]+[.!?\n]+|\S+/g);
+        window.reviewScriptSentences = matches ? matches.map(s => s.trim()).filter(Boolean) : [scriptData.script.trim()];
+    }
+    window.reviewScriptFullText = scriptData.script || (window.reviewScriptSentences ? window.reviewScriptSentences.join(' ') : '');
+
+    // Switch view to script tab
+    window.currentReviewScriptTab = 'script';
+    const tabScript = document.getElementById('btnReviewTabScript');
+    const tabSrt = document.getElementById('btnReviewTabOriginalSrt');
+    if (tabScript && tabSrt) {
+        tabScript.classList.add('active');
+        tabScript.style.color = '#fff';
+        tabSrt.classList.remove('active');
+        tabSrt.style.color = '#94a3b8';
+    }
+
+    const card = document.getElementById('reviewScriptEditorCard');
+    if (card) {
+        card.style.display = 'flex';
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    renderReviewScriptTable();
+
+    const btnStart = document.getElementById('btnStartReview');
+    if (btnStart) {
+        btnStart.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>TIẾP TỤC DỰNG VIDEO (TỪ KỊCH BẢN ĐÃ DUYỆT)</span>`;
+    }
+
+    if (typeof syncReviewSubtitle === 'function') {
+        syncReviewSubtitle(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0);
+    }
+}
+
+async function previewReviewSentenceVoice(text, btnEl) {
+    const textToSpeak = (text || '').trim();
+    if (!textToSpeak) {
+        showToast('Câu này chưa có nội dung chữ để đọc!', 'warning');
+        return;
+    }
+    const voiceId = document.getElementById('reviewVoiceSelect')?.value || 'ngoc_huyen';
+    const speed = parseFloat(document.getElementById('reviewVoiceSpeed')?.value || 1.1);
+
+    const origHtml = btnEl.innerHTML;
+    btnEl.innerHTML = '⏳';
+    try {
+        const res = await fetch('/api/tts/sentence_preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: textToSpeak, voice_id: voiceId, speed })
+        });
+        const data = await res.json();
+        if (data.success && data.audio_url) {
+            if (window._currentReviewSentenceAudio) {
+                try {
+                    window._currentReviewSentenceAudio.pause();
+                    window._currentReviewSentenceAudio.currentTime = 0;
+                } catch(e) {}
+                window._currentReviewSentenceAudio = null;
+            }
+            const audio = new Audio(data.audio_url);
+            window._currentReviewSentenceAudio = audio;
+            btnEl.innerHTML = '🔊';
+            audio.onended = () => {
+                btnEl.innerHTML = origHtml;
+                if (window._currentReviewSentenceAudio === audio) window._currentReviewSentenceAudio = null;
+            };
+            audio.onerror = () => {
+                btnEl.innerHTML = origHtml;
+                if (window._currentReviewSentenceAudio === audio) window._currentReviewSentenceAudio = null;
+            };
+            audio.play();
+        } else {
+            showToast('Không thể tạo giọng đọc: ' + (data.error || 'Lỗi không xác định'), 'error');
+            btnEl.innerHTML = origHtml;
+        }
+    } catch(err) {
+        showToast('Lỗi kết nối tạo giọng đọc: ' + err.message, 'error');
+        btnEl.innerHTML = origHtml;
+    }
+}
+
+function renderReviewScriptTable() {
+    const tableBody = document.getElementById('reviewScriptTableBody');
+    if (!tableBody) return;
+    tableBody.innerHTML = '';
+
+    const searchTerm = (document.getElementById('reviewScriptSearchInput')?.value || '').toLowerCase().trim();
+    const filterRadio = document.querySelector('input[name="reviewScriptFilter"]:checked');
+    const filterValue = filterRadio ? filterRadio.value : 'all'; // 'all' | 'unread' | 'edited'
+    updateReviewScriptStats();
+
+    if (!window.reviewEditedSentenceIndices) {
+        window.reviewEditedSentenceIndices = new Set();
+    }
+
+    // Check which tab is active
+    const isOriginalTab = window.currentReviewScriptTab === 'original';
+
+    if (isOriginalTab) {
+        // Tab: Original Subtitles (.srt)
+        const subs = window.reviewParsedSubtitles || [];
+        if (subs.length === 0) {
+            const emptyTr = document.createElement('tr');
+            emptyTr.innerHTML = `<td colspan="4" style="text-align: center; padding: 40px 20px; color: #64748b; font-size: 13px;">
+                <div style="font-size: 24px; margin-bottom: 8px;">📄</div>
+                <div>Chưa có file phụ đề gốc (.srt).</div>
+                <div style="margin-top: 6px; font-size: 12px; color: #94a3b8;">Hãy chọn file SRT ở mục <strong>[Phim &amp; Phụ đề đầu vào]</strong> bên dưới hoặc kéo thả file .srt vào giao diện.</div>
+                <div style="margin-top: 14px;">
+                    <button type="button" class="btn secondary small" id="btnQuickSelectReviewOriginalSrt" style="padding: 6px 14px; font-size: 11.5px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); display: inline-flex; align-items: center; gap: 5px;">
+                        <span>📂 Chọn file phụ đề gốc (.srt)</span>
+                    </button>
+                </div>
+            </td>`;
+            tableBody.appendChild(emptyTr);
+            const btnQuickOrig = document.getElementById('btnQuickSelectReviewOriginalSrt');
+            if (btnQuickOrig) {
+                btnQuickOrig.addEventListener('click', () => {
+                    const btnSrt = document.getElementById('btnSelectReviewSrt');
+                    if (btnSrt) btnSrt.click();
+                });
+            }
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        subs.forEach((sub, idx) => {
+            const text = sub.text || sub.content || '';
+            if (searchTerm && !text.toLowerCase().includes(searchTerm)) {
+                return;
+            }
+
+            const isEdited = window.reviewEditedSentenceIndices.has(`sub_${idx}`);
+            if (filterValue === 'unread' && isEdited) return;
+            if (filterValue === 'edited' && !isEdited) return;
+
+            const tr = document.createElement('tr');
+            tr.setAttribute('data-sub-idx', idx);
+
+            // Col 1: Index
+            const tdIdx = document.createElement('td');
+            tdIdx.className = 'review-script-idx';
+            tdIdx.textContent = sub.id || (idx + 1);
+            tr.appendChild(tdIdx);
+
+            // Col 2: Time
+            const tdTime = document.createElement('td');
+            tdTime.className = 'review-script-time';
+            const startSec = typeof sub.startSeconds === 'number' ? sub.startSeconds : (sub.start || 0);
+            const endSec = typeof sub.endSeconds === 'number' ? sub.endSeconds : (sub.end || 0);
+            tdTime.innerHTML = `<span>${formatVideoTime(startSec)} → ${formatVideoTime(endSec)}</span>`;
+            tr.appendChild(tdTime);
+
+            // Col 3: Actions
+            const tdActions = document.createElement('td');
+            tdActions.className = 'review-script-actions';
+
+            // Play button (seeks video)
+            const btnPlay = document.createElement('button');
+            btnPlay.type = 'button';
+            btnPlay.className = 'review-script-action-btn btn-play';
+            btnPlay.title = `Nhảy video tới ${formatVideoTime(startSec)}`;
+            btnPlay.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+            btnPlay.addEventListener('click', (e) => {
+                e.stopPropagation();
+                safeSeekReviewVideo(startSec, true);
+            });
+
+            // Delete button
+            const btnDel = document.createElement('button');
+            btnDel.type = 'button';
+            btnDel.className = 'review-script-action-btn btn-del';
+            btnDel.title = 'Xóa phụ đề này';
+            btnDel.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="#ef4444" stroke-width="2" fill="none"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+            btnDel.addEventListener('click', (e) => {
+                e.stopPropagation();
+                subs.splice(idx, 1);
+                renderReviewScriptTable();
+                showToast(`Đã xóa câu phụ đề #${idx + 1}`, 'info');
+            });
+
+            tdActions.appendChild(btnPlay);
+            tdActions.appendChild(btnDel);
+            tr.appendChild(tdActions);
+
+            // Col 4: Text
+            const tdText = document.createElement('td');
+            const textWrapper = document.createElement('div');
+            textWrapper.className = 'review-script-text-cell';
+            textWrapper.textContent = text;
+            textWrapper.title = 'Bấm chuột vào câu để chỉnh sửa trực tiếp';
+
+            textWrapper.addEventListener('click', () => {
+                if (tdText.querySelector('textarea')) return;
+                const input = document.createElement('textarea');
+                input.className = 'review-script-inline-input';
+                input.value = subs[idx].text || '';
+                input.rows = Math.min(5, Math.max(1, Math.ceil(input.value.length / 80)));
+
+                tdText.innerHTML = '';
+                tdText.appendChild(input);
+                input.focus();
+                input.setSelectionRange(input.value.length, input.value.length);
+
+                const saveEdit = () => {
+                    const newVal = input.value.trim();
+                    subs[idx].text = newVal;
+                    window.reviewEditedSentenceIndices.add(`sub_${idx}`);
+                    textWrapper.textContent = newVal || '(Câu phụ đề rỗng)';
+                    tdText.innerHTML = '';
+                    tdText.appendChild(textWrapper);
+                    updateReviewScriptStats();
+                };
+
+                input.addEventListener('blur', saveEdit);
+                input.addEventListener('keydown', (ke) => {
+                    if (ke.key === 'Enter' && !ke.shiftKey) {
+                        ke.preventDefault();
+                        input.blur();
+                    }
+                });
+            });
+
+            tdText.appendChild(textWrapper);
+            tr.appendChild(tdText);
+            fragment.appendChild(tr);
+        });
+
+        tableBody.appendChild(fragment);
+        return;
+    }
+
+    // Tab: AI Review Script
+    if (!window.reviewScriptSentences || window.reviewScriptSentences.length === 0) {
+        const emptyTr = document.createElement('tr');
+        emptyTr.innerHTML = `<td colspan="4" style="text-align: center; padding: 40px 20px; color: #64748b; font-size: 13px;">
+            <div style="font-size: 24px; margin-bottom: 8px;">🎬</div>
+            <div>Chưa có câu thoại nào trong kịch bản review / thuyết minh.</div>
+            <div style="margin-top: 6px; font-size: 12px; color: #94a3b8;">Hãy bấm <strong>✨ Tạo Kịch Bản AI</strong>, <strong>📥 Tải lên SRT thuyết minh</strong> hoặc <strong>➕ Thêm</strong> để bắt đầu soạn kịch bản.</div>
+            <div style="margin-top: 14px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
+                <button type="button" class="btn secondary small" id="btnQuickUploadNarrationSrt" style="padding: 6px 14px; font-size: 11.5px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.08); display: inline-flex; align-items: center; gap: 5px;">
+                    <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <span>📥 Tải lên SRT thuyết minh</span>
+                </button>
+                <button type="button" class="btn secondary small" id="btnQuickAiGenScript" style="padding: 6px 14px; font-size: 11.5px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.08); display: inline-flex; align-items: center; gap: 5px;">
+                    <span>✨ Tạo kịch bản bằng AI</span>
+                </button>
+            </div>
+        </td>`;
+        tableBody.appendChild(emptyTr);
+        const btnQuickUpload = document.getElementById('btnQuickUploadNarrationSrt');
+        if (btnQuickUpload && typeof handleUploadNarrationSrt === 'function') {
+            btnQuickUpload.addEventListener('click', handleUploadNarrationSrt);
+        }
+        const btnQuickGen = document.getElementById('btnQuickAiGenScript');
+        if (btnQuickGen) {
+            btnQuickGen.addEventListener('click', () => {
+                const headerGen = document.getElementById('btnGenerateReviewScriptHeader');
+                if (headerGen) headerGen.click();
+            });
+        }
+        return;
+    }
+
+    // Helper parse timecode sang giây nếu có
+    const parseTcToSecs = (tc) => {
+        if (typeof tc === 'number') return tc;
+        if (!tc || typeof tc !== 'string') return 0;
+        const parts = tc.replace(',', '.').split(':');
+        if (parts.length === 3) return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
+        if (parts.length === 2) return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+        return parseFloat(tc) || 0;
+    };
+
+    // Calculate cumulative timeline for sentences (ưu tiên mốc thời gian từ file SRT thuyết minh nếu có)
+    let runningSeconds = 0;
+    const hasCustomTimedSubs = Array.isArray(window.reviewNarrationSubtitles) &&
+        window.reviewNarrationSubtitles.length === window.reviewScriptSentences.length;
+
+    const sentenceMeta = window.reviewScriptSentences.map((sentence, idx) => {
+        let start = runningSeconds;
+        let end = runningSeconds;
+        let duration = 0;
+
+        if (hasCustomTimedSubs && window.reviewNarrationSubtitles[idx]) {
+            const sub = window.reviewNarrationSubtitles[idx];
+            const sSec = typeof sub.startSeconds === 'number' ? sub.startSeconds : parseTcToSecs(sub.start);
+            const eSec = typeof sub.endSeconds === 'number' ? sub.endSeconds : parseTcToSecs(sub.end);
+            start = sSec;
+            end = Math.max(start + 0.5, eSec);
+            duration = Math.max(0.5, parseFloat((end - start).toFixed(1)));
+            runningSeconds = end;
+        } else {
+            const wordCount = sentence.trim().split(/\s+/).filter(Boolean).length;
+            duration = Math.max(1.2, parseFloat((wordCount / 3.5).toFixed(1)));
+            start = runningSeconds;
+            end = runningSeconds + duration;
+            runningSeconds = end;
+        }
+        return { sentence, start, end, duration, idx };
+    });
+
+    const fragment = document.createDocumentFragment();
+
+    sentenceMeta.forEach((item) => {
+        const { sentence, start, end, duration, idx } = item;
+        if (searchTerm && !sentence.toLowerCase().includes(searchTerm)) {
+            return;
+        }
+
+        const isEdited = window.reviewEditedSentenceIndices.has(idx);
+        if (filterValue === 'unread' && isEdited) return;
+        if (filterValue === 'edited' && !isEdited) return;
+
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-sentence-idx', idx);
+
+        // Col 1: Index
+        const tdIdx = document.createElement('td');
+        tdIdx.className = 'review-script-idx';
+        tdIdx.textContent = (idx + 1);
+        tr.appendChild(tdIdx);
+
+        // Col 2: Time
+        const tdTime = document.createElement('td');
+        tdTime.className = 'review-script-time';
+        tdTime.innerHTML = `<span>${formatVideoTime(start)} → ${formatVideoTime(end)}</span><div style="font-size: 10px; color: #64748b;">(${duration}s)</div>`;
+        tr.appendChild(tdTime);
+
+        // Col 3: Actions (Play Video Seek, Voice Preview TTS, Delete)
+        const tdActions = document.createElement('td');
+        tdActions.className = 'review-script-actions';
+
+        // Play seek video button
+        const btnSeek = document.createElement('button');
+        btnSeek.type = 'button';
+        btnSeek.className = 'review-script-action-btn btn-play';
+        btnSeek.title = `Tua video đến thời điểm này (~${formatVideoTime(start)})`;
+        btnSeek.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+        btnSeek.addEventListener('click', (e) => {
+            e.stopPropagation();
+            safeSeekReviewVideo(start, true);
+        });
+
+        // TTS Voice preview button
+        const btnVoice = document.createElement('button');
+        btnVoice.type = 'button';
+        btnVoice.className = 'review-script-action-btn btn-voice';
+        btnVoice.title = 'Nghe thử giọng đọc AI câu này';
+        btnVoice.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" stroke="#38bdf8" stroke-width="2" fill="none"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>`;
+        btnVoice.addEventListener('click', (e) => {
+            e.stopPropagation();
+            previewReviewSentenceVoice(window.reviewScriptSentences[idx], btnVoice);
+        });
+
+        // Delete button
+        const btnDel = document.createElement('button');
+        btnDel.type = 'button';
+        btnDel.className = 'review-script-action-btn btn-del';
+        btnDel.title = 'Xóa câu này';
+        btnDel.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="#ef4444" stroke-width="2" fill="none"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+        btnDel.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.reviewScriptSentences.splice(idx, 1);
+            if (Array.isArray(window.reviewNarrationSubtitles) && window.reviewNarrationSubtitles.length > idx) {
+                window.reviewNarrationSubtitles.splice(idx, 1);
+            }
+            window.reviewEditedSentenceIndices.delete(idx);
+            renderReviewScriptTable();
+            showToast(`Đã xóa câu #${idx + 1}`, 'info');
+        });
+
+        tdActions.appendChild(btnSeek);
+        tdActions.appendChild(btnVoice);
+        tdActions.appendChild(btnDel);
+        tr.appendChild(tdActions);
+
+        // Col 4: Sentence text (click to edit inline)
+        const tdText = document.createElement('td');
+        const textWrapper = document.createElement('div');
+        textWrapper.className = 'review-script-text-cell';
+        textWrapper.textContent = sentence;
+        textWrapper.title = 'Bấm chuột vào câu thoại này để chỉnh sửa';
+
+        textWrapper.addEventListener('click', () => {
+            if (tdText.querySelector('textarea')) return;
+
+            const input = document.createElement('textarea');
+            input.className = 'review-script-inline-input';
+            input.value = window.reviewScriptSentences[idx] || '';
+            input.rows = Math.min(5, Math.max(1, Math.ceil(input.value.length / 80)));
+
+            tdText.innerHTML = '';
+            tdText.appendChild(input);
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+
+            const saveEdit = () => {
+                const newVal = input.value.trim();
+                window.reviewScriptSentences[idx] = newVal;
+                window.reviewEditedSentenceIndices.add(idx);
+                textWrapper.textContent = newVal || '(Câu thoại rỗng)';
+                tdText.innerHTML = '';
+                tdText.appendChild(textWrapper);
+                updateReviewScriptStats();
+            };
+
+            input.addEventListener('blur', saveEdit);
+            input.addEventListener('keydown', (ke) => {
+                if (ke.key === 'Enter' && !ke.shiftKey) {
+                    ke.preventDefault();
+                    input.blur();
+                }
+            });
+        });
+
+        tdText.appendChild(textWrapper);
+        tr.appendChild(tdText);
+
+        fragment.appendChild(tr);
+    });
+
+    tableBody.appendChild(fragment);
+}
+
+// Wire up script editor buttons
+const reviewScriptSearchInput = document.getElementById('reviewScriptSearchInput');
+if (reviewScriptSearchInput) {
+    reviewScriptSearchInput.addEventListener('input', () => {
+        renderReviewScriptTable();
+    });
+}
+
+// Filter pills (all, unread, edited)
+document.querySelectorAll('input[name="reviewScriptFilter"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+        renderReviewScriptTable();
+    });
+});
+
+// Dual tabs: Script vs Original Subtitle
+const btnReviewTabScript = document.getElementById('btnReviewTabScript');
+const btnReviewTabOriginalSrt = document.getElementById('btnReviewTabOriginalSrt');
+if (btnReviewTabScript && btnReviewTabOriginalSrt) {
+    btnReviewTabScript.addEventListener('click', () => {
+        window.currentReviewScriptTab = 'script';
+        btnReviewTabScript.classList.add('active');
+        btnReviewTabScript.style.color = '#fff';
+        btnReviewTabOriginalSrt.classList.remove('active');
+        btnReviewTabOriginalSrt.style.color = '#94a3b8';
+        renderReviewScriptTable();
+        if (typeof syncReviewSubtitle === 'function') {
+            syncReviewSubtitle(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0);
+        }
+    });
+    btnReviewTabOriginalSrt.addEventListener('click', () => {
+        window.currentReviewScriptTab = 'original';
+        btnReviewTabOriginalSrt.classList.add('active');
+        btnReviewTabOriginalSrt.style.color = '#fff';
+        btnReviewTabScript.classList.remove('active');
+        btnReviewTabScript.style.color = '#94a3b8';
+        renderReviewScriptTable();
+        if (typeof syncReviewSubtitle === 'function') {
+            syncReviewSubtitle(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0);
+        }
+    });
+}
+
+// ==========================================================
+// UPLOAD SRT THUYẾT MINH / REVIEW SCRIPT
+// ==========================================================
+async function handleUploadNarrationSrt() {
+    if (!checkFeaturePermission('can_access_review', 'Tải lên SRT Thuyết Minh')) return;
+
+    let srtPath = null;
+    try {
+        srtPath = await selectFile('srt', 'Chọn file SRT kịch bản thuyết minh');
+    } catch (err) {
+        console.warn('selectFile error, fallback to file input:', err);
+    }
+
+    if (srtPath) {
+        await processNarrationSrtPath(srtPath);
+        return;
+    }
+
+    // Fallback nếu chạy web thường hoặc selectFile không khả dụng
+    const fileInput = document.getElementById('reviewNarrationSrtFileInput');
+    if (fileInput) {
+        fileInput.value = '';
+        fileInput.onchange = (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (re) => {
+                processNarrationSrtContent(re.target.result, file.name);
+            };
+            reader.readAsText(file);
+        };
+        fileInput.click();
+    }
+}
+
+async function processNarrationSrtPath(srtPath) {
+    if (!srtPath) return;
+    try {
+        const res = await fetch('/api/subtitles/parse_file', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ srt_path: srtPath })
+        });
+        const data = await res.json();
+        if (data.success && data.subtitles && data.subtitles.length > 0) {
+            const fileName = srtPath.split(/[\/\\]/).pop() || 'SRT';
+            applyNarrationSubtitles(data.subtitles, fileName);
+        } else {
+            showToast('Không thể đọc file SRT: ' + (data.error || 'Nội dung phụ đề trống'), 'error');
+        }
+    } catch (e) {
+        showToast('Lỗi khi nạp file SRT: ' + e.message, 'error');
+    }
+}
+
+function processNarrationSrtContent(content, fileName) {
+    if (!content || !content.trim()) {
+        showToast('File SRT rỗng!', 'warning');
+        return;
+    }
+    window.reviewNarrationSrtRawContent = content;
+    let subs = [];
+    if (typeof parseSrtContent === 'function') {
+        subs = parseSrtContent(content);
+    } else {
+        const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+        const blocks = normalized.split(/\n\s*\n/);
+        blocks.forEach((block) => {
+            const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length >= 2) {
+                let timeLine = lines[1];
+                let textStartIndex = 2;
+                if (lines[0].includes('-->')) {
+                    timeLine = lines[0];
+                    textStartIndex = 1;
+                }
+                const timeMatch = timeLine.match(/(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})/);
+                if (timeMatch) {
+                    subs.push({
+                        id: subs.length + 1,
+                        start: timeMatch[1],
+                        end: timeMatch[2],
+                        text: lines.slice(textStartIndex).join(' ')
+                    });
+                }
+            }
+        });
+    }
+
+    if (subs.length > 0) {
+        applyNarrationSubtitles(subs, fileName);
+    } else {
+        showToast('Không tìm thấy câu phụ đề hợp lệ trong file SRT!', 'warning');
+    }
+}
+
+function applyNarrationSubtitles(subtitles, fileName) {
+    if (!subtitles || subtitles.length === 0) {
+        showToast('Không có câu phụ đề nào để nạp!', 'warning');
+        return;
+    }
+
+    const sentences = subtitles.map(s => {
+        let txt = (s.text || s.content || '').trim();
+        return txt.replace(/\r?\n/g, ' ');
+    }).filter(Boolean);
+
+    if (sentences.length === 0) {
+        showToast('Nội dung file SRT không có câu thoại hợp lệ!', 'warning');
+        return;
+    }
+
+    window.reviewScriptSentences = sentences;
+    window.reviewScriptFullText = sentences.join(' ');
+    window.reviewNarrationSubtitles = subtitles;
+    window.reviewEditedSentenceIndices = new Set();
+
+    // Tự động bỏ chọn tạm dừng để vào thẳng bước 2
+    const pauseCheckbox = document.getElementById('reviewPauseAfterScript');
+    if (pauseCheckbox) pauseCheckbox.checked = false;
+
+    // Switch view to script tab
+    window.currentReviewScriptTab = 'script';
+    const tabScript = document.getElementById('btnReviewTabScript');
+    const tabSrt = document.getElementById('btnReviewTabOriginalSrt');
+    if (tabScript && tabSrt) {
+        tabScript.classList.add('active');
+        tabScript.style.color = '#fff';
+        tabSrt.classList.remove('active');
+        tabSrt.style.color = '#94a3b8';
+    }
+
+    const card = document.getElementById('reviewScriptEditorCard');
+    if (card) {
+        card.style.display = 'flex';
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    renderReviewScriptTable();
+    updateReviewScriptStats();
+
+    const btnStart = document.getElementById('btnStartReview');
+    if (btnStart) {
+        btnStart.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>TIẾP TỤC DỰNG VIDEO (BƯỚC 2: TẠO VOICE & GHÉP PHIM)</span>`;
+    }
+
+    showToast(`✅ Đã tải lên ${sentences.length} câu thuyết minh từ ${fileName}! Sẵn sàng vào thẳng Bước 2 (Tạo Voice & Ghép phim).`, 'success');
+    if (typeof updateReviewSubPreview === 'function') updateReviewSubPreview();
+    if (typeof syncReviewSubtitle === 'function') {
+        syncReviewSubtitle(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0);
+    }
+}
+
+
+window.handleUploadNarrationSrt = handleUploadNarrationSrt;
+
+const btnUploadNarrationSrt = document.getElementById('btnUploadNarrationSrt');
+if (btnUploadNarrationSrt) {
+    btnUploadNarrationSrt.addEventListener('click', handleUploadNarrationSrt);
+}
+const btnUploadNarrationSrtCard = document.getElementById('btnUploadNarrationSrtCard');
+if (btnUploadNarrationSrtCard) {
+    btnUploadNarrationSrtCard.addEventListener('click', handleUploadNarrationSrt);
+}
+
+// Hỗ trợ kéo thả file .srt trực tiếp vào bảng kịch bản review
+const reviewScriptEditorCard = document.getElementById('reviewScriptEditorCard');
+if (reviewScriptEditorCard) {
+    reviewScriptEditorCard.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        reviewScriptEditorCard.style.outline = '2px dashed #38bdf8';
+    });
+    reviewScriptEditorCard.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        reviewScriptEditorCard.style.outline = '';
+    });
+    reviewScriptEditorCard.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        reviewScriptEditorCard.style.outline = '';
+        const files = e.dataTransfer.files;
+        if (!files || files.length === 0) return;
+        const file = files[0];
+        const name = file.name.toLowerCase();
+        const filePath = file.path || file.name;
+        if (name.endsWith('.srt') || name.endsWith('.vtt') || name.endsWith('.ass')) {
+            if (window.currentReviewScriptTab === 'original') {
+                const inpSrt = document.getElementById('reviewInputSrtPath');
+                if (inpSrt) inpSrt.value = filePath;
+                autoParseReviewSrt(filePath);
+            } else {
+                if (file.path) {
+                    processNarrationSrtPath(filePath);
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = (re) => processNarrationSrtContent(re.target.result, file.name);
+                    reader.readAsText(file);
+                }
+            }
+        }
+    });
+}
+
+const btnAddReviewScriptSentence = document.getElementById('btnAddReviewScriptSentence');
+if (btnAddReviewScriptSentence) {
+    btnAddReviewScriptSentence.addEventListener('click', () => {
+        if (!window.reviewScriptSentences) window.reviewScriptSentences = [];
+        window.reviewScriptSentences.push('Câu thoại mới...');
+        renderReviewScriptTable();
+        const container = document.getElementById('reviewScriptTableViewContainer');
+        if (container) container.scrollTop = container.scrollHeight;
+        showToast('Đã thêm 1 câu thoại mới ở cuối bảng.', 'info');
+    });
+}
+
+const btnToggleReviewScriptViewMode = document.getElementById('btnToggleReviewScriptViewMode');
+const reviewScriptTableViewContainer = document.getElementById('reviewScriptTableViewContainer');
+const reviewScriptFullTextViewContainer = document.getElementById('reviewScriptFullTextViewContainer');
+const reviewScriptFullTextarea = document.getElementById('reviewScriptFullTextarea');
+const btnToggleReviewScriptViewModeText = document.getElementById('btnToggleReviewScriptViewModeText');
+
+if (btnToggleReviewScriptViewMode) {
+    btnToggleReviewScriptViewMode.addEventListener('click', () => {
+        window.isReviewScriptFullTextMode = !window.isReviewScriptFullTextMode;
+        if (window.isReviewScriptFullTextMode) {
+            if (reviewScriptFullTextarea) {
+                reviewScriptFullTextarea.value = (window.reviewScriptSentences && window.reviewScriptSentences.length > 0)
+                    ? window.reviewScriptSentences.join('\n\n')
+                    : (window.reviewScriptFullText || '');
+            }
+            if (reviewScriptTableViewContainer) reviewScriptTableViewContainer.style.display = 'none';
+            if (reviewScriptFullTextViewContainer) reviewScriptFullTextViewContainer.style.display = 'block';
+            if (btnToggleReviewScriptViewModeText) btnToggleReviewScriptViewModeText.innerText = '📋 Bảng câu';
+        } else {
+            if (reviewScriptTableViewContainer) reviewScriptTableViewContainer.style.display = 'block';
+            if (reviewScriptFullTextViewContainer) reviewScriptFullTextViewContainer.style.display = 'none';
+            if (btnToggleReviewScriptViewModeText) btnToggleReviewScriptViewModeText.innerText = '📝 Toàn văn';
+            renderReviewScriptTable();
+        }
+    });
+}
+
+const btnCancelReviewScriptFullText = document.getElementById('btnCancelReviewScriptFullText');
+if (btnCancelReviewScriptFullText) {
+    btnCancelReviewScriptFullText.addEventListener('click', () => {
+        window.isReviewScriptFullTextMode = false;
+        if (reviewScriptTableViewContainer) reviewScriptTableViewContainer.style.display = 'block';
+        if (reviewScriptFullTextViewContainer) reviewScriptFullTextViewContainer.style.display = 'none';
+        if (btnToggleReviewScriptViewModeText) btnToggleReviewScriptViewModeText.innerText = '📝 Toàn văn';
+    });
+}
+
+const btnApplyReviewScriptFullText = document.getElementById('btnApplyReviewScriptFullText');
+if (btnApplyReviewScriptFullText) {
+    btnApplyReviewScriptFullText.addEventListener('click', () => {
+        const rawText = (reviewScriptFullTextarea ? reviewScriptFullTextarea.value : '').trim();
+        if (!rawText) {
+            showToast('Nội dung văn bản rỗng!', 'warning');
+            return;
+        }
+        const sentences = rawText.split(/\n+/).flatMap(p => {
+            const trimmed = p.trim();
+            if (!trimmed) return [];
+            const matches = trimmed.match(/[^.!?\n]+[.!?\n]+|\S+/g);
+            return matches ? matches.map(s => s.trim()).filter(Boolean) : [trimmed];
+        });
+        window.reviewScriptSentences = sentences;
+        window.reviewScriptFullText = rawText;
+        window.isReviewScriptFullTextMode = false;
+        if (reviewScriptTableViewContainer) reviewScriptTableViewContainer.style.display = 'block';
+        if (reviewScriptFullTextViewContainer) reviewScriptFullTextViewContainer.style.display = 'none';
+        if (btnToggleReviewScriptViewModeText) btnToggleReviewScriptViewModeText.innerText = '📝 Toàn văn';
+        renderReviewScriptTable();
+        showToast(`Đã cập nhật ${sentences.length} câu thoại vào bảng!`, 'success');
+    });
+}
+
+const btnSaveReviewScript = document.getElementById('btnSaveReviewScript');
+if (btnSaveReviewScript) {
+    btnSaveReviewScript.addEventListener('click', async () => {
+        if (!window.reviewScriptSentences || window.reviewScriptSentences.length === 0) {
+            showToast('Chưa có nội dung kịch bản để lưu!', 'warning');
+            return;
+        }
+        const videoPath = reviewInputVideoPath ? reviewInputVideoPath.value : '';
+        const outputDir = document.getElementById('reviewOutputFolder')?.value?.trim() || 'output';
+        const scriptText = window.reviewScriptSentences.join(' ');
+        try {
+            const res = await fetch('/api/review/save_script', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_path: videoPath,
+                    output_dir: outputDir,
+                    script: scriptText,
+                    mode: reviewVideoMode
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('✅ Đã lưu kịch bản thành công!', 'success');
+            } else {
+                showToast('Lỗi lưu kịch bản: ' + (data.error || 'Lỗi không xác định'), 'error');
+            }
+        } catch(e) {
+            showToast('Lỗi kết nối máy chủ: ' + e.message, 'error');
+        }
+    });
+}
+
+const btnRecreateReviewScript = document.getElementById('btnRecreateReviewScript');
+if (btnRecreateReviewScript) {
+    btnRecreateReviewScript.addEventListener('click', async () => {
+        const confirm = await showConfirmModal(
+            'Viết lại kịch bản AI?',
+            'Hệ thống sẽ gọi AI tạo lại một kịch bản mới hoàn toàn từ đầu (ghi đè kịch bản hiện tại). Bạn có muốn tiếp tục?'
+        );
+        if (confirm) {
+            window.reviewScriptSentences = [];
+            window.reviewScriptFullText = '';
+            startReviewPipeline({ isScriptOnly: true, forceFresh: true });
+        }
+    });
+}
+
+const btnGenerateReviewScriptOnly = document.getElementById('btnGenerateReviewScriptOnly');
+if (btnGenerateReviewScriptOnly) {
+    btnGenerateReviewScriptOnly.addEventListener('click', () => {
+        startReviewPipeline({ isScriptOnly: true });
+    });
+}
+
+const btnGenerateReviewScriptHeader = document.getElementById('btnGenerateReviewScriptHeader');
+if (btnGenerateReviewScriptHeader) {
+    btnGenerateReviewScriptHeader.addEventListener('click', () => {
+        if (window.reviewScriptSentences && window.reviewScriptSentences.length > 0) {
+            if (btnRecreateReviewScript) {
+                btnRecreateReviewScript.click();
+            } else {
+                startReviewPipeline({ isScriptOnly: true, forceFresh: true });
+            }
+        } else {
+            startReviewPipeline({ isScriptOnly: true });
+        }
+    });
+}
+
+// Initial render for review script table
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        renderReviewScriptTable();
+    });
+} else {
+    renderReviewScriptTable();
+}
+
+const btnContinueReviewVideo = document.getElementById('btnContinueReviewVideo');
+if (btnContinueReviewVideo) {
+    btnContinueReviewVideo.addEventListener('click', () => {
+        startReviewPipeline({ continueFromScript: true });
+    });
+}
+
 const btnStartReview = document.getElementById('btnStartReview');
 if (btnStartReview) {
     const btnStopReview = document.getElementById('btnStopReview');
@@ -11493,17 +13116,30 @@ if (btnStartReview) {
         });
     }
 
-    btnStartReview.addEventListener('click', async () => {
-        if (!checkFeaturePermission('can_access_review', 'Tạo video Review Phim')) return;
+    btnStartReview.addEventListener('click', () => {
+        const hasEditedScript = window.reviewScriptSentences && window.reviewScriptSentences.length > 0;
+        startReviewPipeline({ continueFromScript: hasEditedScript });
+    });
+}
 
-        if (!reviewInputVideoPath.value) {
-            showToast('Vui lòng chọn video đầu vào!', 'warning');
-            return;
-        }
-        
-        const voiceId = document.getElementById('reviewVoiceSelect').value;
-        
-        // Cảnh báo nếu sử dụng giọng Local (Kokoro / RVC / Edge)
+async function startReviewPipeline({ isScriptOnly = false, continueFromScript = false, forceFresh = false } = {}) {
+    if (!checkFeaturePermission('can_access_review', 'Tạo video Review Phim')) return;
+
+    if (!reviewInputVideoPath || !reviewInputVideoPath.value) {
+        showToast('Vui lòng chọn video đầu vào!', 'warning');
+        return;
+    }
+    
+    // Nếu trong bảng đã có kịch bản (do tải lên SRT hoặc tạo trước đó) và không phải bấm nút "Tạo lại kịch bản AI", tự động vào thẳng Bước 2
+    const hasExistingScript = window.reviewScriptSentences && window.reviewScriptSentences.length > 0;
+    if (hasExistingScript && !isScriptOnly) {
+        continueFromScript = true;
+    }
+
+    const voiceId = document.getElementById('reviewVoiceSelect')?.value || 'ngoc_huyen';
+    
+    // Cảnh báo nếu sử dụng giọng Local khi bắt đầu dựng video (không cảnh báo nếu chỉ tạo kịch bản)
+    if (!isScriptOnly) {
         const warningChoice = await checkLocalVoiceWarning(voiceId);
         if (warningChoice === 'switch') {
             const btnOpenVoice = document.getElementById('btnOpenVoiceModalReview');
@@ -11513,77 +13149,120 @@ if (btnStartReview) {
             }
             return;
         }
-        
-        const voiceSpeed = parseFloat(document.getElementById('reviewVoiceSpeed')?.value) || 1.1;
-        
-        let payload = {
-            video_path: reviewInputVideoPath.value,
-            mode: reviewVideoMode,
-            voice_id: voiceId,
-            voice_speed: voiceSpeed,
-            tts_threads: parseInt(document.getElementById('reviewTtsThreads')?.value || 8),
-            target_minutes: document.getElementById('reviewTargetMinutes') ? (parseInt(document.getElementById('reviewTargetMinutes').value) || 5) : 5,
-            review_style: document.getElementById('reviewStyleSelect')?.value || 'dramatic',
-            custom_style_prompt: document.getElementById('reviewCustomStylePrompt')?.value || '',
-            aspect_ratio: reviewAspectRatio,
-            pacing: reviewPacing,
-            enable_zoom: (window.videoStudioInstances?.review?.state?.zoom > 1.0) || (document.getElementById('reviewEnableZoom')?.checked ?? true),
-            video_zoom: window.videoStudioInstances?.review ? Math.round((window.videoStudioInstances.review.state.zoom || 1.05) * 100) : (parseFloat(document.getElementById('reviewVideoZoom')?.value) || 105),
-            blur_original_subtitles: Boolean(document.getElementById('reviewTabBlurOriginalSubtitles')?.checked),
-            blur_intensity: parseInt(document.getElementById('reviewTabDynBlurIntensity')?.value) || 15,
-            blur_lead_offset: Number.isFinite(parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value)) ? parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value) : -180,
-            blur_padding: Number.isFinite(parseFloat(document.getElementById('reviewTabBlurPadding')?.value)) ? parseFloat(document.getElementById('reviewTabBlurPadding')?.value) : 220,
-            blur_y_pos: parseFloat(document.getElementById('reviewTabBlurYPos')?.value) || 81.5,
-            blur_use_ai_scan: document.getElementById('reviewTabBlurUseAiScan')?.checked ?? true,
-            ai_boxes: (window.reviewTabScannedAiBoxes && window.reviewTabScannedAiBoxes.length > 0) ? window.reviewTabScannedAiBoxes : null,
-            logo: {
-                enabled: document.getElementById('reviewEnableLogoWatermark')?.checked ?? false,
-                path: document.getElementById('reviewLogoInputPath')?.value || '',
-                x_pct: (window.currentReviewLogoState && window.currentReviewLogoState.x_pct) || 5.0,
-                y_pct: (window.currentReviewLogoState && window.currentReviewLogoState.y_pct) || 5.0,
-                w_pct: (window.currentReviewLogoState && window.currentReviewLogoState.w_pct) || 18.0,
-                h_pct: (window.currentReviewLogoState && window.currentReviewLogoState.h_pct) || 12.0,
-                opacity: parseInt(document.getElementById('reviewLogoOpacity')?.value || 100)
-            },
-            auto_subtitles: false,
-            enable_scene_detect: document.getElementById('reviewEnableSceneDetect') ? document.getElementById('reviewEnableSceneDetect').checked : true,
-            snap_threshold: parseFloat(document.getElementById('reviewSnapThreshold')?.value) || 0.6,
-            min_clip_duration: parseFloat(document.getElementById('reviewMinClipDur')?.value) || 1.2,
-            max_speed_ratio_deviation: 0.15,
-            enable_crossfade: document.getElementById('reviewEnableCrossfade')?.checked || false,
-            original_volume: parseInt(document.getElementById('reviewOrigVol')?.value) || 15,
-            bgm: {
-                enabled: Boolean(document.getElementById('reviewBgmEnabled')?.checked),
-                volume: parseInt(document.getElementById('reviewBgmVol')?.value) || 15,
-                ducking: Boolean(document.getElementById('reviewBgmDucking')?.checked),
-                preset: document.getElementById('reviewBgmPresetSelect')?.value || 'random',
-                path: (window.currentBgmSourceMode === 'custom' && window.currentCustomBgmPath) ? window.currentCustomBgmPath : ''
-            },
-            stem_separation: {
-                enabled: Boolean(document.getElementById('reviewStemSeparationEnabled')?.checked),
-                remove_vocals: document.getElementById('reviewRemoveVocals')?.checked !== false,
-                keep_sfx: document.getElementById('reviewKeepSfx')?.checked !== false,
-                mode: document.getElementById('reviewStemMode')?.value || 'mdx_net_hq4',
-                device: document.getElementById('reviewStemDevice')?.value || 'auto'
-            },
-            output_dir: document.getElementById('reviewOutputFolder').value.trim() || window.currentTtsOutputDir || 'output',
-            output_name: document.getElementById('reviewOutputFileName').value.trim() || 'video_review.mp4'
-        };
-        
-        // reviewInputSrtPath declaration
-        if (reviewInputSrtPath && reviewInputSrtPath.value) {
-            payload.srt_path = reviewInputSrtPath.value;
-        }
-        
-        // Kiểm tra API Key cho Review Phim AI
+    }
+    
+    const voiceSpeed = parseFloat(document.getElementById('reviewVoiceSpeed')?.value) || 1.1;
+    
+    let payload = {
+        video_path: reviewInputVideoPath.value,
+        mode: reviewVideoMode,
+        encoder: document.getElementById('exportEncoder')?.value || 'auto',
+        voice_id: voiceId,
+        voice_speed: voiceSpeed,
+        tts_threads: parseInt(document.getElementById('reviewTtsThreads')?.value || 8),
+        target_minutes: document.getElementById('reviewTargetMinutes') ? (parseInt(document.getElementById('reviewTargetMinutes').value) || 5) : 5,
+        review_style: document.getElementById('reviewStyleSelect')?.value || 'dramatic',
+        custom_style_prompt: document.getElementById('reviewCustomStylePrompt')?.value || '',
+        script_language: document.getElementById('reviewScriptLang')?.value || 'vi',
+        target_lang: document.getElementById('reviewScriptLang')?.value || 'vi',
+        aspect_ratio: reviewAspectRatio,
+        pacing: reviewPacing,
+        enable_zoom: Boolean(document.getElementById('reviewEnableZoom')?.checked),
+        video_zoom: (() => {
+            const isEnabled = document.getElementById('reviewEnableZoom')?.checked ?? true;
+            if (!isEnabled) return 1.0;
+            if (window.videoStudioInstances?.review?.state?.zoom) {
+                return window.videoStudioInstances.review.state.zoom;
+            }
+            return (parseFloat(document.getElementById('reviewVideoZoom')?.value) || 105) / 100.0;
+        })(),
+        video_pan_x: window.videoStudioInstances?.review?.state?.panX || 0.0,
+        video_pan_y: window.videoStudioInstances?.review?.state?.panY || 0.0,
+        blur_original_subtitles: Boolean(document.getElementById('reviewTabBlurOriginalSubtitles')?.checked),
+        blur_intensity: parseInt(document.getElementById('reviewTabDynBlurIntensity')?.value) || 15,
+        blur_lead_offset: Number.isFinite(parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value)) ? parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value) : -180,
+        blur_padding: Number.isFinite(parseFloat(document.getElementById('reviewTabBlurPadding')?.value)) ? parseFloat(document.getElementById('reviewTabBlurPadding')?.value) : 220,
+        blur_y_pos: parseFloat(document.getElementById('reviewTabBlurYPos')?.value) || 81.5,
+        blur_use_ai_scan: document.getElementById('reviewTabBlurUseAiScan')?.checked ?? true,
+        ai_boxes: (window.reviewTabScannedAiBoxes && window.reviewTabScannedAiBoxes.length > 0) ? window.reviewTabScannedAiBoxes : null,
+        logo: {
+            enabled: document.getElementById('reviewEnableLogoWatermark')?.checked ?? false,
+            path: document.getElementById('reviewLogoInputPath')?.value || '',
+            x_pct: (window.currentReviewLogoState && window.currentReviewLogoState.x_pct) || 5.0,
+            y_pct: (window.currentReviewLogoState && window.currentReviewLogoState.y_pct) || 5.0,
+            w_pct: (window.currentReviewLogoState && window.currentReviewLogoState.w_pct) || 18.0,
+            h_pct: (window.currentReviewLogoState && window.currentReviewLogoState.h_pct) || 12.0,
+            opacity: parseInt(document.getElementById('reviewLogoOpacity')?.value || 100)
+        },
+        auto_subtitles: Boolean(document.getElementById('reviewSubtitlesEnabled')?.checked ?? true),
+        subtitles_enabled: Boolean(document.getElementById('reviewSubtitlesEnabled')?.checked ?? true),
+        subtitle_style: (typeof getReviewSubtitleStyle === 'function') ? getReviewSubtitleStyle() : {
+            font: document.getElementById('reviewSubFont')?.value || 'Montserrat',
+            size: parseInt(document.getElementById('reviewSubSize')?.value || 24),
+            color: document.getElementById('reviewSubColorPicker')?.value || '#ffffff',
+            outline_color: document.getElementById('reviewSubOutlineColorPicker')?.value || '#000000',
+            outline: 1,
+            bold: true,
+            italic: false,
+            uppercase: false,
+            region: { x: 10, y: 81.5, w: 80, h: 9.5 },
+            align: 'center'
+        },
+        enable_scene_detect: document.getElementById('reviewEnableSceneDetect') ? document.getElementById('reviewEnableSceneDetect').checked : true,
+        snap_threshold: parseFloat(document.getElementById('reviewSnapThreshold')?.value) || 0.6,
+        min_clip_duration: parseFloat(document.getElementById('reviewMinClipDur')?.value) || 1.2,
+        max_speed_ratio_deviation: 0.15,
+        enable_crossfade: document.getElementById('reviewEnableCrossfade')?.checked || false,
+        original_volume: parseInt(document.getElementById('reviewOrigVol')?.value) || 15,
+        bgm: {
+            enabled: Boolean(document.getElementById('reviewBgmEnabled')?.checked),
+            volume: parseInt(document.getElementById('reviewBgmVol')?.value) || 15,
+            ducking: Boolean(document.getElementById('reviewBgmDucking')?.checked),
+            preset: document.getElementById('reviewBgmPresetSelect')?.value || 'random',
+            path: (window.currentBgmSourceMode === 'custom' && window.currentCustomBgmPath) ? window.currentCustomBgmPath : ''
+        },
+        stem_separation: {
+            enabled: Boolean(document.getElementById('reviewStemSeparationEnabled')?.checked),
+            remove_vocals: document.getElementById('reviewRemoveVocals')?.checked !== false,
+            keep_sfx: document.getElementById('reviewKeepSfx')?.checked !== false,
+            mode: document.getElementById('reviewStemMode')?.value || 'mdx_net_hq4',
+            device: document.getElementById('reviewStemDevice')?.value || 'auto'
+        },
+        output_dir: document.getElementById('reviewOutputFolder')?.value?.trim() || window.currentTtsOutputDir || 'output',
+        output_name: document.getElementById('reviewOutputFileName')?.value?.trim() || 'video_review.mp4'
+    };
+    
+    if (reviewInputSrtPath && reviewInputSrtPath.value) {
+        payload.srt_path = reviewInputSrtPath.value;
+    }
+    
+    // Chỉ kiểm tra API Key OpenAI khi cần tạo kịch bản mới bằng AI (chưa có kịch bản/SRT sẵn)
+    if (!continueFromScript) {
         const hasAiKey = await ensureAiKeyAvailable('openai', 'Tạo kịch bản Review Phim AI');
         if (!hasAiKey) return;
+    }
 
-        const openaiKey = document.getElementById('openaiKey')?.value || '';
-        if (openaiKey && !openaiKey.startsWith('•')) payload.openai_key = openaiKey;
-        payload.openai_base_url = document.getElementById('openaiBaseUrl')?.value || 'https://api.openai.com/v1';
-        payload.openai_model = document.getElementById('openaiModel')?.value || 'gpt-5.6-luna-pro-batch';
-        
+    const openaiKey = document.getElementById('openaiKey')?.value || '';
+    if (openaiKey && !openaiKey.startsWith('•')) payload.openai_key = openaiKey;
+    payload.openai_base_url = document.getElementById('openaiBaseUrl')?.value || 'https://api.openai.com/v1';
+    payload.openai_model = document.getElementById('openaiModel')?.value || 'gpt-5.6-luna-pro-batch';
+    
+    // Cấu hình tạm dừng sau khi tạo kịch bản
+    const shouldPause = isScriptOnly || (document.getElementById('reviewPauseAfterScript')?.checked ?? true);
+    payload.pause_after_script = shouldPause;
+
+    if (continueFromScript && window.reviewScriptSentences && window.reviewScriptSentences.length > 0) {
+        payload.continue_from_script = true;
+        payload.custom_script = window.reviewScriptSentences.join(' ');
+        payload.pause_after_script = false;
+        if (window.reviewNarrationSrtRawContent) {
+            payload.custom_srt_content = window.reviewNarrationSrtRawContent;
+        }
+    }
+
+    if (forceFresh) {
+        payload.use_cache = false;
+    } else if (!payload.continue_from_script) {
         // CHECK CACHE
         try {
             const cacheRes = await fetch('/api/review/check_cache', {
@@ -11598,106 +13277,141 @@ if (btnStartReview) {
             if (cacheRes.ok) {
                 const cacheData = await cacheRes.json();
                 if (cacheData.has_cache) {
-                    const confirm = await showConfirmModal(
-                        'Tái sử dụng dữ liệu?',
-                        `Hệ thống tìm thấy dữ liệu đang làm dở từ lần chạy trước (${cacheData.files.join(', ')}). Bạn có muốn TÁI SỬ DỤNG chúng để tiết kiệm thời gian (và tiền API) không? Chọn 'Đồng ý' để tiếp tục dùng, hoặc 'Hủy' để làm lại từ đầu.`
-                    );
-                    payload.use_cache = confirm;
+                    const confirm = await showConfirmModal({
+                        title: 'Phát hiện tài nguyên đang làm dở',
+                        message: `Hệ thống tìm thấy dữ liệu đang làm dở từ lần chạy trước (${cacheData.files.join(', ')}).\n\nBạn có muốn DÙNG LẠI không?\n• Có: Dùng lại tài nguyên để tiết kiệm thời gian.\n• Không: Xóa tài nguyên cũ và chạy lại từ đầu.`,
+                        icon: '♻️',
+                        confirmText: 'Có (Dùng lại)',
+                        cancelText: 'Không (Chạy lại từ đầu)',
+                        confirmType: 'primary'
+                    });
+                    payload.use_cache = Boolean(confirm);
+                    if (confirm && cacheData.cached_script && (!window.reviewScriptSentences || window.reviewScriptSentences.length === 0)) {
+                        loadReviewScriptData({ script: cacheData.cached_script });
+                    }
                 }
             }
         } catch(e) {
             console.error("Lỗi khi check cache:", e);
         }
-        
-        // Show terminal and start streaming
-        const terminal = document.getElementById('terminal');
-        terminal.innerHTML = '';
-        const terminalOverlay = document.getElementById('terminalOverlay');
-        terminalOverlay.classList.remove('collapsed');
-        
+    }
+    
+    // Show terminal and start streaming
+    const terminal = document.getElementById('terminal');
+    if (terminal) terminal.innerHTML = '';
+    const terminalOverlay = document.getElementById('terminalOverlay');
+    if (terminalOverlay) terminalOverlay.classList.remove('collapsed');
+    
+    const btnStopReview = document.getElementById('btnStopReview');
+    if (btnStartReview) {
         btnStartReview.disabled = true;
-        btnStartReview.innerText = 'ĐANG XỬ LÝ...';
-        if (btnStopReview) btnStopReview.style.display = 'block';
-        const progressText = document.getElementById('reviewProgressText');
-        if (progressText) progressText.innerText = 'Đang chuẩn bị...';
+        btnStartReview.innerText = isScriptOnly ? 'ĐANG TẠO KỊCH BẢN...' : (continueFromScript ? 'ĐANG TẠO VOICE & DỰNG VIDEO...' : 'ĐANG XỬ LÝ...');
+    }
+    if (btnContinueReviewVideo) btnContinueReviewVideo.disabled = true;
+    if (btnStopReview) btnStopReview.style.display = 'block';
+    const progressText = document.getElementById('reviewProgressText');
+    if (progressText) progressText.innerText = continueFromScript ? 'Đang vào thẳng Bước 2 (Tạo giọng đọc & Ghép phim)...' : 'Đang chuẩn bị...';
+    
+    updateReviewStepper(continueFromScript ? 2 : 1); // Reset and show stepper
+
+    
+    const startTime = Date.now();
+    reviewAbortController = new AbortController();
+    
+    try {
+        const response = await fetch('/api/review/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+            signal: reviewAbortController.signal
+        });
         
-        updateReviewStepper(1); // Reset and show stepper
+        if (!response.ok) {
+            const errText = await response.text();
+            appendLog(`🛑 Lỗi máy chủ (${response.status}): ` + errText.substring(0, 500), 'error');
+            throw new Error(`HTTP Error ${response.status}`);
+        }
         
-        const startTime = Date.now();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let hasError = false;
+        let scriptReceived = false;
         
-        reviewAbortController = new AbortController();
-        
-        try {
-            const response = await fetch('/api/review/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload),
-                signal: reviewAbortController.signal
-            });
-            
-            if (!response.ok) {
-                const errText = await response.text();
-                appendLog(`🛑 Lỗi máy chủ (${response.status}): ` + errText.substring(0, 500), 'error');
-                throw new Error(`HTTP Error ${response.status}`);
-            }
-            
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder("utf-8");
-            let hasError = false;
-            
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                const chunk = decoder.decode(value, {stream: true});
-                const lines = chunk.split('\n\n');
-                for (let line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const msg = line.substring(6);
-                        if (msg.startsWith('[PROGRESS] ')) {
-                            const progress = parseInt(msg.substring(11).trim());
-                            if (progressText && !isNaN(progress) && progress > 0) {
-                                const elapsed = Date.now() - startTime;
-                                const totalEst = elapsed / (progress / 100);
-                                const remainingSec = Math.max(0, Math.round((totalEst - elapsed) / 1000));
-                                const mins = Math.floor(remainingSec / 60);
-                                const secs = remainingSec % 60;
-                                progressText.innerText = `Đã hoàn thành: ${progress}% - Ước tính còn: ${mins}p ${secs}s`;
-                                if (progress >= 100) progressText.innerText = 'Hoàn thành 100%';
-                            }
-                            continue; // Do not print [PROGRESS] to terminal
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, {stream: true});
+            const lines = chunk.split('\n\n');
+            for (let line of lines) {
+                if (line.startsWith('data: ')) {
+                    const msg = line.substring(6);
+                    if (msg.startsWith('[SCRIPT_READY] ')) {
+                        const rawJson = msg.substring(15).trim();
+                        try {
+                            const scriptData = JSON.parse(rawJson);
+                            loadReviewScriptData(scriptData);
+                            scriptReceived = true;
+                        } catch(e) {
+                            console.error("Error parsing script JSON:", e);
                         }
-                        if (msg.startsWith('[STEP] ')) {
-                            const stepStr = msg.substring(7).trim();
-                            updateReviewStepper(parseInt(stepStr) || 1);
-                            continue; // Do not print [STEP] to terminal
-                        }
-                        let logType = 'info';
-                        if (msg.includes('🛑') || msg.includes('Lỗi')) {
-                            hasError = true;
-                            logType = 'error';
-                        } else if (msg.includes('⚠️')) {
-                            logType = 'warning';
-                        } else if (msg.includes('✅') || msg.includes('🎉')) {
-                            logType = 'success';
-                        }
-                        appendLog(msg, logType);
+                        continue;
                     }
+                    if (msg.startsWith('[PROGRESS] ')) {
+                        const progress = parseInt(msg.substring(11).trim());
+                        if (progressText && !isNaN(progress) && progress > 0) {
+                            const elapsed = Date.now() - startTime;
+                            const totalEst = elapsed / (progress / 100);
+                            const remainingSec = Math.max(0, Math.round((totalEst - elapsed) / 1000));
+                            const mins = Math.floor(remainingSec / 60);
+                            const secs = remainingSec % 60;
+                            progressText.innerText = `Đã hoàn thành: ${progress}% - Ước tính còn: ${mins}p ${secs}s`;
+                            if (progress >= 100) progressText.innerText = 'Hoàn thành 100%';
+                        }
+                        continue; // Do not print [PROGRESS] to terminal
+                    }
+                    if (msg.startsWith('[STEP] ')) {
+                        const stepStr = msg.substring(7).trim();
+                        updateReviewStepper(parseInt(stepStr) || 1);
+                        continue; // Do not print [STEP] to terminal
+                    }
+                    let logType = 'info';
+                    if (msg.includes('🛑') || msg.includes('Lỗi')) {
+                        hasError = true;
+                        logType = 'error';
+                    } else if (msg.includes('⚠️')) {
+                        logType = 'warning';
+                    } else if (msg.includes('✅') || msg.includes('🎉')) {
+                        logType = 'success';
+                    }
+                    appendLog(msg, logType);
                 }
             }
-            showToast('Quá trình Review Phim đã hoàn thành!', 'success');
-        } catch (e) {
-            if (e.name === 'AbortError') {
-                showToast('Đã hủy tiến trình.', 'warning');
-            } else {
-                showToast('Lỗi quá trình: ' + e.message, 'error');
-            }
-        } finally {
-            btnStartReview.disabled = false;
-            btnStartReview.innerText = 'BẮT ĐẦU LÀM VIDEO (AUTO-EDIT)';
-            if (btnStopReview) btnStopReview.style.display = 'none';
-            reviewAbortController = null;
         }
-    });
+        
+        if (scriptReceived && payload.pause_after_script && !payload.continue_from_script) {
+            showToast('✅ Đã tạo xong kịch bản review! Mời bạn duyệt và chỉnh sửa bên dưới.', 'success');
+        } else if (!hasError) {
+            showToast('Quá trình Review Phim đã hoàn thành!', 'success');
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            showToast('Đã hủy tiến trình.', 'warning');
+        } else {
+            showToast('Lỗi quá trình: ' + e.message, 'error');
+        }
+    } finally {
+        if (btnStartReview) {
+            btnStartReview.disabled = false;
+            if (window.reviewScriptSentences && window.reviewScriptSentences.length > 0) {
+                btnStartReview.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>TIẾP TỤC DỰNG VIDEO (TỪ KỊCH BẢN ĐÃ DUYỆT)</span>`;
+            } else {
+                btnStartReview.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>BẮT ĐẦU LÀM VIDEO (AUTO-EDIT)</span>`;
+            }
+        }
+        if (btnContinueReviewVideo) btnContinueReviewVideo.disabled = false;
+        if (btnStopReview) btnStopReview.style.display = 'none';
+        reviewAbortController = null;
+    }
 }
 
 function updateReviewStepper(currentStep) {
@@ -11901,6 +13615,7 @@ if (btnScanAsr && asrModelSelect) {
             const language = asrLangSelect ? asrLangSelect.value : 'auto';
             const asrDevSelect = document.getElementById('asrHardwareDevice');
             const hardwareDevice = asrDevSelect ? asrDevSelect.value : 'auto';
+            const isolateVocals = document.getElementById('asrIsolateVocals')?.checked === true;
             
             const scanRes = await fetch("/api/asr/scan", {
                 method: "POST",
@@ -11912,7 +13627,8 @@ if (btnScanAsr && asrModelSelect) {
                     device: hardwareDevice,
                     videoPath: videoPath,
                     outputDir: outputDir,
-                    outputFilename: outputFilename
+                    outputFilename: outputFilename,
+                    isolateVocals: isolateVocals
                 })
             });
             
@@ -12321,6 +14037,21 @@ if (btnPasteDownloadUrl && downloadInputUrl) {
         try {
             const text = await navigator.clipboard.readText();
             if (text) {
+                if (text.includes('\n')) {
+                    const lines = text.split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
+                    if (lines.length > 1) {
+                        const tabMulti = document.getElementById('tabDownloadMulti');
+                        const txtMulti = document.getElementById('downloadMultiInputUrls');
+                        if (tabMulti && txtMulti) {
+                            tabMulti.click();
+                            txtMulti.value = text.trim();
+                            const hint = document.getElementById('multiUrlsCountHint');
+                            if (hint) hint.textContent = `${lines.length} liên kết hợp lệ`;
+                            showToast(`Phát hiện danh sách ${lines.length} link! Đã chuyển sang chế độ Tải Nhiều Video (Hàng Chờ).`, 'info');
+                            return;
+                        }
+                    }
+                }
                 downloadInputUrl.value = text.trim();
                 showToast('Đã dán liên kết từ bộ nhớ tạm!', 'info');
                 // Auto trigger analyze if valid url
@@ -12960,6 +14691,198 @@ if (btnSaveBiliCookie && biliCookieInput) {
     });
 }
 
+// =========================================================================
+// 9.1. DOUYIN ACCOUNT & COOKIE CONTROLLER
+// =========================================================================
+const modalDouyinLogin = document.getElementById('modalDouyinLogin');
+const btnDouyinLoginModal = document.getElementById('btnDouyinLoginModal');
+const douyinLoginStatusText = document.getElementById('douyinLoginStatusText');
+const douyinStatusDot = document.getElementById('douyinStatusDot');
+const douyinStatusLabel = document.getElementById('douyinStatusLabel');
+const douyinUserAvatar = document.getElementById('douyinUserAvatar');
+const btnDouyinLogout = document.getElementById('btnDouyinLogout');
+const btnCloseDouyinModal = document.getElementById('btnCloseDouyinModal');
+const btnDoneDouyinModal = document.getElementById('btnDoneDouyinModal');
+const tabBtnDouyinBrowser = document.getElementById('tabBtnDouyinBrowser');
+const tabBtnDouyinCookie = document.getElementById('tabBtnDouyinCookie');
+const tabContentDouyinBrowser = document.getElementById('tabContentDouyinBrowser');
+const tabContentDouyinCookie = document.getElementById('tabContentDouyinCookie');
+const btnTriggerDouyinBrowserLogin = document.getElementById('btnTriggerDouyinBrowserLogin');
+const douyinCookieInput = document.getElementById('douyinCookieInput');
+const btnSaveDouyinCookie = document.getElementById('btnSaveDouyinCookie');
+
+async function checkDouyinLoginStatus() {
+    try {
+        const res = await fetch('/api/download/douyin/status');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.logged_in && data.cookie_valid) {
+            const uname = data.uname ? ` (${data.uname})` : '';
+            if (douyinLoginStatusText) douyinLoginStatusText.textContent = `🟢 Douyin${uname}`;
+            if (douyinStatusDot) douyinStatusDot.style.background = '#10b981';
+            if (douyinStatusLabel) douyinStatusLabel.textContent = `Đã đăng nhập: ${data.uname || 'Tài khoản Douyin'} (Quét kênh không giới hạn)`;
+            if (douyinUserAvatar) {
+                if (data.avatar_url) {
+                    douyinUserAvatar.src = data.avatar_url;
+                    douyinUserAvatar.style.display = 'block';
+                } else {
+                    douyinUserAvatar.style.display = 'none';
+                }
+            }
+            if (btnDouyinLogout) btnDouyinLogout.style.display = 'inline-block';
+        } else if (data.logged_in && !data.cookie_valid) {
+            if (douyinLoginStatusText) douyinLoginStatusText.textContent = '⚠️ Douyin Hết Hạn';
+            if (douyinStatusDot) douyinStatusDot.style.background = '#ef4444';
+            if (douyinStatusLabel) douyinStatusLabel.textContent = `Cookie Douyin hết hạn: ${data.description || 'Cần đăng nhập lại'}`;
+            if (douyinUserAvatar) douyinUserAvatar.style.display = 'none';
+            if (btnDouyinLogout) btnDouyinLogout.style.display = 'inline-block';
+        } else {
+            if (douyinLoginStatusText) douyinLoginStatusText.textContent = '🎵 Tài Khoản Douyin';
+            if (douyinStatusDot) douyinStatusDot.style.background = '#f59e0b';
+            if (douyinStatusLabel) douyinStatusLabel.textContent = 'Chưa đăng nhập (Khách vãng lai: giới hạn 18 video/kênh)';
+            if (douyinUserAvatar) douyinUserAvatar.style.display = 'none';
+            if (btnDouyinLogout) btnDouyinLogout.style.display = 'none';
+        }
+    } catch (e) {
+        console.error('Error checking Douyin status:', e);
+    }
+}
+
+// Kiểm tra trạng thái Douyin ngay khi mở app
+checkDouyinLoginStatus();
+
+if (btnDouyinLoginModal && modalDouyinLogin) {
+    btnDouyinLoginModal.addEventListener('click', () => {
+        modalDouyinLogin.style.display = 'flex';
+        checkDouyinLoginStatus();
+    });
+
+    const closeDouyinModal = () => {
+        modalDouyinLogin.style.display = 'none';
+    };
+
+    if (btnCloseDouyinModal) btnCloseDouyinModal.addEventListener('click', closeDouyinModal);
+    if (btnDoneDouyinModal) btnDoneDouyinModal.addEventListener('click', closeDouyinModal);
+    modalDouyinLogin.addEventListener('click', (e) => {
+        if (e.target === modalDouyinLogin) closeDouyinModal();
+    });
+}
+
+// Chuyển Tab Douyin: Trình duyệt vs Cookie thủ công
+if (tabBtnDouyinBrowser && tabBtnDouyinCookie && tabContentDouyinBrowser && tabContentDouyinCookie) {
+    tabBtnDouyinBrowser.addEventListener('click', () => {
+        tabContentDouyinBrowser.style.display = 'block';
+        tabContentDouyinCookie.style.display = 'none';
+        tabBtnDouyinBrowser.style.background = 'rgba(168, 85, 247, 0.2)';
+        tabBtnDouyinBrowser.style.borderColor = '#a855f7';
+        tabBtnDouyinBrowser.style.color = '#c084fc';
+        tabBtnDouyinCookie.style.background = 'transparent';
+        tabBtnDouyinCookie.style.borderColor = '#334155';
+        tabBtnDouyinCookie.style.color = '#94a3b8';
+    });
+
+    tabBtnDouyinCookie.addEventListener('click', () => {
+        tabContentDouyinBrowser.style.display = 'none';
+        tabContentDouyinCookie.style.display = 'block';
+        tabBtnDouyinCookie.style.background = 'rgba(168, 85, 247, 0.2)';
+        tabBtnDouyinCookie.style.borderColor = '#a855f7';
+        tabBtnDouyinCookie.style.color = '#c084fc';
+        tabBtnDouyinBrowser.style.background = 'transparent';
+        tabBtnDouyinBrowser.style.borderColor = '#334155';
+        tabBtnDouyinBrowser.style.color = '#94a3b8';
+    });
+}
+
+// Mở trình duyệt để người dùng đăng nhập Douyin
+if (btnTriggerDouyinBrowserLogin) {
+    btnTriggerDouyinBrowserLogin.addEventListener('click', async () => {
+        btnTriggerDouyinBrowserLogin.disabled = true;
+        btnTriggerDouyinBrowserLogin.innerHTML = `<span class="loading-spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Đang mở cửa sổ trình duyệt...`;
+        try {
+            const res = await fetch('/api/download/douyin/open_login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showToast('🌐 Cửa sổ trình duyệt đang mở. Vui lòng quét mã QR hoặc đăng nhập Douyin trên cửa sổ đó!', 'success');
+                // Polling kiểm tra trạng thái đăng nhập sau khi người dùng thao tác
+                let pollCount = 0;
+                const pollInterval = setInterval(async () => {
+                    pollCount++;
+                    await checkDouyinLoginStatus();
+                    if (pollCount >= 60) {
+                        clearInterval(pollInterval);
+                    }
+                }, 3000);
+            } else {
+                showToast(data.error || 'Lỗi khi mở trình duyệt', 'error');
+            }
+        } catch (e) {
+            showToast('Lỗi kết nối máy chủ: ' + e.message, 'error');
+        } finally {
+            setTimeout(() => {
+                btnTriggerDouyinBrowserLogin.disabled = false;
+                btnTriggerDouyinBrowserLogin.innerHTML = `<span>🚀 Mở Trình Duyệt Đăng Nhập Ngay</span>`;
+            }, 3000);
+        }
+    });
+}
+
+// Lưu Cookie Douyin thủ công
+if (btnSaveDouyinCookie && douyinCookieInput) {
+    btnSaveDouyinCookie.addEventListener('click', async () => {
+        const val = douyinCookieInput.value.trim();
+        if (!val) {
+            showToast('Vui lòng nhập chuỗi Cookie hoặc sessionid Douyin!', 'warning');
+            return;
+        }
+        btnSaveDouyinCookie.disabled = true;
+        btnSaveDouyinCookie.innerHTML = `<span class="loading-spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> Đang xác thực...`;
+        try {
+            const res = await fetch('/api/download/douyin/save_cookie', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cookie: val })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showToast(data.message || 'Đã lưu và xác thực Cookie Douyin!', data.cookie_valid ? 'success' : 'warning');
+                douyinCookieInput.value = '';
+                checkDouyinLoginStatus();
+            } else {
+                showToast(data.error || 'Lỗi lưu Cookie Douyin', 'error');
+            }
+        } catch (e) {
+            showToast('Lỗi lưu Cookie: ' + e.message, 'error');
+        } finally {
+            btnSaveDouyinCookie.disabled = false;
+            btnSaveDouyinCookie.innerHTML = `💾 Lưu & Xác Thực Cookie Douyin`;
+        }
+    });
+}
+
+// Đăng xuất Douyin
+if (btnDouyinLogout) {
+    btnDouyinLogout.addEventListener('click', async () => {
+        if (!confirm('Bạn có chắc chắn muốn đăng xuất tài khoản Douyin và xóa cookie đã lưu?')) return;
+        try {
+            const res = await fetch('/api/download/douyin/logout', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showToast('Đã đăng xuất tài khoản Douyin!', 'info');
+                checkDouyinLoginStatus();
+            } else {
+                showToast(data.error || 'Lỗi đăng xuất', 'error');
+            }
+        } catch (e) {
+            showToast('Lỗi kết nối: ' + e.message, 'error');
+        }
+    });
+}
+
 function sendVideoToEditor(filePath) {
     const editorTab = document.querySelector('.nav-tab[data-target="viewEditor"]');
     if (editorTab) editorTab.click();
@@ -13131,6 +15054,9 @@ function initDouyinChannelDownloader() {
     const douyinBatchActionsBar = document.getElementById('douyinBatchActionsBar');
     const douyinSelectAllCheckbox = document.getElementById('douyinSelectAllCheckbox');
     const douyinSelectedSummary = document.getElementById('douyinSelectedSummary');
+    const btnDouyinSelectAllQuick = document.getElementById('btnDouyinSelectAllQuick');
+    const btnDouyinDeselectAllQuick = document.getElementById('btnDouyinDeselectAllQuick');
+    const btnDouyinInvertSelection = document.getElementById('btnDouyinInvertSelection');
     const douyinSubfolderCheckbox = document.getElementById('douyinSubfolderCheckbox');
     const btnStartDouyinBatchDownload = document.getElementById('btnStartDouyinBatchDownload');
     const btnStopDouyinBatchDownload = document.getElementById('btnStopDouyinBatchDownload');
@@ -13216,31 +15142,13 @@ function initDouyinChannelDownloader() {
         });
     }
 
-    // 2.1. Open Douyin Login Window
+    // 2.1. Open Douyin Login Modal
     const btnDouyinOpenLogin = document.getElementById('btnDouyinOpenLogin');
     if (btnDouyinOpenLogin) {
-        btnDouyinOpenLogin.addEventListener('click', async () => {
-            try {
-                btnDouyinOpenLogin.disabled = true;
-                btnDouyinOpenLogin.innerHTML = `<span>⏳ Đang mở...</span>`;
-                const res = await fetch('/api/download/douyin/open_login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
-                });
-                const data = await res.json();
-                if (data.success) {
-                    showToast('🌐 Cửa sổ trình duyệt đang mở. Vui lòng quét mã QR / đăng nhập Douyin (chỉ cần làm 1 lần duy nhất)!', 'success');
-                } else {
-                    showToast('Lỗi: ' + (data.error || ''), 'error');
-                }
-            } catch (e) {
-                showToast('Lỗi kết nối: ' + e.message, 'error');
-            } finally {
-                setTimeout(() => {
-                    btnDouyinOpenLogin.disabled = false;
-                    btnDouyinOpenLogin.innerHTML = `🔑 Đăng Nhập Douyin`;
-                }, 3000);
+        btnDouyinOpenLogin.addEventListener('click', () => {
+            if (modalDouyinLogin) {
+                modalDouyinLogin.style.display = 'flex';
+                checkDouyinLoginStatus();
             }
         });
     }
@@ -13363,7 +15271,7 @@ function initDouyinChannelDownloader() {
                 }
 
                 scannedDouyinVideos = finalData.videos || [];
-                selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id));
+                selectedDouyinVideoIds = new Set(); // Mặc định không tích chọn video nào để người dùng tự do lựa chọn
 
                 // Render Channel Info Banner
                 const info = finalData.channel_info || {};
@@ -13388,7 +15296,7 @@ function initDouyinChannelDownloader() {
                 // Render Video Grid
                 renderDouyinVideoGrid();
 
-                showToast(`Đã phân tích thành công ${scannedDouyinVideos.length} video từ kênh ${info.nickname || ''}!`, 'success');
+                showToast(`Đã phân tích thành công ${scannedDouyinVideos.length} video từ kênh ${info.nickname || ''}! Vui lòng chọn các video bạn muốn tải.`, 'success');
             } catch (e) {
                 showToast('Lỗi khi phân tích kênh: ' + e.message, 'error');
                 if (douyinChannelEmptyPlaceholder) {
@@ -13429,9 +15337,33 @@ function initDouyinChannelDownloader() {
             list = list.filter(v => (v.duration || 0) >= 60);
         }
 
-        // Sort
-        const sortVal = douyinSortSelect?.value || 'original';
-        if (sortVal === 'likes_desc') {
+        // Sort: Mặc định là oldest_first (Video đăng lâu nhất lên đầu #1, video mới nhất ở cuối số lớn nhất)
+        const sortVal = douyinSortSelect?.value || 'oldest_first';
+        if (sortVal === 'oldest_first') {
+            list.sort((a, b) => {
+                if (a.mix_order != null && b.mix_order != null) {
+                    return Number(a.mix_order) - Number(b.mix_order);
+                }
+                if (a.create_time && b.create_time && a.create_time !== b.create_time) {
+                    return Number(a.create_time) - Number(b.create_time);
+                }
+                const idxA = scannedDouyinVideos.indexOf(a);
+                const idxB = scannedDouyinVideos.indexOf(b);
+                return idxB - idxA;
+            });
+        } else if (sortVal === 'newest_first' || sortVal === 'original') {
+            list.sort((a, b) => {
+                if (a.mix_order != null && b.mix_order != null) {
+                    return Number(b.mix_order) - Number(a.mix_order);
+                }
+                if (a.create_time && b.create_time && a.create_time !== b.create_time) {
+                    return Number(b.create_time) - Number(a.create_time);
+                }
+                const idxA = scannedDouyinVideos.indexOf(a);
+                const idxB = scannedDouyinVideos.indexOf(b);
+                return idxA - idxB;
+            });
+        } else if (sortVal === 'likes_desc') {
             list.sort((a, b) => (b.digg_count || 0) - (a.digg_count || 0));
         } else if (sortVal === 'comments_desc') {
             list.sort((a, b) => (b.comment_count || 0) - (a.comment_count || 0));
@@ -13495,7 +15427,13 @@ function initDouyinChannelDownloader() {
 
             card.innerHTML = `
                 <div class="douyin-reel-thumb-box">
-                    ${thumb ? `<img src="${escapeHtml(thumb)}" alt="thumb" loading="lazy" onerror="this.style.display='none'">` : ''}
+                    ${thumb ? `<img src="${escapeHtml(thumb)}" alt="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null; this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';">` : ''}
+                    <div class="douyin-fallback-thumb" style="display: ${thumb ? 'none' : 'flex'}; width:100%; height:100%; align-items:center; justify-content:center; background:linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);">
+                        <div style="text-align:center; padding:10px;">
+                            <span style="font-size:28px; opacity:0.8;">🎬</span>
+                            <div style="font-size:10px; color:#94a3b8; font-weight:700; margin-top:4px;">Douyin Video</div>
+                        </div>
+                    </div>
                     <div class="douyin-reel-overlay">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 6px;">
                             <label style="background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); padding: 3px 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid rgba(51, 65, 85, 0.8);" onclick="event.stopPropagation();">
@@ -13581,17 +15519,22 @@ function initDouyinChannelDownloader() {
 
     function updateSelectionSummary() {
         const total = scannedDouyinVideos.length;
+        const currentFiltered = getFilteredAndSortedDouyinVideos();
+        const displayCount = currentFiltered.length;
         const selected = selectedDouyinVideoIds.size;
+        
         if (douyinSelectedSummary) {
-            douyinSelectedSummary.textContent = `Đã chọn: ${selected} / ${total} video`;
+            douyinSelectedSummary.textContent = `Đã chọn: ${selected} / ${total} video (Đang hiển thị: ${displayCount})`;
         }
         if (douyinSelectAllCheckbox) {
-            douyinSelectAllCheckbox.checked = (selected === total && total > 0);
-            douyinSelectAllCheckbox.indeterminate = (selected > 0 && selected < total);
+            const allFilteredSelected = displayCount > 0 && currentFiltered.every(v => selectedDouyinVideoIds.has(v.aweme_id));
+            const someFilteredSelected = currentFiltered.some(v => selectedDouyinVideoIds.has(v.aweme_id));
+            douyinSelectAllCheckbox.checked = allFilteredSelected;
+            douyinSelectAllCheckbox.indeterminate = (!allFilteredSelected && someFilteredSelected);
         }
     }
 
-    // 6. Select All Checkbox
+    // 6. Select All Checkbox & Quick Action Buttons
     if (douyinSelectAllCheckbox) {
         douyinSelectAllCheckbox.addEventListener('change', (e) => {
             const checked = e.target.checked;
@@ -13601,6 +15544,35 @@ function initDouyinChannelDownloader() {
             } else {
                 currentFiltered.forEach(v => selectedDouyinVideoIds.delete(v.aweme_id));
             }
+            renderDouyinVideoGrid();
+        });
+    }
+
+    if (btnDouyinSelectAllQuick) {
+        btnDouyinSelectAllQuick.addEventListener('click', () => {
+            const currentFiltered = getFilteredAndSortedDouyinVideos();
+            currentFiltered.forEach(v => selectedDouyinVideoIds.add(v.aweme_id));
+            renderDouyinVideoGrid();
+        });
+    }
+
+    if (btnDouyinDeselectAllQuick) {
+        btnDouyinDeselectAllQuick.addEventListener('click', () => {
+            selectedDouyinVideoIds.clear();
+            renderDouyinVideoGrid();
+        });
+    }
+
+    if (btnDouyinInvertSelection) {
+        btnDouyinInvertSelection.addEventListener('click', () => {
+            const currentFiltered = getFilteredAndSortedDouyinVideos();
+            currentFiltered.forEach(v => {
+                if (selectedDouyinVideoIds.has(v.aweme_id)) {
+                    selectedDouyinVideoIds.delete(v.aweme_id);
+                } else {
+                    selectedDouyinVideoIds.add(v.aweme_id);
+                }
+            });
             renderDouyinVideoGrid();
         });
     }
@@ -13643,7 +15615,17 @@ function initDouyinChannelDownloader() {
     // 9. Start Batch Download
     if (btnStartDouyinBatchDownload) {
         btnStartDouyinBatchDownload.addEventListener('click', async () => {
-            const selectedList = scannedDouyinVideos.filter(v => selectedDouyinVideoIds.has(v.aweme_id));
+            // Sắp xếp danh sách video được chọn theo đúng thứ tự đang hiển thị trên giao diện (mặc định: Đăng lâu nhất ➔ Mới nhất)
+            const currentSortedList = getFilteredAndSortedDouyinVideos();
+            let selectedList = currentSortedList.filter(v => selectedDouyinVideoIds.has(v.aweme_id));
+            if (selectedList.length < selectedDouyinVideoIds.size) {
+                const selectedSet = new Set(selectedList.map(v => v.aweme_id));
+                scannedDouyinVideos.forEach(v => {
+                    if (selectedDouyinVideoIds.has(v.aweme_id) && !selectedSet.has(v.aweme_id)) {
+                        selectedList.push(v);
+                    }
+                });
+            }
             if (selectedList.length === 0) {
                 showToast('Vui lòng tích chọn ít nhất 1 video để tải!', 'warning');
                 return;
@@ -13681,7 +15663,8 @@ function initDouyinChannelDownloader() {
                         max_workers: maxWorkers,
                         connections_per_file: connPerFile,
                         prefix_index: prefixIndex,
-                        auto_merge: autoMerge
+                        auto_merge: autoMerge,
+                        sort_order: douyinSortSelect?.value || 'oldest_first'
                     })
                 });
 
@@ -13871,10 +15854,890 @@ function initDouyinChannelDownloader() {
     }
 }
 
+// ==========================================
+// MULTI-LINK VIDEO DOWNLOAD QUEUE MODULE
+// ==========================================
+function initMultiDownloadQueueModule() {
+    const tabDownloadSingle = document.getElementById('tabDownloadSingle');
+    const tabDownloadMulti = document.getElementById('tabDownloadMulti');
+    const tabDownloadChannel = document.getElementById('tabDownloadChannel');
+
+    const sectionDownloadSingle = document.getElementById('sectionDownloadSingle');
+    const sectionDownloadMulti = document.getElementById('sectionDownloadMulti');
+    const sectionDownloadChannel = document.getElementById('sectionDownloadChannel');
+
+    // Sub-tab switcher for all 3 tabs
+    function switchDownloadTab(target) {
+        if (tabDownloadSingle) tabDownloadSingle.classList.toggle('active', target === 'single');
+        if (tabDownloadMulti) tabDownloadMulti.classList.toggle('active', target === 'multi');
+        if (tabDownloadChannel) tabDownloadChannel.classList.toggle('active', target === 'channel');
+
+        if (sectionDownloadSingle) sectionDownloadSingle.style.display = target === 'single' ? 'block' : 'none';
+        if (sectionDownloadMulti) sectionDownloadMulti.style.display = target === 'multi' ? 'block' : 'none';
+        if (sectionDownloadChannel) sectionDownloadChannel.style.display = target === 'channel' ? 'block' : 'none';
+    }
+
+    if (tabDownloadSingle) tabDownloadSingle.addEventListener('click', () => switchDownloadTab('single'));
+    if (tabDownloadMulti) tabDownloadMulti.addEventListener('click', () => switchDownloadTab('multi'));
+    if (tabDownloadChannel) tabDownloadChannel.addEventListener('click', () => switchDownloadTab('channel'));
+
+    // DOM Elements for Multi-download
+    const txtUrls = document.getElementById('downloadMultiInputUrls');
+    const hintUrls = document.getElementById('multiUrlsCountHint');
+    const btnPaste = document.getElementById('btnPasteMultiUrls');
+    const btnClear = document.getElementById('btnClearMultiUrls');
+    const btnAddToQueue = document.getElementById('btnAddToDownloadQueue');
+    const btnStartDirect = document.getElementById('btnStartMultiDownloadDirect');
+
+    const btnFormatVideo = document.getElementById('btnMultiFormatVideo');
+    const btnFormatAudio = document.getElementById('btnMultiFormatAudio');
+    const selectConcurrency = document.getElementById('multiConcurrencySelect');
+    const inputOutputDir = document.getElementById('multiDownloadOutputDir');
+    const btnSelectDir = document.getElementById('btnSelectMultiDownloadDir');
+    const btnClearDir = document.getElementById('btnClearMultiDownloadDir');
+
+    const statTotal = document.getElementById('queueStatTotal');
+    const statWaiting = document.getElementById('queueStatWaiting');
+    const statDownloading = document.getElementById('queueStatDownloading');
+    const statCompleted = document.getElementById('queueStatCompleted');
+    const statError = document.getElementById('queueStatError');
+
+    const overallStatusText = document.getElementById('queueOverallStatusText');
+    const overallStatsText = document.getElementById('queueOverallStatsText');
+    const overallProgressBar = document.getElementById('queueOverallProgressBar');
+
+    const btnStart = document.getElementById('btnQueueStart');
+    const btnPause = document.getElementById('btnQueuePause');
+    const btnResume = document.getElementById('btnQueueResume');
+    const btnStop = document.getElementById('btnQueueStop');
+    const btnRetryFailed = document.getElementById('btnQueueRetryFailed');
+    const btnClearAll = document.getElementById('btnQueueClearAll');
+
+    const btnSendAllToEditor = document.getElementById('btnQueueSendAllToEditor');
+    const btnSendAllToBatch = document.getElementById('btnQueueSendAllToBatchQueue');
+    const btnOpenFolder = document.getElementById('btnQueueOpenFolder');
+
+    const emptyPlaceholder = document.getElementById('downloadQueueEmptyPlaceholder');
+    const tableWrapper = document.getElementById('downloadQueueTableWrapper');
+    const itemsList = document.getElementById('downloadQueueItemsList');
+    const countLabel = document.getElementById('queueItemCountLabel');
+
+    let currentFormat = 'mp4';
+    let queue = [];
+    let queueState = 'idle'; // 'idle' | 'running' | 'paused' | 'stopped'
+    let activeWorkers = 0;
+    let queueStartTime = null;
+
+    // Load saved dir
+    if (inputOutputDir) {
+        const saved = localStorage.getItem('download_output_dir');
+        if (saved) inputOutputDir.value = saved;
+    }
+
+    if (btnSelectDir && inputOutputDir) {
+        btnSelectDir.addEventListener('click', async () => {
+            const p = await selectDirectory('Chọn thư mục lưu video tải về');
+            if (p) {
+                inputOutputDir.value = p;
+                localStorage.setItem('download_output_dir', p);
+                const sDir = document.getElementById('downloadOutputDir');
+                if (sDir) sDir.value = p;
+                showToast('Đã chọn thư mục lưu: ' + p, 'info');
+            }
+        });
+    }
+
+    if (btnClearDir && inputOutputDir) {
+        btnClearDir.addEventListener('click', () => {
+            inputOutputDir.value = '';
+            localStorage.removeItem('download_output_dir');
+            showToast('Đã đặt lại thư mục về mặc định (/downloads)', 'info');
+        });
+    }
+
+    // Format toggle
+    if (btnFormatVideo && btnFormatAudio) {
+        btnFormatVideo.addEventListener('click', () => {
+            currentFormat = 'mp4';
+            btnFormatVideo.classList.add('active');
+            btnFormatVideo.style.borderColor = '#38bdf8';
+            btnFormatVideo.style.color = '#38bdf8';
+            btnFormatAudio.classList.remove('active');
+            btnFormatAudio.style.borderColor = '#334155';
+            btnFormatAudio.style.color = '#cbd5e1';
+        });
+
+        btnFormatAudio.addEventListener('click', () => {
+            currentFormat = 'mp3';
+            btnFormatAudio.classList.add('active');
+            btnFormatAudio.style.borderColor = '#38bdf8';
+            btnFormatAudio.style.color = '#38bdf8';
+            btnFormatVideo.classList.remove('active');
+            btnFormatVideo.style.borderColor = '#334155';
+            btnFormatVideo.style.color = '#cbd5e1';
+        });
+    }
+
+    // Helper: Detect platform
+    function detectPlatform(url) {
+        const u = (url || '').toLowerCase();
+        if (u.includes('youtube.com') || u.includes('youtu.be')) return { name: 'YouTube', icon: '▶️', badgeClass: 'platform-youtube' };
+        if (u.includes('tiktok.com')) return { name: 'TikTok', icon: '🎵', badgeClass: 'platform-tiktok' };
+        if (u.includes('douyin.com') || u.includes('iesdouyin.com')) return { name: 'Douyin', icon: '⚡', badgeClass: 'platform-douyin' };
+        if (u.includes('bilibili.com')) return { name: 'Bilibili', icon: '📺', badgeClass: 'platform-bilibili' };
+        if (u.includes('facebook.com') || u.includes('fb.watch')) return { name: 'Facebook', icon: '📘', badgeClass: 'platform-facebook' };
+        if (u.includes('instagram.com')) return { name: 'Instagram', icon: '📷', badgeClass: 'platform-generic' };
+        if (u.includes('twitter.com') || u.includes('x.com')) return { name: 'X / Twitter', icon: '🐦', badgeClass: 'platform-generic' };
+        return { name: 'Video Web', icon: '🎬', badgeClass: 'platform-generic' };
+    }
+
+    // Parse URLs from text
+    function parseUrls(text) {
+        if (!text) return [];
+        const lines = text.split('\n');
+        const urls = [];
+        const seen = new Set();
+        for (let line of lines) {
+            line = line.trim();
+            if (!line) continue;
+            const match = line.match(/https?:\/\/[^\s]+/i);
+            const targetUrl = match ? match[0] : (line.startsWith('http') ? line : '');
+            if (targetUrl && !seen.has(targetUrl)) {
+                seen.add(targetUrl);
+                urls.push(targetUrl);
+            }
+        }
+        return urls;
+    }
+
+    // Update URL input counter hint
+    if (txtUrls && hintUrls) {
+        txtUrls.addEventListener('input', () => {
+            const urls = parseUrls(txtUrls.value);
+            hintUrls.textContent = `${urls.length} liên kết hợp lệ`;
+        });
+    }
+
+    // Paste button
+    if (btnPaste && txtUrls) {
+        btnPaste.addEventListener('click', async () => {
+            try {
+                const text = await navigator.clipboard.readText();
+                if (text) {
+                    const current = txtUrls.value.trim();
+                    txtUrls.value = current ? current + '\n' + text.trim() : text.trim();
+                    const urls = parseUrls(txtUrls.value);
+                    if (hintUrls) hintUrls.textContent = `${urls.length} liên kết hợp lệ`;
+                    showToast(`Đã dán ${urls.length} liên kết!`, 'info');
+                }
+            } catch (e) {
+                showToast('Không thể đọc clipboard: ' + e.message, 'warning');
+            }
+        });
+    }
+
+    // Clear input button
+    if (btnClear && txtUrls) {
+        btnClear.addEventListener('click', () => {
+            txtUrls.value = '';
+            if (hintUrls) hintUrls.textContent = '0 liên kết hợp lệ';
+        });
+    }
+
+    // Add to queue
+    function addUrlsToQueue(urls, autoStart = false) {
+        if (!urls || urls.length === 0) {
+            showToast('Vui lòng nhập ít nhất 1 liên kết video hợp lệ!', 'warning');
+            return;
+        }
+
+        let addedCount = 0;
+        urls.forEach((u) => {
+            const item = {
+                id: 'q_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+                url: u,
+                platform: detectPlatform(u),
+                title: u,
+                status: 'waiting', // 'waiting' | 'downloading' | 'completed' | 'error' | 'cancelled'
+                percent: 0,
+                speed: '--',
+                eta: '--',
+                file_path: null,
+                file_size: null,
+                specs: null,
+                error_msg: null,
+                reader: null
+            };
+            queue.push(item);
+            addedCount++;
+        });
+
+        txtUrls.value = '';
+        if (hintUrls) hintUrls.textContent = '0 liên kết hợp lệ';
+        renderQueueUI();
+        showToast(`Đã thêm ${addedCount} video vào hàng chờ!`, 'success');
+
+        if (autoStart && queueState !== 'running') {
+            startQueue();
+        } else if (queueState === 'running') {
+            dispatchQueue();
+        }
+    }
+
+    if (btnAddToQueue && txtUrls) {
+        btnAddToQueue.addEventListener('click', () => {
+            const urls = parseUrls(txtUrls.value);
+            addUrlsToQueue(urls, false);
+        });
+    }
+
+    if (btnStartDirect && txtUrls) {
+        btnStartDirect.addEventListener('click', async () => {
+            const allowed = await checkFeaturePermission('can_access_editor', 'Tải Video Hàng Chờ');
+            if (!allowed) return;
+            const urls = parseUrls(txtUrls.value);
+            if (urls.length === 0 && queue.filter(i => i.status === 'waiting').length === 0) {
+                showToast('Vui lòng nhập danh sách liên kết để tải!', 'warning');
+                return;
+            }
+            if (urls.length > 0) {
+                addUrlsToQueue(urls, true);
+            } else {
+                startQueue();
+            }
+        });
+    }
+
+    // Render Queue UI
+    function renderQueueUI() {
+        if (!itemsList) return;
+        const total = queue.length;
+        if (countLabel) countLabel.textContent = `${total} mục`;
+
+        if (total === 0) {
+            if (emptyPlaceholder) emptyPlaceholder.style.display = 'block';
+            if (tableWrapper) tableWrapper.style.display = 'none';
+        } else {
+            if (emptyPlaceholder) emptyPlaceholder.style.display = 'none';
+            if (tableWrapper) tableWrapper.style.display = 'block';
+        }
+
+        itemsList.innerHTML = '';
+        queue.forEach((item, index) => {
+            const row = document.createElement('div');
+            row.className = `download-queue-row status-${item.status}`;
+            row.id = `row_${item.id}`;
+
+            let statusHtml = '';
+            let actionsHtml = '';
+
+            if (item.status === 'waiting') {
+                statusHtml = `
+                    <div class="queue-status-text waiting">⏳ Chờ tải trong hàng đợi...</div>
+                    <div class="queue-item-progress-track"><div class="queue-item-progress-fill" style="width: 0%;"></div></div>
+                `;
+                actionsHtml = `
+                    <button type="button" class="queue-action-btn btn-remove" title="Xóa khỏi hàng chờ" onclick="window.removeDownloadQueueItem('${item.id}')">✕</button>
+                `;
+            } else if (item.status === 'downloading') {
+                statusHtml = `
+                    <div class="queue-status-text downloading">
+                        <span class="loading-spinner" style="width: 12px; height: 12px;"></span>
+                        <span>Đang tải: ${item.percent}% (${item.speed})</span>
+                    </div>
+                    <div class="queue-item-progress-track">
+                        <div class="queue-item-progress-fill" style="width: ${item.percent}%;"></div>
+                    </div>
+                `;
+                actionsHtml = `
+                    <button type="button" class="queue-action-btn btn-remove" title="Hủy tải video này" onclick="window.cancelDownloadQueueItem('${item.id}')">⏹ Hủy</button>
+                `;
+            } else if (item.status === 'completed') {
+                const specs = item.specs || {};
+                const res = specs.resolution_label || specs.resolution || '';
+                const sizeText = item.file_size ? ` • ${item.file_size}` : '';
+                const resText = res ? ` • ${res}` : '';
+                statusHtml = `
+                    <div class="queue-status-text completed">✅ Hoàn tất${sizeText}${resText}</div>
+                    <div class="queue-item-progress-track"><div class="queue-item-progress-fill" style="width: 100%; background: #10b981;"></div></div>
+                `;
+                actionsHtml = `
+                    <button type="button" class="queue-action-btn" title="Nạp vào Biên Tập Phim" onclick="window.sendQueueItemToEditor('${item.id}')">🎬 Biên Tập</button>
+                    <button type="button" class="queue-action-btn" title="Mở thư mục chứa file" onclick="window.openQueueItemFolder('${item.id}')">📂 Mở</button>
+                    <button type="button" class="queue-action-btn btn-remove" title="Xóa khỏi danh sách" onclick="window.removeDownloadQueueItem('${item.id}')">✕</button>
+                `;
+            } else if (item.status === 'error') {
+                statusHtml = `
+                    <div class="queue-status-text error" title="${escapeHtml(item.error_msg || '')}">❌ Lỗi: ${escapeHtml(item.error_msg || 'Tải thất bại')}</div>
+                    <div class="queue-item-progress-track"><div class="queue-item-progress-fill" style="width: 100%; background: #ef4444;"></div></div>
+                `;
+                actionsHtml = `
+                    <button type="button" class="queue-action-btn" title="Thử tải lại" onclick="window.retryDownloadQueueItem('${item.id}')">🔄 Thử lại</button>
+                    <button type="button" class="queue-action-btn btn-remove" title="Xóa khỏi danh sách" onclick="window.removeDownloadQueueItem('${item.id}')">✕</button>
+                `;
+            } else if (item.status === 'cancelled') {
+                statusHtml = `
+                    <div class="queue-status-text cancelled">⚠️ Đã hủy tải</div>
+                    <div class="queue-item-progress-track"><div class="queue-item-progress-fill" style="width: ${item.percent}%; background: #f59e0b;"></div></div>
+                `;
+                actionsHtml = `
+                    <button type="button" class="queue-action-btn" title="Tải lại" onclick="window.retryDownloadQueueItem('${item.id}')">🔄 Tải</button>
+                    <button type="button" class="queue-action-btn btn-remove" title="Xóa khỏi danh sách" onclick="window.removeDownloadQueueItem('${item.id}')">✕</button>
+                `;
+            }
+
+            row.innerHTML = `
+                <div class="queue-col-index">#${index + 1}</div>
+                <div class="queue-col-platform">
+                    <span class="queue-platform-badge ${item.platform.badgeClass}">
+                        ${item.platform.icon} ${item.platform.name}
+                    </span>
+                </div>
+                <div class="queue-col-info">
+                    <div class="queue-item-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
+                    <div class="queue-item-url" title="${escapeHtml(item.url)}">${escapeHtml(item.url)}</div>
+                </div>
+                <div class="queue-col-status" id="status_box_${item.id}">
+                    ${statusHtml}
+                </div>
+                <div class="queue-col-actions" id="actions_box_${item.id}">
+                    ${actionsHtml}
+                </div>
+            `;
+
+            itemsList.appendChild(row);
+        });
+
+        updateStatsUI();
+    }
+
+    // Fast update single item DOM without full re-render
+    function updateItemRow(item) {
+        const row = document.getElementById(`row_${item.id}`);
+        const statusBox = document.getElementById(`status_box_${item.id}`);
+        const actionsBox = document.getElementById(`actions_box_${item.id}`);
+        if (!row || !statusBox) {
+            renderQueueUI();
+            return;
+        }
+
+        row.className = `download-queue-row status-${item.status}`;
+        const titleEl = row.querySelector('.queue-item-title');
+        if (titleEl && item.title) {
+            titleEl.textContent = item.title;
+            titleEl.title = item.title;
+        }
+
+        if (item.status === 'downloading') {
+            statusBox.innerHTML = `
+                <div class="queue-status-text downloading">
+                    <span class="loading-spinner" style="width: 12px; height: 12px;"></span>
+                    <span>Đang tải: ${item.percent}% (${item.speed})</span>
+                </div>
+                <div class="queue-item-progress-track">
+                    <div class="queue-item-progress-fill" style="width: ${item.percent}%;"></div>
+                </div>
+            `;
+            if (actionsBox) {
+                actionsBox.innerHTML = `
+                    <button type="button" class="queue-action-btn btn-remove" title="Hủy tải video này" onclick="window.cancelDownloadQueueItem('${item.id}')">⏹ Hủy</button>
+                `;
+            }
+        } else if (item.status === 'completed') {
+            const specs = item.specs || {};
+            const res = specs.resolution_label || specs.resolution || '';
+            const sizeText = item.file_size ? ` • ${item.file_size}` : '';
+            const resText = res ? ` • ${res}` : '';
+            statusBox.innerHTML = `
+                <div class="queue-status-text completed">✅ Hoàn tất${sizeText}${resText}</div>
+                <div class="queue-item-progress-track"><div class="queue-item-progress-fill" style="width: 100%; background: #10b981;"></div></div>
+            `;
+            if (actionsBox) {
+                actionsBox.innerHTML = `
+                    <button type="button" class="queue-action-btn" title="Nạp vào Biên Tập Phim" onclick="window.sendQueueItemToEditor('${item.id}')">🎬 Biên Tập</button>
+                    <button type="button" class="queue-action-btn" title="Mở thư mục chứa file" onclick="window.openQueueItemFolder('${item.id}')">📂 Mở</button>
+                    <button type="button" class="queue-action-btn btn-remove" title="Xóa khỏi danh sách" onclick="window.removeDownloadQueueItem('${item.id}')">✕</button>
+                `;
+            }
+        } else if (item.status === 'error') {
+            statusBox.innerHTML = `
+                <div class="queue-status-text error" title="${escapeHtml(item.error_msg || '')}">❌ Lỗi: ${escapeHtml(item.error_msg || 'Tải thất bại')}</div>
+                <div class="queue-item-progress-track"><div class="queue-item-progress-fill" style="width: 100%; background: #ef4444;"></div></div>
+            `;
+            if (actionsBox) {
+                actionsBox.innerHTML = `
+                    <button type="button" class="queue-action-btn" title="Thử tải lại" onclick="window.retryDownloadQueueItem('${item.id}')">🔄 Thử lại</button>
+                    <button type="button" class="queue-action-btn btn-remove" title="Xóa khỏi danh sách" onclick="window.removeDownloadQueueItem('${item.id}')">✕</button>
+                `;
+            }
+        }
+
+        updateStatsUI();
+    }
+
+    // Update Stats & Progress Counters
+    function updateStatsUI() {
+        const total = queue.length;
+        const waiting = queue.filter(i => i.status === 'waiting').length;
+        const downloading = queue.filter(i => i.status === 'downloading').length;
+        const completed = queue.filter(i => i.status === 'completed').length;
+        const error = queue.filter(i => i.status === 'error').length;
+
+        if (statTotal) statTotal.textContent = total;
+        if (statWaiting) statWaiting.textContent = waiting;
+        if (statDownloading) statDownloading.textContent = downloading;
+        if (statCompleted) statCompleted.textContent = completed;
+        if (statError) statError.textContent = error;
+
+        let overallPct = 0;
+        if (total > 0) {
+            const sumPercents = queue.reduce((acc, cur) => acc + (cur.percent || 0), 0);
+            overallPct = Math.min(100, Math.round(sumPercents / total));
+        }
+
+        if (overallProgressBar) overallProgressBar.style.width = `${overallPct}%`;
+        if (overallStatsText) {
+            overallStatsText.textContent = `${overallPct}% • ${completed}/${total} video`;
+        }
+
+        if (overallStatusText) {
+            if (queueState === 'running') {
+                overallStatusText.textContent = `⚡ Đang tải hàng chờ... (${downloading} đang chạy, ${waiting} đang chờ)`;
+            } else if (queueState === 'paused') {
+                overallStatusText.textContent = '⏸️ Đang tạm dừng hàng chờ';
+            } else if (queueState === 'stopped') {
+                overallStatusText.textContent = '⏹️ Đã dừng hàng chờ';
+            } else if (completed === total && total > 0) {
+                overallStatusText.textContent = `✅ Đã hoàn tất toàn bộ ${completed} video!`;
+            } else {
+                overallStatusText.textContent = 'Hàng chờ sẵn sàng...';
+            }
+        }
+
+        // Toggle action buttons
+        if (btnStart) btnStart.style.display = (queueState === 'running' || queueState === 'paused') ? 'none' : 'inline-flex';
+        if (btnPause) btnPause.style.display = queueState === 'running' ? 'inline-flex' : 'none';
+        if (btnResume) btnResume.style.display = queueState === 'paused' ? 'inline-flex' : 'none';
+        if (btnStop) btnStop.style.display = (queueState === 'running' || queueState === 'paused') ? 'inline-flex' : 'none';
+    }
+
+    // Start Queue
+    async function startQueue() {
+        const allowed = await checkFeaturePermission('can_access_editor', 'Tải Video Hàng Chờ');
+        if (!allowed) return;
+
+        const waitingItems = queue.filter(i => i.status === 'waiting');
+        if (waitingItems.length === 0) {
+            const errorItems = queue.filter(i => i.status === 'error');
+            if (errorItems.length > 0) {
+                errorItems.forEach(i => { i.status = 'waiting'; i.percent = 0; });
+                renderQueueUI();
+            } else {
+                showToast('Không có liên kết nào đang chờ tải trong hàng đợi!', 'warning');
+                return;
+            }
+        }
+
+        queueStartTime = Date.now();
+        queueState = 'running';
+        updateStatsUI();
+        showToast('Bắt đầu xử lý hàng chờ tải xuống...', 'info');
+        dispatchQueue();
+    }
+
+    // Pause Queue
+    function pauseQueue() {
+        queueState = 'paused';
+        updateStatsUI();
+        showToast('Đã tạm dừng hàng chờ! Các video đang tải sẽ hoàn thành, các video sau sẽ chờ.', 'warning');
+    }
+
+    // Resume Queue
+    function resumeQueue() {
+        if (!queueStartTime) queueStartTime = Date.now();
+        queueState = 'running';
+        updateStatsUI();
+        showToast('Tiếp tục chạy hàng chờ...', 'info');
+        dispatchQueue();
+    }
+
+    // Stop Queue
+    async function stopQueue() {
+        queueState = 'stopped';
+        queue.forEach(item => {
+            if (item.status === 'downloading') {
+                if (item.reader) {
+                    try { item.reader.cancel(); } catch (_) {}
+                    item.reader = null;
+                }
+                item.status = 'cancelled';
+            }
+        });
+        try {
+            await fetch('/api/download/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ all: true })
+            });
+        } catch (_) {}
+
+        activeWorkers = 0;
+        renderQueueUI();
+        showToast('Đã dừng toàn bộ tiến trình tải hàng chờ!', 'warning');
+    }
+
+    // Dispatcher
+    function dispatchQueue() {
+        if (queueState !== 'running') return;
+
+        const concurrency = parseInt(selectConcurrency?.value, 10) || 2;
+
+        while (activeWorkers < concurrency && queueState === 'running') {
+            const nextItem = queue.find(i => i.status === 'waiting');
+            if (!nextItem) break;
+
+            activeWorkers++;
+            processQueueItem(nextItem).finally(() => {
+                activeWorkers--;
+                dispatchQueue();
+            });
+        }
+
+        if (activeWorkers === 0) {
+            const stillWaiting = queue.filter(i => i.status === 'waiting').length;
+            if (stillWaiting === 0 && queue.length > 0 && queueState === 'running') {
+                queueState = 'idle';
+                updateStatsUI();
+                const completedCount = queue.filter(i => i.status === 'completed').length;
+                const errorCount = queue.filter(i => i.status === 'error').length;
+                const cancelledCount = queue.filter(i => i.status === 'cancelled').length;
+                const elapsedSec = queueStartTime ? (Date.now() - queueStartTime) / 1000 : 0;
+                showToast(`🎉 Đã xử lý xong hàng chờ! Thành công: ${completedCount}/${queue.length} video.`, 'success');
+
+                // Báo cáo tổng kết hàng chờ về Telegram nếu người dùng cấu hình
+                fetch('/api/download/queue_finished', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        total_count: queue.length,
+                        success_count: completedCount,
+                        failed_count: errorCount,
+                        cancelled_count: cancelledCount,
+                        elapsed_sec: elapsedSec,
+                        output_dir: inputOutputDir?.value?.trim() || ''
+                    })
+                }).catch(() => {});
+            }
+        }
+    }
+
+    // Process a single queue item
+    async function processQueueItem(item) {
+        item.status = 'downloading';
+        item.percent = 0;
+        item.speed = 'Khởi tạo...';
+        item.error_msg = null;
+        updateItemRow(item);
+
+        const customDir = inputOutputDir?.value.trim() || '';
+        const payload = {
+            url: item.url,
+            task_id: item.id,
+            format_id: 'best',
+            is_audio: currentFormat === 'mp3',
+            output_dir: customDir
+        };
+
+        try {
+            const response = await fetch('/api/download/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || `Lỗi máy chủ (HTTP ${response.status})`);
+            }
+
+            const reader = response.body.getReader();
+            item.reader = reader;
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const jsonStr = line.slice(6).trim();
+                        if (!jsonStr) continue;
+                        try {
+                            const data = JSON.parse(jsonStr);
+                            if (data.status === 'downloading') {
+                                item.percent = data.percent || item.percent;
+                                item.speed = `${data.speed || '--'} • Còn ${data.eta || '--'}`;
+                                updateItemRow(item);
+                            } else if (data.status === 'processing') {
+                                item.percent = 99;
+                                item.speed = data.message || 'Đang đóng gói FFmpeg...';
+                                updateItemRow(item);
+                            } else if (data.status === 'completed') {
+                                item.status = 'completed';
+                                item.percent = 100;
+                                item.file_path = data.file_path;
+                                item.file_name = data.file_name;
+                                item.file_size = data.file_size;
+                                item.title = data.title || item.title;
+                                item.specs = data.specs || {};
+
+                                saveDownloadHistoryItem({
+                                    id: Date.now() + Math.random(),
+                                    title: item.title,
+                                    file_path: data.file_path,
+                                    file_name: data.file_name,
+                                    file_size: data.file_size,
+                                    resolution: (data.specs && (data.specs.resolution_label || data.specs.resolution)) || '',
+                                    fps: (data.specs && data.specs.fps) || '',
+                                    thumbnail: data.thumbnail || '',
+                                    platform: item.platform.name,
+                                    is_audio: currentFormat === 'mp3',
+                                    timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+                                });
+
+                                updateItemRow(item);
+                            } else if (data.status === 'cancelled') {
+                                item.status = 'cancelled';
+                                updateItemRow(item);
+                            } else if (data.status === 'error') {
+                                item.status = 'error';
+                                item.error_msg = data.error || 'Lỗi tải video';
+                                updateItemRow(item);
+                            }
+                        } catch (parseErr) {
+                            console.error('Queue SSE JSON parse error:', parseErr);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            if (item.status !== 'cancelled') {
+                item.status = 'error';
+                item.error_msg = err.message || 'Lỗi kết nối';
+                updateItemRow(item);
+            }
+        } finally {
+            item.reader = null;
+            if (item.status === 'downloading') {
+                item.status = 'error';
+                item.error_msg = item.error_msg || 'Ngắt kết nối giữa chừng';
+                updateItemRow(item);
+            }
+        }
+    }
+
+    // Window helper functions for inline row actions
+    window.removeDownloadQueueItem = function(id) {
+        const idx = queue.findIndex(i => i.id === id);
+        if (idx !== -1) {
+            const item = queue[idx];
+            if (item.reader) {
+                try { item.reader.cancel(); } catch (_) {}
+            }
+            queue.splice(idx, 1);
+            renderQueueUI();
+        }
+    };
+
+    window.cancelDownloadQueueItem = async function(id) {
+        const item = queue.find(i => i.id === id);
+        if (item) {
+            if (item.reader) {
+                try { item.reader.cancel(); } catch (_) {}
+                item.reader = null;
+            }
+            item.status = 'cancelled';
+            try {
+                await fetch('/api/download/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_id: id })
+                });
+            } catch (_) {}
+            updateItemRow(item);
+        }
+    };
+
+    window.retryDownloadQueueItem = function(id) {
+        const item = queue.find(i => i.id === id);
+        if (item) {
+            item.status = 'waiting';
+            item.percent = 0;
+            item.error_msg = null;
+            updateItemRow(item);
+            if (queueState === 'running') {
+                dispatchQueue();
+            } else {
+                startQueue();
+            }
+        }
+    };
+
+    window.sendQueueItemToEditor = function(id) {
+        const item = queue.find(i => i.id === id);
+        if (!item || !item.file_path) {
+            showToast('Không tìm thấy tệp video đã tải!', 'warning');
+            return;
+        }
+        sendVideoToEditor(item.file_path);
+    };
+
+    window.openQueueItemFolder = function(id) {
+        const item = queue.find(i => i.id === id);
+        if (!item || !item.file_path) return;
+        fetch('/api/download/open_folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file_path: item.file_path })
+        });
+    };
+
+    // Button event listeners
+    if (btnStart) btnStart.addEventListener('click', startQueue);
+    if (btnPause) btnPause.addEventListener('click', pauseQueue);
+    if (btnResume) btnResume.addEventListener('click', resumeQueue);
+    if (btnStop) btnStop.addEventListener('click', stopQueue);
+
+    if (btnRetryFailed) {
+        btnRetryFailed.addEventListener('click', () => {
+            const failedItems = queue.filter(i => i.status === 'error' || i.status === 'cancelled');
+            if (failedItems.length === 0) {
+                showToast('Không có liên kết nào bị lỗi trong hàng chờ!', 'info');
+                return;
+            }
+            failedItems.forEach(i => {
+                i.status = 'waiting';
+                i.percent = 0;
+                i.error_msg = null;
+            });
+            renderQueueUI();
+            startQueue();
+        });
+    }
+
+    if (btnClearAll) {
+        btnClearAll.addEventListener('click', () => {
+            if (queue.length === 0) return;
+            if (queueState === 'running') {
+                showToast('Vui lòng dừng hàng chờ trước khi xóa hết!', 'warning');
+                return;
+            }
+            queue = [];
+            renderQueueUI();
+            showToast('Đã xóa sạch hàng chờ tải xuống!', 'info');
+        });
+    }
+
+    // Send All Completed Videos to Editor
+    if (btnSendAllToEditor) {
+        btnSendAllToEditor.addEventListener('click', () => {
+            const completedFiles = queue.filter(i => i.status === 'completed' && i.file_path).map(i => i.file_path);
+            if (completedFiles.length === 0) {
+                showToast('Chưa có video nào hoàn tất để nạp vào Biên Tập Phim!', 'warning');
+                return;
+            }
+            sendVideoToEditor(completedFiles[0]);
+            showToast(`Đã nạp video ${completedFiles[0].split(/[\\/]/).pop()} sang Biên Tập Phim! (Tổng ${completedFiles.length} file tải thành công)`, 'success');
+        });
+    }
+
+    // Send All URLs to Batch Studio Queue
+    if (btnSendAllToBatch) {
+        btnSendAllToBatch.addEventListener('click', async () => {
+            const allowed = await checkFeaturePermission('can_access_editor', 'Xử Lý Hàng Loạt');
+            if (!allowed) return;
+
+            const tasks = queue.map(i => ({
+                source_type: i.file_path ? 'file' : 'url',
+                file_path: i.file_path || '',
+                source_url: i.url || '',
+                title: i.title || i.url,
+                preset: 'dubbing'
+            }));
+
+            if (tasks.length === 0) {
+                showToast('Hàng chờ rỗng, không có dữ liệu để nạp sang Batch Studio!', 'warning');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/batch/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tasks })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`Đã nạp thành công ${tasks.length} nhiệm vụ vào Hàng Đợi Batch Studio!`, 'success');
+                    const navBatch = document.querySelector('.nav-tab[data-target="viewBatchQueue"]');
+                    if (navBatch) navBatch.click();
+                } else {
+                    showToast('Lỗi nạp sang Batch Studio: ' + (data.error || 'Thất bại'), 'error');
+                }
+            } catch (err) {
+                showToast('Lỗi kết nối Batch Studio: ' + err.message, 'error');
+            }
+        });
+    }
+
+    // Open Output Folder
+    if (btnOpenFolder) {
+        btnOpenFolder.addEventListener('click', () => {
+            const customDir = inputOutputDir?.value.trim() || '';
+            fetch('/api/download/open_folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder_path: customDir })
+            });
+        });
+    }
+
+    // Smart Paste Detection in Single Download Input
+    const singleInput = document.getElementById('downloadInputUrl');
+    if (singleInput) {
+        singleInput.addEventListener('paste', (e) => {
+            const pasted = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+            if (pasted.includes('\n')) {
+                const urls = parseUrls(pasted);
+                if (urls.length > 1) {
+                    e.preventDefault();
+                    switchDownloadTab('multi');
+                    if (txtUrls) {
+                        txtUrls.value = pasted.trim();
+                        if (hintUrls) hintUrls.textContent = `${urls.length} liên kết hợp lệ`;
+                    }
+                    showToast(`Phát hiện ${urls.length} liên kết! Đã tự động chuyển sang chế độ Tải Nhiều Video (Hàng Chờ).`, 'info');
+                }
+            }
+        });
+    }
+}
+
 try {
     initDouyinChannelDownloader();
 } catch (e) {
     console.error("Error initializing Douyin Channel Downloader:", e);
+}
+
+try {
+    initMultiDownloadQueueModule();
+} catch (e) {
+    console.error("Error initializing Multi Download Queue Module:", e);
 }
 
 // Initialize Clone Voice Studio
@@ -14253,6 +17116,24 @@ function setupInteractiveVideoLogo() {
         overlay.style.opacity = `${currentLogoState.opacity / 100}`;
 
         if (img) {
+            img.onload = () => {
+                if (img.naturalWidth && img.naturalHeight) {
+                    const natAspect = img.naturalWidth / img.naturalHeight;
+                    currentLogoState.aspectRatio = natAspect;
+                    const parentEl = overlay.offsetParent || cont || document.body;
+                    const cW = parentEl.clientWidth || 640;
+                    const cH = parentEl.clientHeight || 360;
+                    if (cW > 0 && cH > 0) {
+                        const widthPx = (currentLogoState.w_pct / 100) * cW;
+                        const heightPx = widthPx / natAspect;
+                        currentLogoState.h_pct = (heightPx / cH) * 100;
+                        overlay.style.height = `${heightPx}px`;
+                        if (coordBadge) {
+                            coordBadge.textContent = `(x: ${currentLogoState.x_pct.toFixed(1)}%, y: ${currentLogoState.y_pct.toFixed(1)}%, w: ${currentLogoState.w_pct.toFixed(1)}%)`;
+                        }
+                    }
+                }
+            };
             if (currentLogoState.dataUrl) {
                 if (img.src !== currentLogoState.dataUrl) img.src = currentLogoState.dataUrl;
             } else if (currentLogoState.path) {
@@ -14488,29 +17369,77 @@ function setupInteractiveVideoLogo() {
             const minW = 20;
             const minH = 20;
 
-            if (activeHandle.includes('e')) {
-                newWidth = Math.max(minW, Math.min(cW - startLeft, startWidth + dx));
-            }
-            if (activeHandle.includes('s')) {
-                newHeight = Math.max(minH, Math.min(cH - startTop, startHeight + dy));
-            }
-            if (activeHandle.includes('w')) {
-                const maxDx = startWidth - minW;
-                const actualDx = Math.max(-startLeft, Math.min(maxDx, dx));
-                newLeft = startLeft + actualDx;
-                newWidth = startWidth - actualDx;
-            }
-            if (activeHandle.includes('n')) {
-                const maxDy = startHeight - minH;
-                const actualDy = Math.max(-startTop, Math.min(maxDy, dy));
-                newTop = startTop + actualDy;
-                newHeight = startHeight - actualDy;
+            const targetImg = logoImg || document.getElementById('videoLogoImg');
+            const natAspect = (targetImg && targetImg.naturalWidth && targetImg.naturalHeight && targetImg.naturalHeight > 0)
+                ? (targetImg.naturalWidth / targetImg.naturalHeight)
+                : (currentLogoState.aspectRatio || (startWidth / Math.max(1, startHeight)));
+
+            const isCorner = activeHandle === 'nw' || activeHandle === 'ne' || activeHandle === 'sw' || activeHandle === 'se';
+
+            if (isCorner && natAspect > 0.05) {
+                if (activeHandle === 'se') {
+                    const dwX = dx;
+                    const dwY = dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(cW - startLeft, (cH - startTop) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                } else if (activeHandle === 'sw') {
+                    const dwX = -dx;
+                    const dwY = dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(startLeft + startWidth, (cH - startTop) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                    newLeft = startLeft + (startWidth - newWidth);
+                } else if (activeHandle === 'ne') {
+                    const dwX = dx;
+                    const dwY = -dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(cW - startLeft, (startTop + startHeight) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                    newTop = startTop + (startHeight - newHeight);
+                } else if (activeHandle === 'nw') {
+                    const dwX = -dx;
+                    const dwY = -dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(startLeft + startWidth, (startTop + startHeight) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                    newLeft = startLeft + (startWidth - newWidth);
+                    newTop = startTop + (startHeight - newHeight);
+                }
+            } else {
+                if (activeHandle.includes('e')) {
+                    newWidth = Math.max(minW, Math.min(cW - startLeft, startWidth + dx));
+                }
+                if (activeHandle.includes('s')) {
+                    newHeight = Math.max(minH, Math.min(cH - startTop, startHeight + dy));
+                }
+                if (activeHandle.includes('w')) {
+                    const maxDx = startWidth - minW;
+                    const actualDx = Math.max(-startLeft, Math.min(maxDx, dx));
+                    newLeft = startLeft + actualDx;
+                    newWidth = startWidth - actualDx;
+                }
+                if (activeHandle.includes('n')) {
+                    const maxDy = startHeight - minH;
+                    const actualDy = Math.max(-startTop, Math.min(maxDy, dy));
+                    newTop = startTop + actualDy;
+                    newHeight = startHeight - actualDy;
+                }
             }
 
             currentLogoState.x_pct = (newLeft / cW) * 100;
             currentLogoState.y_pct = (newTop / cH) * 100;
             currentLogoState.w_pct = (newWidth / cW) * 100;
             currentLogoState.h_pct = (newHeight / cH) * 100;
+            currentLogoState.aspectRatio = newWidth / Math.max(1, newHeight);
 
             logoOverlay.style.left = `${newLeft}px`;
             logoOverlay.style.top = `${newTop}px`;
@@ -16107,6 +19036,11 @@ window.currentReviewLogoState = {
 function loadReviewVideoPlayer(path) {
     if (!path || !reviewVideoPlayer) return;
     
+    const reviewHeaderVideoPath = document.getElementById('reviewHeaderVideoPath');
+    if (reviewHeaderVideoPath && reviewHeaderVideoPath.value !== path) {
+        reviewHeaderVideoPath.value = path;
+    }
+
     if (reviewVideoLoadingSpinner) reviewVideoLoadingSpinner.style.display = 'block';
     
     if (reviewPlayerStatusBadge) {
@@ -16174,6 +19108,17 @@ async function autoParseReviewSrt(srtPath) {
         const data = await res.json();
         if (data.success && data.subtitles && data.subtitles.length > 0) {
             window.reviewParsedSubtitles = data.subtitles;
+            if (window.currentReviewScriptTab === 'original') {
+                renderReviewScriptTable();
+            } else {
+                updateReviewScriptStats();
+            }
+            if (typeof syncReviewSubtitle === 'function') {
+                syncReviewSubtitle(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0);
+            }
+            if (typeof updateReviewSubPreview === 'function') {
+                updateReviewSubPreview();
+            }
             if (!window.reviewTabScannedAiBoxes || window.reviewTabScannedAiBoxes.length === 0) {
                 window.reviewTabScannedAiBoxes = data.subtitles.map(s => ({
                     startSeconds: s.startSeconds,
@@ -16307,11 +19252,13 @@ function setupReviewVideoPlayerController() {
             reviewPlayerStatusBadge.style.borderColor = 'rgba(56, 189, 248, 0.3)';
         }
         updateReviewTimeDisplay();
+        if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(reviewVideoPlayer.currentTime);
     });
 
     reviewVideoPlayer.addEventListener('seeking', () => {
         window.liveDubbingEngine.stop();
         window.liveDubbingEngine.restoreVolume(reviewVideoPlayer);
+        if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(reviewVideoPlayer.currentTime);
     });
 
     reviewVideoPlayer.addEventListener('durationchange', updateReviewTimeDisplay);
@@ -16328,6 +19275,9 @@ function setupReviewVideoPlayerController() {
             reviewPlayerStatusBadge.style.borderColor = '#10b981';
         }
         updateReviewPlayerAspectRatio(reviewAspectRatio || '16:9');
+        if (typeof window.renderReviewLogo === 'function') {
+            window.renderReviewLogo();
+        }
     });
 
     reviewVideoPlayer.addEventListener('error', () => {
@@ -16364,6 +19314,7 @@ function setupReviewVideoPlayerController() {
     reviewVideoPlayer.addEventListener('timeupdate', () => {
         updateReviewTimeDisplay();
         syncReviewDynamicBlur(reviewVideoPlayer.currentTime);
+        if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(reviewVideoPlayer.currentTime);
     });
 
     if (reviewVideoTimeline) {
@@ -16377,6 +19328,7 @@ function setupReviewVideoPlayerController() {
                 if (reviewTimeDisplay) {
                     reviewTimeDisplay.textContent = `${formatVideoTime(seekTime)} / ${formatVideoTime(reviewVideoPlayer.duration)}`;
                 }
+                if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(seekTime);
             }
         });
 
@@ -16385,6 +19337,7 @@ function setupReviewVideoPlayerController() {
                 const seekTime = (parseFloat(e.target.value) / 100) * reviewVideoPlayer.duration;
                 safeSeekReviewVideo(seekTime, false);
                 isSeekingReviewTimeline = false;
+                if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(seekTime);
             }
         };
 
@@ -16405,12 +19358,12 @@ function setupReviewVideoPlayerController() {
     const btnReviewNextSub = document.getElementById('btnReviewNextSub');
 
     function getReviewSubtitleList() {
-        if (window.reviewTabScannedAiBoxes && window.reviewTabScannedAiBoxes.length > 0) {
-            return window.reviewTabScannedAiBoxes.map((b, i) => ({
+        if (Array.isArray(window.reviewNarrationSubtitles) && window.reviewNarrationSubtitles.length > 0) {
+            return window.reviewNarrationSubtitles.map((s, i) => ({
                 index: i + 1,
-                start: b.visual_start !== undefined ? b.visual_start : (b.startSeconds || 0),
-                end: b.visual_end !== undefined ? b.visual_end : (b.endSeconds || 0),
-                box: b
+                start: typeof s.startSeconds === 'number' ? s.startSeconds : (s.start || 0),
+                end: typeof s.endSeconds === 'number' ? s.endSeconds : (s.end || 0),
+                text: s.translation || s.text || s.content || ''
             })).filter(s => !isNaN(s.start));
         }
         if (window.reviewParsedSubtitles && window.reviewParsedSubtitles.length > 0) {
@@ -16419,7 +19372,15 @@ function setupReviewVideoPlayerController() {
                 start: s.startSeconds || 0,
                 end: s.endSeconds || 0,
                 text: s.text || ''
-            }));
+            })).filter(s => !isNaN(s.start));
+        }
+        if (window.reviewTabScannedAiBoxes && window.reviewTabScannedAiBoxes.length > 0) {
+            return window.reviewTabScannedAiBoxes.map((b, i) => ({
+                index: i + 1,
+                start: b.visual_start !== undefined ? b.visual_start : (b.startSeconds || 0),
+                end: b.visual_end !== undefined ? b.visual_end : (b.endSeconds || 0),
+                box: b
+            })).filter(s => !isNaN(s.start));
         }
         return [];
     }
@@ -16783,14 +19744,35 @@ function setupInteractiveReviewLogo() {
 
     if (!logoOverlay || !container) return;
 
+    function syncReviewLogoStateFromDom() {
+        if (enableCheckbox && enableCheckbox.checked) {
+            window.currentReviewLogoState.enabled = true;
+            if (configPanel) configPanel.style.display = 'flex';
+        }
+        if (logoInput && logoInput.value && logoInput.value.trim() !== '') {
+            window.currentReviewLogoState.path = logoInput.value.trim();
+        }
+        if (opacitySlider) {
+            window.currentReviewLogoState.opacity = parseInt(opacitySlider.value) || 100;
+            if (opacityVal) opacityVal.textContent = `${window.currentReviewLogoState.opacity}%`;
+        }
+    }
+
+    function getLogoParentViewport() {
+        return logoOverlay.offsetParent || container.querySelector('.capcut-canvas-viewport') || container.querySelector('.capcut-canvas-frame') || container;
+    }
+
     window.renderReviewLogo = function() {
+        syncReviewLogoStateFromDom();
+
         if (!window.currentReviewLogoState.enabled || !window.currentReviewLogoState.path || !isReviewPreviewEditedMode) {
             logoOverlay.style.display = 'none';
             return;
         }
 
-        const cW = container.clientWidth || 640;
-        const cH = container.clientHeight || 360;
+        const parentEl = getLogoParentViewport();
+        const cW = parentEl.clientWidth || 640;
+        const cH = parentEl.clientHeight || 360;
 
         const leftPx = (window.currentReviewLogoState.x_pct / 100) * cW;
         const topPx = (window.currentReviewLogoState.y_pct / 100) * cH;
@@ -16802,16 +19784,48 @@ function setupInteractiveReviewLogo() {
         logoOverlay.style.top = `${topPx}px`;
         logoOverlay.style.width = `${widthPx}px`;
         logoOverlay.style.height = `${heightPx}px`;
-        logoOverlay.style.opacity = `${window.currentReviewLogoState.opacity / 100}`;
+        logoOverlay.style.opacity = `${(window.currentReviewLogoState.opacity || 100) / 100}`;
 
         if (logoImg) {
+            const updateImgDimensions = () => {
+                if (logoImg.naturalWidth && logoImg.naturalHeight) {
+                    const natAspect = logoImg.naturalWidth / logoImg.naturalHeight;
+                    window.currentReviewLogoState.aspectRatio = natAspect;
+                    const curParent = getLogoParentViewport();
+                    const curW = curParent.clientWidth || 640;
+                    const curH = curParent.clientHeight || 360;
+                    if (curW > 0 && curH > 0) {
+                        const curWidthPx = (window.currentReviewLogoState.w_pct / 100) * curW;
+                        const curHeightPx = curWidthPx / natAspect;
+                        window.currentReviewLogoState.h_pct = (curHeightPx / curH) * 100;
+                        logoOverlay.style.height = `${curHeightPx}px`;
+                        if (coordBadge) {
+                            coordBadge.textContent = `(x: ${window.currentReviewLogoState.x_pct.toFixed(1)}%, y: ${window.currentReviewLogoState.y_pct.toFixed(1)}%, w: ${window.currentReviewLogoState.w_pct.toFixed(1)}%)`;
+                        }
+                    }
+                }
+            };
+
+            logoImg.onload = updateImgDimensions;
+            logoImg.onerror = () => {
+                console.warn("[ReviewLogo] Lỗi tải ảnh logo:", logoImg.src);
+            };
+
             if (window.currentReviewLogoState.dataUrl) {
-                if (logoImg.src !== window.currentReviewLogoState.dataUrl) logoImg.src = window.currentReviewLogoState.dataUrl;
+                if (logoImg.src !== window.currentReviewLogoState.dataUrl) {
+                    logoImg.src = window.currentReviewLogoState.dataUrl;
+                }
             } else if (window.currentReviewLogoState.path) {
-                const imgSrc = `/api/image?path=${encodeURIComponent(window.currentReviewLogoState.path)}`;
-                if (!logoImg.src.includes(encodeURIComponent(window.currentReviewLogoState.path))) {
+                const targetPath = window.currentReviewLogoState.path;
+                const imgSrc = `/api/image?path=${encodeURIComponent(targetPath)}`;
+                if (logoImg.dataset.loadedPath !== targetPath) {
+                    logoImg.dataset.loadedPath = targetPath;
                     logoImg.src = imgSrc;
                 }
+            }
+
+            if (logoImg.complete && logoImg.naturalWidth > 0) {
+                updateImgDimensions();
             }
         }
 
@@ -16823,6 +19837,9 @@ function setupInteractiveReviewLogo() {
     if (enableCheckbox) {
         enableCheckbox.addEventListener('change', () => {
             window.currentReviewLogoState.enabled = enableCheckbox.checked;
+            if (logoInput && logoInput.value && logoInput.value.trim() !== '') {
+                window.currentReviewLogoState.path = logoInput.value.trim();
+            }
             if (configPanel) configPanel.style.display = window.currentReviewLogoState.enabled ? 'flex' : 'none';
             window.renderReviewLogo();
         });
@@ -16839,6 +19856,7 @@ function setupInteractiveReviewLogo() {
     async function handleReviewLogoSelected(filePath) {
         if (!filePath) return;
         window.currentReviewLogoState.path = filePath;
+        window.currentReviewLogoState.dataUrl = null;
         window.currentReviewLogoState.enabled = true;
         if (logoInput) logoInput.value = filePath;
         if (enableCheckbox) enableCheckbox.checked = true;
@@ -16925,11 +19943,15 @@ function setupInteractiveReviewLogo() {
     if (btnReset) {
         btnReset.addEventListener('click', () => {
             window.currentReviewLogoState.path = '';
+            window.currentReviewLogoState.dataUrl = null;
             window.currentReviewLogoState.enabled = false;
             if (logoInput) logoInput.value = '';
             if (enableCheckbox) enableCheckbox.checked = false;
             if (configPanel) configPanel.style.display = 'none';
-            if (logoImg) logoImg.src = '';
+            if (logoImg) {
+                logoImg.src = '';
+                delete logoImg.dataset.loadedPath;
+            }
             window.renderReviewLogo();
             showToast("Review Phim: Đã xóa logo", "info");
         });
@@ -16937,6 +19959,7 @@ function setupInteractiveReviewLogo() {
 
     presetBtns.forEach(btn => {
         btn.addEventListener('click', () => {
+            syncReviewLogoStateFromDom();
             const pos = btn.dataset.pos;
             const w = window.currentReviewLogoState.w_pct || 18;
             const h = window.currentReviewLogoState.h_pct || 12;
@@ -16974,13 +19997,14 @@ function setupInteractiveReviewLogo() {
         e.preventDefault();
 
         const handle = e.target.closest('.logo-resize-handle');
-        const cRect = container.getBoundingClientRect();
+        const parentEl = getLogoParentViewport();
+        const pRect = parentEl.getBoundingClientRect();
         const lRect = logoOverlay.getBoundingClientRect();
 
         startX = e.clientX;
         startY = e.clientY;
-        startLeft = lRect.left - cRect.left;
-        startTop = lRect.top - cRect.top;
+        startLeft = lRect.left - pRect.left;
+        startTop = lRect.top - pRect.top;
         startWidth = lRect.width;
         startHeight = lRect.height;
 
@@ -16998,8 +20022,9 @@ function setupInteractiveReviewLogo() {
         if (!isDragging && !isResizing) return;
         e.preventDefault();
 
-        const cW = container.clientWidth || 640;
-        const cH = container.clientHeight || 360;
+        const parentEl = getLogoParentViewport();
+        const cW = parentEl.clientWidth || 640;
+        const cH = parentEl.clientHeight || 360;
         if (cW <= 0 || cH <= 0) return;
 
         const dx = e.clientX - startX;
@@ -17023,29 +20048,77 @@ function setupInteractiveReviewLogo() {
             const minW = 20;
             const minH = 20;
 
-            if (activeHandle.includes('e')) {
-                newWidth = Math.max(minW, Math.min(cW - startLeft, startWidth + dx));
-            }
-            if (activeHandle.includes('s')) {
-                newHeight = Math.max(minH, Math.min(cH - startTop, startHeight + dy));
-            }
-            if (activeHandle.includes('w')) {
-                const maxDx = startWidth - minW;
-                const actualDx = Math.max(-startLeft, Math.min(maxDx, dx));
-                newLeft = startLeft + actualDx;
-                newWidth = startWidth - actualDx;
-            }
-            if (activeHandle.includes('n')) {
-                const maxDy = startHeight - minH;
-                const actualDy = Math.max(-startTop, Math.min(maxDy, dy));
-                newTop = startTop + actualDy;
-                newHeight = startHeight - actualDy;
+            const targetImg = logoImg || document.getElementById('reviewVideoLogoImg');
+            const natAspect = (targetImg && targetImg.naturalWidth && targetImg.naturalHeight && targetImg.naturalHeight > 0)
+                ? (targetImg.naturalWidth / targetImg.naturalHeight)
+                : (window.currentReviewLogoState.aspectRatio || (startWidth / Math.max(1, startHeight)));
+
+            const isCorner = activeHandle === 'nw' || activeHandle === 'ne' || activeHandle === 'sw' || activeHandle === 'se';
+
+            if (isCorner && natAspect > 0.05) {
+                if (activeHandle === 'se') {
+                    const dwX = dx;
+                    const dwY = dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(cW - startLeft, (cH - startTop) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                } else if (activeHandle === 'sw') {
+                    const dwX = -dx;
+                    const dwY = dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(startLeft + startWidth, (cH - startTop) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                    newLeft = startLeft + (startWidth - newWidth);
+                } else if (activeHandle === 'ne') {
+                    const dwX = dx;
+                    const dwY = -dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(cW - startLeft, (startTop + startHeight) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                    newTop = startTop + (startHeight - newHeight);
+                } else if (activeHandle === 'nw') {
+                    const dwX = -dx;
+                    const dwY = -dy * natAspect;
+                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
+                    const maxAvailableW = Math.max(minW, Math.min(startLeft + startWidth, (startTop + startHeight) * natAspect));
+                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
+                    newHeight = Math.max(minH, newWidth / natAspect);
+                    newWidth = newHeight * natAspect;
+                    newLeft = startLeft + (startWidth - newWidth);
+                    newTop = startTop + (startHeight - newHeight);
+                }
+            } else {
+                if (activeHandle.includes('e')) {
+                    newWidth = Math.max(minW, Math.min(cW - startLeft, startWidth + dx));
+                }
+                if (activeHandle.includes('s')) {
+                    newHeight = Math.max(minH, Math.min(cH - startTop, startHeight + dy));
+                }
+                if (activeHandle.includes('w')) {
+                    const maxDx = startWidth - minW;
+                    const actualDx = Math.max(-startLeft, Math.min(maxDx, dx));
+                    newLeft = startLeft + actualDx;
+                    newWidth = startWidth - actualDx;
+                }
+                if (activeHandle.includes('n')) {
+                    const maxDy = startHeight - minH;
+                    const actualDy = Math.max(-startTop, Math.min(maxDy, dy));
+                    newTop = startTop + actualDy;
+                    newHeight = startHeight - actualDy;
+                }
             }
 
             window.currentReviewLogoState.x_pct = (newLeft / cW) * 100;
             window.currentReviewLogoState.y_pct = (newTop / cH) * 100;
             window.currentReviewLogoState.w_pct = (newWidth / cW) * 100;
             window.currentReviewLogoState.h_pct = (newHeight / cH) * 100;
+            window.currentReviewLogoState.aspectRatio = newWidth / Math.max(1, newHeight);
 
             logoOverlay.style.left = `${newLeft}px`;
             logoOverlay.style.top = `${newTop}px`;
@@ -17068,11 +20141,822 @@ function setupInteractiveReviewLogo() {
         }
     });
 
-    window.addEventListener('resize', window.renderReviewLogo);
+    window.addEventListener('resize', () => {
+        if (typeof window.renderReviewLogo === 'function') {
+            window.renderReviewLogo();
+        }
+    });
+
+    // Đồng bộ ban đầu và gọi render ngay
+    syncReviewLogoStateFromDom();
+    window.renderReviewLogo();
+}
+
+// ═════════════════════════════════════════════════════════════
+// 🎬 HỆ THỐNG PHỤ ĐỀ STUDIO REVIEW PHIM (SUBTITLES STUDIO)
+// ═════════════════════════════════════════════════════════════
+
+let isReviewSubBold = true;
+let isReviewSubItalic = false;
+let isReviewSubUppercase = false;
+let reviewSubTextAlign = 'center';
+let isEditingReviewSubBox = false;
+window.currentReviewSubRegion = { x: 10, y: 81.5, w: 80, h: 9.5, customPos: true };
+
+function getReviewVideoContentRect() {
+    const vp = document.getElementById('reviewVideoPlayer');
+    const wrapper = document.getElementById('reviewVideoZoomWrapper') || document.getElementById('reviewVideoContainer');
+    if (!wrapper) return { videoX: 0, videoY: 0, videoW: 100, videoH: 100, wrapperW: 100, wrapperH: 100 };
+    
+    const wrapperW = wrapper.clientWidth || 800;
+    const wrapperH = wrapper.clientHeight || 450;
+    const vW = (vp && vp.videoWidth) ? vp.videoWidth : 0;
+    const vH = (vp && vp.videoHeight) ? vp.videoHeight : 0;
+    
+    if (!vW || !vH || wrapperW <= 0 || wrapperH <= 0) {
+        return { videoX: 0, videoY: 0, videoW: wrapperW, videoH: wrapperH, wrapperW, wrapperH };
+    }
+    
+    const videoAR = vW / vH;
+    const wrapperAR = wrapperW / wrapperH;
+    
+    let renderW, renderH, renderX, renderY;
+    if (videoAR > wrapperAR) {
+        renderW = wrapperW;
+        renderH = wrapperW / videoAR;
+        renderX = 0;
+        renderY = (wrapperH - renderH) / 2;
+    } else {
+        renderH = wrapperH;
+        renderW = wrapperH * videoAR;
+        renderX = (wrapperW - renderW) / 2;
+        renderY = 0;
+    }
+    
+    return {
+        videoX: renderX,
+        videoY: renderY,
+        videoW: renderW,
+        videoH: renderH,
+        wrapperW,
+        wrapperH
+    };
+}
+
+function applyReviewBoxPercentToWrapper(box, pX, pY, pW, pH, vRect) {
+    if (!box) return;
+    if (!vRect) vRect = getReviewVideoContentRect();
+    const boxX = vRect.videoX + (pX / 100) * vRect.videoW;
+    const boxY = vRect.videoY + (pY / 100) * vRect.videoH;
+    const boxW = (pW / 100) * vRect.videoW;
+    const boxH = (pH / 100) * vRect.videoH;
+    
+    box.style.position = 'absolute';
+    box.style.left = `${(boxX / vRect.wrapperW) * 100}%`;
+    box.style.top = `${(boxY / vRect.wrapperH) * 100}%`;
+    box.style.width = `${(boxW / vRect.wrapperW) * 100}%`;
+    box.style.height = `${(boxH / vRect.wrapperH) * 100}%`;
+    box.style.bottom = 'auto';
+    box.style.right = 'auto';
+}
+
+function getReviewSubtitleStyle() {
+    const font = document.getElementById('reviewSubFont')?.value || 'Montserrat';
+    const color = document.getElementById('reviewSubColorPicker')?.value || '#ffffff';
+    const outlineColor = document.getElementById('reviewSubOutlineColorPicker')?.value || '#000000';
+    const shadowColor = document.getElementById('reviewSubShadowColorPicker')?.value || '#000000';
+    const size = parseInt(document.getElementById('reviewSubSize')?.value) || 24;
+    const outline = parseInt(document.getElementById('reviewSubOutline')?.value) || 1;
+    const shadowOffset = parseInt(document.getElementById('reviewSubShadowOffset')?.value) || 0;
+    const bgStyle = document.getElementById('reviewSubBgStyle')?.value || 'none';
+    const bgColor = document.getElementById('reviewSubBgColorPicker')?.value || '#000000';
+    const bgOpacity = parseInt(document.getElementById('reviewSubBgOpacity')?.value) || 50;
+    const bgBlur = parseInt(document.getElementById('reviewSubBgBlur')?.value) || 15;
+
+    const rX = parseFloat(document.getElementById('reviewSubBoxX')?.value || 10);
+    const rY = parseFloat(document.getElementById('reviewSubBoxY')?.value || 81.5);
+    const rW = parseFloat(document.getElementById('reviewSubBoxWidth')?.value || 80);
+    const rH = parseFloat(document.getElementById('reviewSubBoxHeight')?.value || 9.5);
+
+    return {
+        font: font,
+        font_family: font,
+        size: size,
+        font_size: size,
+        color: color,
+        text_color: color,
+        outline_color: outlineColor,
+        outline: outline,
+        outline_width: outline,
+        shadow_color: shadowColor,
+        shadow_offset: shadowOffset,
+        bold: isReviewSubBold,
+        italic: isReviewSubItalic,
+        uppercase: isReviewSubUppercase,
+        align: reviewSubTextAlign,
+        alignment: reviewSubTextAlign,
+        bg_style: bgStyle,
+        bg_color: bgColor,
+        bg_opacity: bgOpacity,
+        bg_blur: bgBlur,
+        region: { x: rX, y: rY, w: rW, h: rH },
+        position: { x_percent: rX, y_percent: rY, width_percent: rW, height_percent: rH }
+    };
+}
+window.getReviewSubtitleStyle = getReviewSubtitleStyle;
+
+function syncReviewSubRegionInputs(pX, pY, pW, pH) {
+    const elW = document.getElementById('reviewSubBoxWidth');
+    const elH = document.getElementById('reviewSubBoxHeight');
+    const elX = document.getElementById('reviewSubBoxX');
+    const elY = document.getElementById('reviewSubBoxY');
+    
+    const valW = document.getElementById('reviewSubBoxWidthVal');
+    const valH = document.getElementById('reviewSubBoxHeightVal');
+    const valX = document.getElementById('reviewSubBoxXVal');
+    const valY = document.getElementById('reviewSubBoxYVal');
+
+    if (elW && pW !== undefined) { elW.value = pW; if (valW) valW.textContent = `${pW}%`; }
+    if (elH && pH !== undefined) { elH.value = pH; if (valH) valH.textContent = `${pH}%`; }
+    if (elX && pX !== undefined) { elX.value = pX; if (valX) valX.textContent = `${pX}%`; }
+    if (elY && pY !== undefined) { elY.value = pY; if (valY) valY.textContent = `${pY}%`; }
+
+    const box = document.getElementById('reviewSubPreviewBox');
+    if (box) {
+        const textEl = box.querySelector('.review-sub-coords-text');
+        if (textEl) textEl.textContent = `X:${pX}% Y:${pY}% W:${pW}% H:${pH}%`;
+    }
+}
+
+function applyReviewSubStylesToElement(el) {
+    if (!el) return;
+
+    const font = document.getElementById('reviewSubFont')?.value || 'Montserrat';
+    const color = document.getElementById('reviewSubColorPicker')?.value || '#ffffff';
+    const outlineColor = document.getElementById('reviewSubOutlineColorPicker')?.value || '#000000';
+    const shadowColor = document.getElementById('reviewSubShadowColorPicker')?.value || '#000000';
+    const size = parseInt(document.getElementById('reviewSubSize')?.value) || 24;
+    const rawOutlineVal = parseInt(document.getElementById('reviewSubOutline')?.value);
+    const outline = Number.isFinite(rawOutlineVal) ? rawOutlineVal : 1;
+    const shadowOffset = parseInt(document.getElementById('reviewSubShadowOffset')?.value) || 0;
+    const bgStyle = document.getElementById('reviewSubBgStyle')?.value || 'none';
+
+    let renderedFontSize = size;
+    let renderedOutline = outline;
+    if (el.id !== 'reviewSubLivePreviewBox') {
+        const vRect = getReviewVideoContentRect();
+        const contentScale = (vRect && vRect.videoH) ? (vRect.videoH / 720.0) : 1.0;
+        renderedFontSize = Math.max(8, Math.round(size * contentScale));
+        if (outline > 0) {
+            renderedOutline = Math.max(1, Math.round(outline * contentScale));
+        }
+    }
+
+    el.style.display = 'flex';
+    el.style.justifyContent = reviewSubTextAlign === 'left' ? 'flex-start' : (reviewSubTextAlign === 'right' ? 'flex-end' : 'center');
+    el.style.alignItems = 'center';
+    el.style.textAlign = reviewSubTextAlign;
+    el.style.fontFamily = font;
+    el.style.fontSize = `${renderedFontSize}px`;
+    el.style.color = color;
+    el.style.fontWeight = isReviewSubBold ? 'bold' : 'normal';
+    el.style.fontStyle = isReviewSubItalic ? 'italic' : 'normal';
+    el.style.textTransform = isReviewSubUppercase ? 'uppercase' : 'none';
+
+    const textSpan = el.querySelector('.sub-text-inner');
+    if (textSpan) {
+        textSpan.style.transform = 'none';
+        textSpan.style.width = '100%';
+        textSpan.style.maxWidth = '100%';
+        textSpan.style.boxSizing = 'border-box';
+        textSpan.style.wordBreak = 'break-word';
+        textSpan.style.whiteSpace = 'normal';
+        textSpan.style.flexShrink = '0';
+        textSpan.style.maxHeight = 'none';
+        textSpan.style.overflow = 'visible';
+        textSpan.style.textAlign = reviewSubTextAlign;
+    }
+
+    if (el.id !== 'reviewSubLivePreviewBox') {
+        const rX = parseFloat(document.getElementById('reviewSubBoxX')?.value || 10);
+        const rY = parseFloat(document.getElementById('reviewSubBoxY')?.value || 81.5);
+        const rW = parseFloat(document.getElementById('reviewSubBoxWidth')?.value || 80);
+        const rH = parseFloat(document.getElementById('reviewSubBoxHeight')?.value || 9.5);
+        applyReviewBoxPercentToWrapper(el, rX, rY, rW, rH);
+    }
+
+    let shadows = [];
+    if (renderedOutline > 0) {
+        shadows.push(`-${renderedOutline}px -${renderedOutline}px 0 ${outlineColor}`);
+        shadows.push(`${renderedOutline}px -${renderedOutline}px 0 ${outlineColor}`);
+        shadows.push(`-${renderedOutline}px ${renderedOutline}px 0 ${outlineColor}`);
+        shadows.push(`${renderedOutline}px ${renderedOutline}px 0 ${outlineColor}`);
+    }
+    if (shadowOffset > 0) {
+        shadows.push(`${shadowOffset}px ${shadowOffset}px ${shadowOffset * 2}px ${shadowColor}`);
+    }
+    el.style.textShadow = shadows.length > 0 ? shadows.join(', ') : 'none';
+
+    if (bgStyle === 'none') {
+        el.style.backgroundColor = 'transparent';
+        el.style.backdropFilter = 'none';
+        el.style.webkitBackdropFilter = 'none';
+        el.style.borderRadius = '0px';
+        el.style.padding = el.id === 'reviewSubLivePreviewBox' ? '4px' : '0px';
+    } else if (bgStyle === 'color') {
+        const bgColor = document.getElementById('reviewSubBgColorPicker')?.value || '#000000';
+        const opacity = parseInt(document.getElementById('reviewSubBgOpacity')?.value) || 50;
+        let r = parseInt(bgColor.slice(1, 3), 16) || 0,
+            g = parseInt(bgColor.slice(3, 5), 16) || 0,
+            b = parseInt(bgColor.slice(5, 7), 16) || 0;
+        el.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+        el.style.backdropFilter = 'none';
+        el.style.webkitBackdropFilter = 'none';
+        el.style.borderRadius = '6px';
+        el.style.padding = '4px 12px';
+    } else if (bgStyle === 'blur') {
+        const blurAmt = parseInt(document.getElementById('reviewSubBgBlur')?.value) || 15;
+        el.style.backgroundColor = 'rgba(0,0,0,0.3)';
+        el.style.backdropFilter = `blur(${blurAmt}px)`;
+        el.style.webkitBackdropFilter = `blur(${blurAmt}px)`;
+        el.style.borderRadius = '6px';
+        el.style.padding = '4px 12px';
+    }
+}
+
+function updateReviewSubPreview() {
+    const isSubEnabled = document.getElementById('reviewSubtitlesEnabled')?.checked ?? true;
+    const liveBox = document.getElementById('reviewSubLivePreviewBox');
+    if (liveBox) {
+        if (!isSubEnabled) {
+            liveBox.textContent = 'Phụ đề đang TẮT (Video xuất ra sẽ không có phụ đề) 🚫';
+            liveBox.style.opacity = '0.45';
+            liveBox.style.fontStyle = 'italic';
+            liveBox.style.color = '#94a3b8';
+            liveBox.style.textShadow = 'none';
+        } else {
+            liveBox.style.opacity = '1';
+            liveBox.style.fontStyle = 'normal';
+            applyReviewSubStylesToElement(liveBox);
+            liveBox.textContent = 'Phụ đề review hiển thị trực tiếp ✨';
+        }
+    }
+
+    const subBox = document.getElementById('reviewSubPreviewBox');
+    if (subBox) {
+        if (!isSubEnabled && !isEditingReviewSubBox) {
+            subBox.style.display = 'none';
+        } else {
+            applyReviewSubStylesToElement(subBox);
+            if (isEditingReviewSubBox) {
+                subBox.style.display = 'flex';
+            }
+        }
+    }
+}
+window.updateReviewSubPreview = updateReviewSubPreview;
+
+function showReviewSubAdjustBox(forceState) {
+    const subBox = document.getElementById('reviewSubPreviewBox');
+    const btnToggle = document.getElementById('reviewBtnToggleSubBox');
+    const btnText = document.getElementById('reviewBtnToggleSubBoxText');
+    if (!subBox) return;
+
+    if (forceState !== undefined) {
+        isEditingReviewSubBox = forceState;
+    } else {
+        isEditingReviewSubBox = !isEditingReviewSubBox;
+    }
+
+    if (!isEditingReviewSubBox) {
+        subBox.classList.remove('is-editing');
+        subBox.style.pointerEvents = 'none';
+        const badge = subBox.querySelector('.sub-adjust-badge');
+        if (badge) badge.style.display = 'none';
+        if (btnToggle) {
+            btnToggle.classList.remove('primary-cyan');
+            btnToggle.classList.add('secondary');
+        }
+        if (btnText) btnText.textContent = 'Chỉnh khung phụ đề';
+        if (typeof updateReviewSubPreview === 'function') updateReviewSubPreview();
+        const curTime = (reviewVideoPlayer && reviewVideoPlayer.currentTime) || 0;
+        syncReviewSubtitle(curTime);
+        return;
+    }
+
+    if (typeof showReviewBlurAdjustBox === 'function' && isEditingReviewBlurBox) {
+        showReviewBlurAdjustBox(false);
+    }
+
+    if (btnToggle) {
+        btnToggle.classList.remove('secondary');
+        btnToggle.classList.add('primary-cyan');
+    }
+    if (btnText) btnText.textContent = 'Hoàn tất chỉnh sub ✔️';
+
+    subBox.classList.add('is-editing');
+    subBox.style.pointerEvents = 'auto';
+
+    let rX = parseFloat(document.getElementById('reviewSubBoxX')?.value || 10);
+    let rY = parseFloat(document.getElementById('reviewSubBoxY')?.value || 81.5);
+    let rW = parseFloat(document.getElementById('reviewSubBoxWidth')?.value || 80);
+    let rH = parseFloat(document.getElementById('reviewSubBoxHeight')?.value || 9.5);
+    window.currentReviewSubRegion = { x: rX, y: rY, w: rW, h: rH, customPos: true };
+
+    let badge = subBox.querySelector('.sub-adjust-badge');
+    if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'sub-adjust-badge';
+        badge.innerHTML = `
+            <span>💬 Khung sub: <b class="review-sub-coords-text">X:${window.currentReviewSubRegion.x}% Y:${window.currentReviewSubRegion.y}% W:${window.currentReviewSubRegion.w}% H:${window.currentReviewSubRegion.h}%</b></span>
+            <button type="button" class="btn-sub-center" title="Căn giữa màn hình">🎯 Giữa</button>
+            <button type="button" class="btn-sub-close" title="Xong">✔️ Xong</button>
+        `;
+        subBox.appendChild(badge);
+
+        badge.querySelector('.btn-sub-close')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showReviewSubAdjustBox(false);
+        });
+
+        badge.querySelector('.btn-sub-center')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const w = window.currentReviewSubRegion ? window.currentReviewSubRegion.w : 80;
+            const centeredX = Math.max(0, Math.round(((100 - w) / 2) * 10) / 10);
+            window.currentReviewSubRegion.x = centeredX;
+            syncReviewSubRegionInputs(centeredX, window.currentReviewSubRegion.y, window.currentReviewSubRegion.w, window.currentReviewSubRegion.h);
+            applyReviewBoxPercentToWrapper(subBox, window.currentReviewSubRegion.x, window.currentReviewSubRegion.y, window.currentReviewSubRegion.w, window.currentReviewSubRegion.h);
+            applyReviewSubStylesToElement(subBox);
+        });
+    }
+    badge.style.display = 'flex';
+
+    let textSpan = subBox.querySelector('.sub-text-inner');
+    if (!textSpan) {
+        textSpan = document.createElement('span');
+        textSpan.className = 'sub-text-inner';
+        subBox.appendChild(textSpan);
+    }
+    const currentTime = (reviewVideoPlayer && reviewVideoPlayer.currentTime) || 0;
+    const curSub = getReviewActiveSub(currentTime);
+    textSpan.textContent = curSub || 'Phụ đề xem trước';
+    textSpan.style.whiteSpace = 'pre-line';
+
+    setupResizableAndDraggableBox(subBox, (newPx, newPy, newPw, newPh) => {
+        window.currentReviewSubRegion = { x: newPx, y: newPy, w: newPw, h: newPh, customPos: true };
+        syncReviewSubRegionInputs(newPx, newPy, newPw, newPh);
+        applyReviewSubStylesToElement(subBox);
+    });
+
+    subBox.style.display = 'flex';
+    applyReviewBoxPercentToWrapper(subBox, window.currentReviewSubRegion.x, window.currentReviewSubRegion.y, window.currentReviewSubRegion.w, window.currentReviewSubRegion.h);
+    applyReviewSubStylesToElement(subBox);
+    syncReviewSubRegionInputs(window.currentReviewSubRegion.x, window.currentReviewSubRegion.y, window.currentReviewSubRegion.w, window.currentReviewSubRegion.h);
+}
+
+function getReviewActiveSub(currentTime) {
+    const parseTc = (tc) => {
+        if (typeof tc === 'number') return tc;
+        if (!tc || typeof tc !== 'string') return 0;
+        const parts = tc.replace(',', '.').split(':');
+        if (parts.length === 3) return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
+        if (parts.length === 2) return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+        return parseFloat(tc) || 0;
+    };
+
+    // 1. Ưu tiên phụ đề thuyết minh mới (Narration Subtitles từ file SRT nạp vào hoặc vừa tạo)
+    if (Array.isArray(window.reviewNarrationSubtitles) && window.reviewNarrationSubtitles.length > 0) {
+        const found = window.reviewNarrationSubtitles.find(s => {
+            const start = typeof s.startSeconds === 'number' ? s.startSeconds : parseTc(s.start || (s.time ? s.time.split('-')[0] : 0));
+            const end = typeof s.endSeconds === 'number' ? s.endSeconds : parseTc(s.end || (s.time ? s.time.split('-')[1] : 0));
+            return currentTime >= start && currentTime <= end;
+        });
+        if (found) return (found.translation || found.text || found.content || '').trim();
+    }
+
+    // 2. Nếu đang xem tab Phụ đề gốc (Original SRT tab)
+    if (window.currentReviewScriptTab === 'original' && Array.isArray(window.reviewParsedSubtitles) && window.reviewParsedSubtitles.length > 0) {
+        const found = window.reviewParsedSubtitles.find(s => {
+            const start = typeof s.startSeconds === 'number' ? s.startSeconds : parseTc(s.start || (s.time ? s.time.split('-')[0] : 0));
+            const end = typeof s.endSeconds === 'number' ? s.endSeconds : parseTc(s.end || (s.time ? s.time.split('-')[1] : 0));
+            return currentTime >= start && currentTime <= end;
+        });
+        if (found) return (found.translation || found.text || found.content || '').trim();
+    }
+
+    // 3. Nếu có kịch bản review (Script sentences từ Bước 1 AI Recap)
+    if (window.reviewScriptSentences && window.reviewScriptSentences.length > 0 && window.currentReviewScriptTab !== 'original') {
+        let runningSeconds = 0;
+        for (let idx = 0; idx < window.reviewScriptSentences.length; idx++) {
+            const sentence = window.reviewScriptSentences[idx];
+            let start = runningSeconds;
+            let end = runningSeconds;
+            const wordCount = sentence.trim().split(/\s+/).filter(Boolean).length;
+            const duration = Math.max(1.2, parseFloat((wordCount / 3.5).toFixed(1)));
+            start = runningSeconds;
+            end = runningSeconds + duration;
+            runningSeconds = end;
+            if (currentTime >= start && currentTime <= end) {
+                return sentence;
+            }
+        }
+    }
+
+    // 4. Fallback phụ đề gốc (Original SRT) nếu không có narration
+    if (Array.isArray(window.reviewParsedSubtitles) && window.reviewParsedSubtitles.length > 0) {
+        const found = window.reviewParsedSubtitles.find(s => {
+            const start = typeof s.startSeconds === 'number' ? s.startSeconds : parseTc(s.start || (s.time ? s.time.split('-')[0] : 0));
+            const end = typeof s.endSeconds === 'number' ? s.endSeconds : parseTc(s.end || (s.time ? s.time.split('-')[1] : 0));
+            return currentTime >= start && currentTime <= end;
+        });
+        if (found) return (found.translation || found.text || found.content || '').trim();
+    }
+
+    return null;
+}
+
+function syncReviewSubtitle(currentTime) {
+    const isSubEnabled = document.getElementById('reviewSubtitlesEnabled')?.checked ?? true;
+    const subBox = document.getElementById('reviewSubPreviewBox');
+    if (!subBox) return;
+
+    if (!isSubEnabled && !isEditingReviewSubBox) {
+        subBox.style.display = 'none';
+        return;
+    }
+
+    if (isEditingReviewSubBox) {
+        return;
+    }
+
+    const activeText = getReviewActiveSub(currentTime);
+    if (activeText) {
+        let textSpan = subBox.querySelector('.sub-text-inner');
+        if (!textSpan) {
+            textSpan = document.createElement('span');
+            textSpan.className = 'sub-text-inner';
+            subBox.appendChild(textSpan);
+        }
+        textSpan.textContent = activeText;
+        applyReviewSubStylesToElement(subBox);
+        subBox.style.display = 'flex';
+    } else {
+        subBox.style.display = 'none';
+    }
+}
+window.syncReviewSubtitle = syncReviewSubtitle;
+
+function initReviewSubtitleSuite() {
+    // 1. Toggle Subtitles Switch
+    const toggleSub = document.getElementById('reviewSubtitlesEnabled');
+    if (toggleSub) {
+        toggleSub.addEventListener('change', () => {
+            const lbl = document.getElementById('reviewSubtitleToggleLabel');
+            if (lbl) lbl.textContent = toggleSub.checked ? 'Bật sub' : 'Tắt sub';
+            updateReviewSubPreview();
+            const curTime = (reviewVideoPlayer && reviewVideoPlayer.currentTime) || 0;
+            syncReviewSubtitle(curTime);
+        });
+    }
+
+    // 2. Presets Bar
+    const reviewPresets = {
+        yellow: { font: 'Montserrat', size: 24, color: '#fde047', outlineColor: '#000000', outline: 2, shadowColor: '#000000', shadowOffset: 0, bold: true, italic: false, uppercase: false, bgStyle: 'none' },
+        white: { font: 'Montserrat', size: 24, color: '#ffffff', outlineColor: '#000000', outline: 2, shadowColor: '#000000', shadowOffset: 0, bold: true, italic: false, uppercase: false, bgStyle: 'none' },
+        tiktok: { font: "'Be Vietnam Pro'", size: 26, color: '#ffffff', outlineColor: '#000000', outline: 0, shadowColor: '#000000', shadowOffset: 0, bold: true, italic: false, uppercase: true, bgStyle: 'color', bgColor: '#ef4444', bgOpacity: 90 },
+        neon: { font: 'Anton', size: 26, color: '#38bdf8', outlineColor: '#0284c7', outline: 2, shadowColor: '#38bdf8', shadowOffset: 8, bold: true, italic: false, uppercase: false, bgStyle: 'none' },
+        tag: { font: 'Inter', size: 22, color: '#f8fafc', outlineColor: '#000000', outline: 0, shadowColor: '#000000', shadowOffset: 0, bold: false, italic: false, uppercase: false, bgStyle: 'color', bgColor: '#0f172a', bgOpacity: 85 }
+    };
+
+    document.querySelectorAll('.review-preset-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const key = btn.getAttribute('data-preset');
+            const p = reviewPresets[key];
+            if (!p) return;
+
+            const fontEl = document.getElementById('reviewSubFont');
+            if (fontEl) fontEl.value = p.font;
+
+            const sizeEl = document.getElementById('reviewSubSize');
+            const sizeVal = document.getElementById('reviewSubSizeVal');
+            if (sizeEl) { sizeEl.value = p.size; if (sizeVal) sizeVal.textContent = `${p.size}px`; }
+
+            const colPick = document.getElementById('reviewSubColorPicker');
+            const colTxt = document.getElementById('reviewSubColorText');
+            if (colPick) { colPick.value = p.color; if (colTxt) colTxt.value = p.color; }
+
+            const outPick = document.getElementById('reviewSubOutlineColorPicker');
+            const outTxt = document.getElementById('reviewSubOutlineColorText');
+            if (outPick) { outPick.value = p.outlineColor; if (outTxt) outTxt.value = p.outlineColor; }
+
+            const outEl = document.getElementById('reviewSubOutline');
+            const outVal = document.getElementById('reviewSubOutlineVal');
+            if (outEl) { outEl.value = p.outline; if (outVal) outVal.textContent = `${p.outline}px`; }
+
+            const shPick = document.getElementById('reviewSubShadowColorPicker');
+            const shTxt = document.getElementById('reviewSubShadowColorText');
+            if (shPick) { shPick.value = p.shadowColor; if (shTxt) shTxt.value = p.shadowColor; }
+
+            const shEl = document.getElementById('reviewSubShadowOffset');
+            const shVal = document.getElementById('reviewSubShadowOffsetVal');
+            if (shEl) { shEl.value = p.shadowOffset; if (shVal) shVal.textContent = `${p.shadowOffset}px`; }
+
+            isReviewSubBold = p.bold;
+            isReviewSubItalic = p.italic;
+            isReviewSubUppercase = p.uppercase;
+
+            const btnB = document.getElementById('reviewSubBtnBold');
+            const btnI = document.getElementById('reviewSubBtnItalic');
+            const btnU = document.getElementById('reviewSubBtnUppercase');
+            if (btnB) { btnB.classList.toggle('active', isReviewSubBold); btnB.style.borderColor = isReviewSubBold ? '#38bdf8' : ''; btnB.style.color = isReviewSubBold ? '#38bdf8' : ''; }
+            if (btnI) { btnI.classList.toggle('active', isReviewSubItalic); btnI.style.borderColor = isReviewSubItalic ? '#38bdf8' : ''; btnI.style.color = isReviewSubItalic ? '#38bdf8' : ''; }
+            if (btnU) { btnU.classList.toggle('active', isReviewSubUppercase); btnU.style.borderColor = isReviewSubUppercase ? '#38bdf8' : ''; btnU.style.color = isReviewSubUppercase ? '#38bdf8' : ''; }
+
+            const bgEl = document.getElementById('reviewSubBgStyle');
+            if (bgEl) {
+                bgEl.value = p.bgStyle;
+                const bgColBox = document.getElementById('reviewSubBgColorConfig');
+                const bgBlurBox = document.getElementById('reviewSubBgBlurConfig');
+                if (bgColBox) bgColBox.style.display = p.bgStyle === 'color' ? 'block' : 'none';
+                if (bgBlurBox) bgBlurBox.style.display = p.bgStyle === 'blur' ? 'block' : 'none';
+            }
+
+            if (p.bgColor) {
+                const bgColPick = document.getElementById('reviewSubBgColorPicker');
+                const bgColTxt = document.getElementById('reviewSubBgColorText');
+                if (bgColPick) { bgColPick.value = p.bgColor; if (bgColTxt) bgColTxt.value = p.bgColor; }
+            }
+            if (p.bgOpacity !== undefined) {
+                const opEl = document.getElementById('reviewSubBgOpacity');
+                const opVal = document.getElementById('reviewSubBgOpacityVal');
+                if (opEl) { opEl.value = p.bgOpacity; if (opVal) opVal.textContent = `${p.bgOpacity}%`; }
+            }
+
+            updateReviewSubPreview();
+            const curTime = (reviewVideoPlayer && reviewVideoPlayer.currentTime) || 0;
+            syncReviewSubtitle(curTime);
+            showToast(`Áp dụng mẫu phụ đề: ${btn.textContent.trim()}`, 'info');
+        });
+    });
+
+    // 3. Sub-Tabs Navigation
+    const tabs = [
+        { btnId: 'tabReviewSubTypography', contentId: 'reviewSubTabContentTypography' },
+        { btnId: 'tabReviewSubColors', contentId: 'reviewSubTabContentColors' },
+        { btnId: 'tabReviewSubPosition', contentId: 'reviewSubTabContentPosition' }
+    ];
+    tabs.forEach(t => {
+        const btn = document.getElementById(t.btnId);
+        if (btn) {
+            btn.addEventListener('click', () => {
+                tabs.forEach(o => {
+                    document.getElementById(o.btnId)?.classList.remove('active');
+                    const c = document.getElementById(o.contentId);
+                    if (c) c.style.display = 'none';
+                });
+                btn.classList.add('active');
+                const activeC = document.getElementById(t.contentId);
+                if (activeC) activeC.style.display = 'block';
+            });
+        }
+    });
+
+    // 4. Typography Controls
+    document.getElementById('reviewSubFont')?.addEventListener('change', () => {
+        updateReviewSubPreview();
+    });
+
+    const btnB = document.getElementById('reviewSubBtnBold');
+    if (btnB) {
+        btnB.addEventListener('click', () => {
+            isReviewSubBold = !isReviewSubBold;
+            btnB.classList.toggle('active', isReviewSubBold);
+            btnB.style.borderColor = isReviewSubBold ? '#38bdf8' : '';
+            btnB.style.color = isReviewSubBold ? '#38bdf8' : '';
+            updateReviewSubPreview();
+        });
+    }
+
+    const btnI = document.getElementById('reviewSubBtnItalic');
+    if (btnI) {
+        btnI.addEventListener('click', () => {
+            isReviewSubItalic = !isReviewSubItalic;
+            btnI.classList.toggle('active', isReviewSubItalic);
+            btnI.style.borderColor = isReviewSubItalic ? '#38bdf8' : '';
+            btnI.style.color = isReviewSubItalic ? '#38bdf8' : '';
+            updateReviewSubPreview();
+        });
+    }
+
+    const btnU = document.getElementById('reviewSubBtnUppercase');
+    if (btnU) {
+        btnU.addEventListener('click', () => {
+            isReviewSubUppercase = !isReviewSubUppercase;
+            btnU.classList.toggle('active', isReviewSubUppercase);
+            btnU.style.borderColor = isReviewSubUppercase ? '#38bdf8' : '';
+            btnU.style.color = isReviewSubUppercase ? '#38bdf8' : '';
+            updateReviewSubPreview();
+        });
+    }
+
+    const sizeEl = document.getElementById('reviewSubSize');
+    if (sizeEl) {
+        sizeEl.addEventListener('input', (e) => {
+            const v = document.getElementById('reviewSubSizeVal');
+            if (v) v.textContent = `${e.target.value}px`;
+            updateReviewSubPreview();
+        });
+    }
+
+    // Alignment buttons
+    const alignBtns = [
+        { id: 'reviewSubAlignLeft', align: 'left' },
+        { id: 'reviewSubAlignCenter', align: 'center' },
+        { id: 'reviewSubAlignRight', align: 'right' }
+    ];
+    alignBtns.forEach(ab => {
+        const b = document.getElementById(ab.id);
+        if (b) {
+            b.addEventListener('click', () => {
+                reviewSubTextAlign = ab.align;
+                alignBtns.forEach(o => {
+                    const ob = document.getElementById(o.id);
+                    if (ob) {
+                        ob.classList.toggle('active', o.align === ab.align);
+                        ob.style.borderColor = o.align === ab.align ? '#38bdf8' : '';
+                        ob.style.color = o.align === ab.align ? '#38bdf8' : '';
+                    }
+                });
+                updateReviewSubPreview();
+            });
+        }
+    });
+
+    // Position Snap buttons
+    const posBtns = [
+        { id: 'reviewSubPosTop', y: 8 },
+        { id: 'reviewSubPosMiddle', y: 45 },
+        { id: 'reviewSubPosBottom', y: 81.5 }
+    ];
+    posBtns.forEach(pb => {
+        const b = document.getElementById(pb.id);
+        if (b) {
+            b.addEventListener('click', () => {
+                posBtns.forEach(o => {
+                    const ob = document.getElementById(o.id);
+                    if (ob) {
+                        ob.classList.toggle('active', o.id === pb.id);
+                        ob.style.borderColor = o.id === pb.id ? '#38bdf8' : '';
+                        ob.style.color = o.id === pb.id ? '#38bdf8' : '';
+                    }
+                });
+                const yEl = document.getElementById('reviewSubBoxY');
+                const yVal = document.getElementById('reviewSubBoxYVal');
+                if (yEl) { yEl.value = pb.y; if (yVal) yVal.textContent = `${pb.y}%`; }
+                window.currentReviewSubRegion.y = pb.y;
+                syncReviewSubRegionInputs(window.currentReviewSubRegion.x, pb.y, window.currentReviewSubRegion.w, window.currentReviewSubRegion.h);
+                updateReviewSubPreview();
+            });
+        }
+    });
+
+    // 5. Colors & Effects
+    function setupColorSync(pickId, textId) {
+        const pick = document.getElementById(pickId);
+        const text = document.getElementById(textId);
+        if (pick && text) {
+            pick.addEventListener('input', () => { text.value = pick.value; updateReviewSubPreview(); });
+            text.addEventListener('input', () => {
+                if (/^#[0-9A-Fa-f]{6}$/.test(text.value)) {
+                    pick.value = text.value;
+                    updateReviewSubPreview();
+                }
+            });
+        }
+    }
+    setupColorSync('reviewSubColorPicker', 'reviewSubColorText');
+    setupColorSync('reviewSubOutlineColorPicker', 'reviewSubOutlineColorText');
+    setupColorSync('reviewSubShadowColorPicker', 'reviewSubShadowColorText');
+    setupColorSync('reviewSubBgColorPicker', 'reviewSubBgColorText');
+
+    const outEl = document.getElementById('reviewSubOutline');
+    if (outEl) {
+        outEl.addEventListener('input', (e) => {
+            const v = document.getElementById('reviewSubOutlineVal');
+            if (v) v.textContent = `${e.target.value}px`;
+            updateReviewSubPreview();
+        });
+    }
+
+    const shEl = document.getElementById('reviewSubShadowOffset');
+    if (shEl) {
+        shEl.addEventListener('input', (e) => {
+            const v = document.getElementById('reviewSubShadowOffsetVal');
+            if (v) v.textContent = `${e.target.value}px`;
+            updateReviewSubPreview();
+        });
+    }
+
+    // 6. Position & Background Controls
+    const bgStyleEl = document.getElementById('reviewSubBgStyle');
+    if (bgStyleEl) {
+        bgStyleEl.addEventListener('change', () => {
+            const val = bgStyleEl.value;
+            const bgColBox = document.getElementById('reviewSubBgColorConfig');
+            const bgBlurBox = document.getElementById('reviewSubBgBlurConfig');
+            if (bgColBox) bgColBox.style.display = val === 'color' ? 'block' : 'none';
+            if (bgBlurBox) bgBlurBox.style.display = val === 'blur' ? 'block' : 'none';
+            updateReviewSubPreview();
+        });
+    }
+
+    const bgOpEl = document.getElementById('reviewSubBgOpacity');
+    if (bgOpEl) {
+        bgOpEl.addEventListener('input', (e) => {
+            const v = document.getElementById('reviewSubBgOpacityVal');
+            if (v) v.textContent = `${e.target.value}%`;
+            updateReviewSubPreview();
+        });
+    }
+
+    const bgBlurEl = document.getElementById('reviewSubBgBlur');
+    if (bgBlurEl) {
+        bgBlurEl.addEventListener('input', (e) => {
+            const v = document.getElementById('reviewSubBgBlurVal');
+            if (v) v.textContent = `${e.target.value}px`;
+            updateReviewSubPreview();
+        });
+    }
+
+    // Sliders for box dimensions & coordinates
+    ['reviewSubBoxWidth', 'reviewSubBoxHeight', 'reviewSubBoxY', 'reviewSubBoxX'].forEach(id => {
+        document.getElementById(id)?.addEventListener('input', () => {
+            const w = parseFloat(document.getElementById('reviewSubBoxWidth')?.value ?? 80);
+            const h = parseFloat(document.getElementById('reviewSubBoxHeight')?.value ?? 9.5);
+            const y = parseFloat(document.getElementById('reviewSubBoxY')?.value ?? 81.5);
+            const x = parseFloat(document.getElementById('reviewSubBoxX')?.value ?? 10);
+            window.currentReviewSubRegion = { x, y, w, h, customPos: true };
+            syncReviewSubRegionInputs(x, y, w, h);
+            updateReviewSubPreview();
+        });
+    });
+
+    // Toggle 8-point interactive box on video
+    document.getElementById('reviewBtnToggleSubBox')?.addEventListener('click', () => showReviewSubAdjustBox());
+
+    // Center sub box
+    document.getElementById('reviewBtnCenterSubBox')?.addEventListener('click', () => {
+        const w = window.currentReviewSubRegion ? window.currentReviewSubRegion.w : 80;
+        const centeredX = Math.max(0, Math.round(((100 - w) / 2) * 10) / 10);
+        window.currentReviewSubRegion.x = centeredX;
+        syncReviewSubRegionInputs(centeredX, window.currentReviewSubRegion.y, window.currentReviewSubRegion.w, window.currentReviewSubRegion.h);
+        updateReviewSubPreview();
+        showToast('Đã căn giữa khung phụ đề theo chiều ngang 🎯', 'info');
+    });
+
+    // Reset default button
+    document.getElementById('btnResetReviewSubStyle')?.addEventListener('click', () => {
+        const p = reviewPresets.white;
+        const fontEl = document.getElementById('reviewSubFont');
+        if (fontEl) fontEl.value = 'Montserrat';
+        const sizeEl = document.getElementById('reviewSubSize');
+        if (sizeEl) { sizeEl.value = 24; const v = document.getElementById('reviewSubSizeVal'); if (v) v.textContent = '24px'; }
+        const colPick = document.getElementById('reviewSubColorPicker');
+        if (colPick) { colPick.value = '#ffffff'; const t = document.getElementById('reviewSubColorText'); if (t) t.value = '#ffffff'; }
+        const outPick = document.getElementById('reviewSubOutlineColorPicker');
+        if (outPick) { outPick.value = '#000000'; const t = document.getElementById('reviewSubOutlineColorText'); if (t) t.value = '#000000'; }
+        const outEl = document.getElementById('reviewSubOutline');
+        if (outEl) { outEl.value = 1; const v = document.getElementById('reviewSubOutlineVal'); if (v) v.textContent = '1px'; }
+        const shPick = document.getElementById('reviewSubShadowColorPicker');
+        if (shPick) { shPick.value = '#000000'; const t = document.getElementById('reviewSubShadowColorText'); if (t) t.value = '#000000'; }
+        const shEl = document.getElementById('reviewSubShadowOffset');
+        if (shEl) { shEl.value = 0; const v = document.getElementById('reviewSubShadowOffsetVal'); if (v) v.textContent = '0px'; }
+        isReviewSubBold = true;
+        isReviewSubItalic = false;
+        isReviewSubUppercase = false;
+        reviewSubTextAlign = 'center';
+        window.currentReviewSubRegion = { x: 10, y: 81.5, w: 80, h: 9.5, customPos: true };
+        syncReviewSubRegionInputs(10, 81.5, 80, 9.5);
+        if (bgStyleEl) bgStyleEl.value = 'none';
+        const bgColBox = document.getElementById('reviewSubBgColorConfig');
+        const bgBlurBox = document.getElementById('reviewSubBgBlurConfig');
+        if (bgColBox) bgColBox.style.display = 'none';
+        if (bgBlurBox) bgBlurBox.style.display = 'none';
+        updateReviewSubPreview();
+        showToast('Đã khôi phục cài đặt phụ đề Review về mặc định 🔄', 'info');
+    });
+
+    window.addEventListener('resize', () => {
+        updateReviewSubPreview();
+    });
+
+    // Initial render
+    updateReviewSubPreview();
 }
 
 setupReviewVideoPlayerController();
 setupInteractiveReviewLogo();
+initReviewSubtitleSuite();
 updateReviewPlayerAspectRatio(reviewAspectRatio || '16:9');
 
 // ═════════════════════════════════════════════════════════════
@@ -18450,6 +22334,18 @@ const projectManager = {
             // 4. Khôi phục Logo Overlay
             if (proj.logo_overlay && window.currentReviewLogoState) {
                 Object.assign(window.currentReviewLogoState, proj.logo_overlay);
+                const rLogoInput = document.getElementById('reviewLogoInputPath');
+                const rLogoEnable = document.getElementById('reviewEnableLogoWatermark');
+                const rLogoConfig = document.getElementById('reviewLogoConfigPanel');
+                const rLogoOpacity = document.getElementById('reviewLogoOpacity');
+                const rLogoOpacityVal = document.getElementById('reviewLogoOpacityVal');
+                if (rLogoInput && proj.logo_overlay.path) rLogoInput.value = proj.logo_overlay.path;
+                if (rLogoEnable) rLogoEnable.checked = Boolean(proj.logo_overlay.enabled);
+                if (rLogoConfig) rLogoConfig.style.display = proj.logo_overlay.enabled ? 'flex' : 'none';
+                if (rLogoOpacity && typeof proj.logo_overlay.opacity === 'number') {
+                    rLogoOpacity.value = proj.logo_overlay.opacity;
+                    if (rLogoOpacityVal) rLogoOpacityVal.textContent = `${proj.logo_overlay.opacity}%`;
+                }
                 if (typeof window.renderReviewLogo === 'function') {
                     window.renderReviewLogo();
                 }
@@ -19172,3 +23068,55 @@ try {
 
 
 
+
+const btnViewOnSrtTable = document.getElementById('btnViewOnSrtTable');
+if (btnViewOnSrtTable) {
+    btnViewOnSrtTable.addEventListener('click', () => {
+        const { missing, ghost } = currentInspectorResults;
+        
+        // Đánh dấu cờ ghost cho các câu trong srtData
+        ghost.forEach(g => {
+            const found = srtData.find(s => String(s.id) === String(g.sub_id));
+            if (found) {
+                found.ai_flag = 'ghost';
+                found.ai_reason = g.message || 'Không thấy chữ trên video';
+            }
+        });
+
+        // Bổ sung các câu missing vào srtData nếu chưa có
+        missing.forEach(m => {
+            const exists = srtData.some(s => s.text === m.text && Math.abs((s.startSeconds || 0) - m.start_sec) < 1.0);
+            if (!exists) {
+                srtData.push({
+                    id: srtData.length + 1,
+                    start: m.start,
+                    end: m.end,
+                    startSeconds: m.start_sec,
+                    endSeconds: m.end_sec,
+                    text: m.text,
+                    translation: '',
+                    ai_flag: 'missing_added',
+                    is_auto_filled: true
+                });
+            }
+        });
+
+        // Sắp xếp lại theo timeline
+        srtData.sort((a, b) => {
+            const ta = typeof a.startSeconds === 'number' ? a.startSeconds : parseTimeToSeconds(a.start);
+            const tb = typeof b.startSeconds === 'number' ? b.startSeconds : parseTimeToSeconds(b.start);
+            return ta - tb;
+        });
+        srtData.forEach((s, i) => s.id = i + 1);
+
+        // Kích hoạt filter AI Check trên thanh công cụ
+        const radioAiCheck = document.querySelector('input[name="srtFilter"][value="ai_check"]');
+        if (radioAiCheck) {
+            radioAiCheck.checked = true;
+        }
+
+        renderSrtTable();
+        closeSubtitleInspectorModal();
+        showToast('Đang hiển thị các câu AI phát hiện lỗi! Bấm vào từng câu để video tự động nhảy tới đối chiếu.', 'info');
+    });
+}

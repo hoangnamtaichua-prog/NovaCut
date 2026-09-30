@@ -348,6 +348,36 @@ def _worker_publish(job_id, target_platforms):
         except Exception as exc:
             update_platform_status(job_id, p_id, "FAILED", message=f"Lỗi ngoại lệ: {exc}")
 
+    try:
+        final_job = get_publish_job(job_id)
+        if final_job:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                v_title = final_job.get("title") or (os.path.basename(final_job.get("video_path", "")) if final_job.get("video_path") else f"Job {job_id[:8]}")
+                v_path = final_job.get("video_path", "")
+                j_status = final_job.get("status", "COMPLETED")
+                p_summary = ", ".join([f"{p.get('platform_id')}: {p.get('status')}" for p in final_job.get("platforms", [])])
+                if j_status in ("PUBLISHED", "PARTIAL"):
+                    notifier.notify_task_success(
+                        task_type='social',
+                        task_title='Đăng Video Mạng Xã Hội',
+                        video_title=v_title,
+                        output_path=v_path,
+                        status_text=f"Đã đăng tải ({j_status})",
+                        extra_info={'Trạng thái các nền tảng': p_summary}
+                    )
+                elif j_status in ("FAILED", "NEEDS_ACTION"):
+                    notifier.notify_task_failure(
+                        task_type='social',
+                        task_title='Đăng Video Mạng Xã Hội',
+                        video_title=v_title,
+                        error_message=f"Đăng tải thất bại. Chi tiết: {p_summary}"
+                    )
+    except Exception as _te:
+        import logging
+        logging.getLogger(__name__).warning(f"[Telegram] Error sending social publish notification: {_te}")
+
 
 def start_background_publish(job_id, platform_ids=None):
     job = get_publish_job(job_id)

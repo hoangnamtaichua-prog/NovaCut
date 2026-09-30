@@ -212,21 +212,46 @@ def handle_synthesize_batch(req: Dict[str, Any]) -> Dict[str, Any]:
         target_ref_audio = req.get("ref_audio")
     elif voice_id in _ENROLLED_VOICES:
         target_voice = _ENROLLED_VOICES[voice_id]
-    elif voice_id.startswith("local_"):
+    else:
         # Check preset name mapping
         preset_map = {
             "local_ngoc_huyen": "Ngọc Huyền",
+            "ngoc_huyen": "Ngọc Huyền",
             "local_minh_duc": "Minh Đức",
+            "minh_duc": "Minh Đức",
             "local_truc_ly": "Trúc Ly",
+            "truc_ly": "Trúc Ly",
             "local_thai_son": "Thái Sơn",
+            "thai_son": "Thái Sơn",
             "local_thuc_doan": "Thục Đoan",
+            "thuc_doan": "Thục Đoan",
             "local_quang_son": "Quang Sơn",
+            "quang_son": "Quang Sơn",
             "local_ngoc_tran": "Ngọc Trân",
-            "local_adam": "Adam (EN)",
+            "ngoc_tran": "Ngọc Trân",
+            "local_adam": "Adam",
+            "kokoro_am_adam": "Adam",
+            "local_kokoro_am_adam": "Adam",
+            "en_adam": "Adam",
+            "adam": "Adam",
         }
-        target_voice = preset_map.get(voice_id, "Ngọc Huyền")
-    else:
-        target_voice = "Ngọc Huyền"
+        if voice_id in preset_map:
+            target_voice = preset_map[voice_id]
+        else:
+            # Dynamic fallback preserving gender & language
+            try:
+                import custom_voices
+                profile = custom_voices.resolve_voice_profile(voice_id)
+                is_male = profile.get("gender") == "male"
+                is_en = "en" in (profile.get("lang") or "").lower()
+                if is_en and is_male:
+                    target_voice = "Adam"
+                elif is_male:
+                    target_voice = "Minh Đức"
+                else:
+                    target_voice = "Ngọc Huyền"
+            except Exception:
+                target_voice = "Minh Đức" if any(w in str(voice_id).lower() for w in ['nam', 'duc', 'dung', 'dat', 'adam', 'guy', 'male']) else "Ngọc Huyền"
 
     batch_size = int(req.get("batch_size", 8))
     speed = float(req.get("speed", 1.0))

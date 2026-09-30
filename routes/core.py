@@ -573,11 +573,17 @@ def api_general_open_folder():
     try:
         if os.name == 'nt':
             if os.path.isdir(norm_path):
-                subprocess.Popen(['explorer', norm_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    os.startfile(norm_path)
+                except Exception:
+                    subprocess.Popen(f'explorer "{norm_path}"', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.Popen(['explorer', f'/select,{norm_path}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    subprocess.Popen(f'explorer /select,"{norm_path}"', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    os.startfile(os.path.dirname(norm_path))
         elif sys.platform == 'darwin':
-            args = ['open', norm_path if os.path.isdir(norm_path) else os.path.dirname(norm_path)]
+            args = ['open', '-R', norm_path] if not os.path.isdir(norm_path) else ['open', norm_path]
             subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             args = ['xdg-open', norm_path if os.path.isdir(norm_path) else os.path.dirname(norm_path)]
@@ -646,9 +652,9 @@ def test_openai_key():
     data = request.json or {}
     api_key = data.get('openai_key') or data.get('openaiKey')
     base_url = data.get('openai_base_url') or data.get('openaiBaseUrl') or 'https://api.openai.com/v1'
-    model = data.get('openai_model') or data.get('openaiModel') or 'gpt-5.6-luna-pro-batch'
-    if model == 'gpt-5.6-luna':
-        model = 'gpt-5.6-luna-pro-batch'
+    model = data.get('openai_model') or data.get('openaiModel') or 'gpt-6-luna'
+    if model in ['gpt-5.6-luna', 'gpt-5.6-luna-pro', 'gpt-6-luna-pro']:
+        model = 'gpt-6-luna'
 
     if not api_key or str(api_key).startswith('•') or data.get('test_vip'):
         # Tự động đọc Key thật từ file cấu hình / bản quyền VIP

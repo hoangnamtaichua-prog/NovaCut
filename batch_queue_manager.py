@@ -48,6 +48,7 @@ class BatchTask:
         self.source_type = data.get('source_type', 'url') # 'url' or 'file'
         self.source_url = data.get('source_url', '')
         self.file_path = data.get('file_path', '')
+        self.srt_path = data.get('srt_path', '')
         self.title = data.get('title') or (os.path.basename(self.file_path) if self.file_path else self.source_url)
         self.thumbnail = data.get('thumbnail', '')
         self.duration = float(data.get('duration', 0.0))
@@ -73,6 +74,7 @@ class BatchTask:
             'source_type': self.source_type,
             'source_url': self.source_url,
             'file_path': self.file_path,
+            'srt_path': self.srt_path,
             'title': self.title,
             'thumbnail': self.thumbnail,
             'duration': self.duration,
@@ -208,9 +210,12 @@ class BatchQueueManager:
                     else:
                         if not is_path_allowed(clean, must_exist=True, extensions=VIDEO_EXTENSIONS):
                             continue
+                        cand_srt = f"{os.path.splitext(clean)[0]}.srt"
+                        has_cand_srt = os.path.exists(cand_srt) and os.path.getsize(cand_srt) > 10
                         t = BatchTask({
                             'source_type': 'file',
                             'file_path': clean,
+                            'srt_path': cand_srt if has_cand_srt else '',
                             'preset': preset,
                             'preset_config': preset_config
                         })
@@ -229,9 +234,12 @@ class BatchQueueManager:
                                 full_path = os.path.join(root, file_name)
                                 if os.path.splitext(file_name)[1].lower() not in VIDEO_EXTENSIONS:
                                     continue
+                                c_srt = f"{os.path.splitext(full_path)[0]}.srt"
+                                has_c_srt = os.path.exists(c_srt) and os.path.getsize(c_srt) > 10
                                 t = BatchTask({
                                     'source_type': 'file',
                                     'file_path': full_path,
+                                    'srt_path': c_srt if has_c_srt else '',
                                     'preset': item_preset,
                                     'preset_config': dict(item_config) if isinstance(item_config, dict) else preset_config
                                 })
@@ -241,6 +249,12 @@ class BatchQueueManager:
                     else:
                         if item.get('source_type') == 'file' and fp and not is_path_allowed(str(fp), must_exist=True, extensions=VIDEO_EXTENSIONS):
                             continue
+                        item_srt = item.get('srt_path', '')
+                        if not item_srt and fp and isinstance(fp, str):
+                            c_srt = f"{os.path.splitext(fp.strip())[0]}.srt"
+                            if os.path.exists(c_srt) and os.path.getsize(c_srt) > 10:
+                                item_srt = c_srt
+                        item['srt_path'] = item_srt
                         item['preset'] = item_preset
                         item['preset_config'] = item_config
                         t = BatchTask(item)
@@ -763,29 +777,68 @@ class BatchQueueManager:
         def check_stop():
             return self.stop_requested or task.status == 'cancelled'
 
-        update_progress(38, "Đang kiểm tra / bóc tách phụ đề tự động (ASR Whisper)...")
+        update_progress(35, "Đang kiểm tra / bóc tách phụ đề tự động (ASR Whisper)...")
         job_temp_dir = os.path.join(os.path.dirname(output_path), '.batch_temp', task.id)
         os.makedirs(job_temp_dir, exist_ok=True)
 
-        srt_path = self.ensure_video_srt(
-            video_path=video_path,
-            output_dir=job_temp_dir,
-            language=config.get('language', 'auto'),
-            update_progress=update_progress,
-            check_stop=check_stop
-        )
+        srt_path = getattr(task, 'srt_path', None) or config.get('srt_path')
+        if not srt_path or not os.path.exists(srt_path):
+            srt_path = self.ensure_video_srt(
+                video_path=video_path,
+                output_dir=job_temp_dir,
+                language=config.get('language', 'auto'),
+                update_progress=update_progress,
+                check_stop=check_stop
+            )
         if not srt_path or not os.path.exists(srt_path):
             raise RuntimeError("Trích xuất ASR phụ đề thất bại")
 
-        update_progress(55, "Đang tạo kịch bản tóm tắt AI (LLM Recap)...")
+        review_mode = config.get('mode') or config.get('review_mode', 'recap')
+        update_progress(50, f"Đang tạo kịch bản AI ({'Kể lại Narration' if review_mode == 'narration' else 'Tóm tắt Review'})...")
         import auto_edit_pipeline
         target_minutes = float(config.get('target_minutes') or 5.0)
-        voice_speed = float(config.get('voice_speed') or 1.0)
-        bgm_vol = int(config.get('bgm_volume') if config.get('bgm_volume') is not None else 12)
+        voice_speed = float(config.get('voice_speed') or 1.10)
+        
+        bgm_config = config.get('bgm')
+        if not bgm_config or not isinstance(bgm_config, dict):
+            raw_vol = config.get('bgm_volume')
+            bgm_vol = int(raw_vol * 100) if isinstance(raw_vol, float) else int(raw_vol if raw_vol is not None else 12)
+            bgm_config = {
+                'enabled': bool(config.get('bgm_enabled', True) and bgm_vol > 0),
+                'volume': bgm_vol,
+                'preset': config.get('bgm_preset', 'Blade Runner 2049.mp3'),
+                'filename': config.get('bgm_preset', 'Blade Runner 2049.mp3'),
+                'ducking': bool(config.get('bgm_ducking', True))
+            }
+
+        stem_config = config.get('stem_separation')
+        if not isinstance(stem_config, dict):
+            stem_config = {
+                'enabled': bool(stem_config),
+                'remove_vocals': bool(config.get('stem_remove_vocals', True)),
+                'keep_sfx': bool(config.get('stem_keep_sfx', True))
+            }
+
+        blur_config = config.get('dynamic_blur')
+        if not isinstance(blur_config, dict):
+            blur_config = {
+                'enabled': bool(blur_config if blur_config is not None else True),
+                'intensity': int(config.get('blur_intensity', 15)),
+                'use_ai_scan': bool(config.get('blur_use_ai_scan', True))
+            }
+
+        logo_config = config.get('logo') or {}
+        if not isinstance(logo_config, dict):
+            logo_config = {}
+        logo_path = config.get('logo_path') or logo_config.get('path', '')
+        if logo_path:
+            logo_config['path'] = logo_path
+            logo_config['enabled'] = True
 
         payload = {
             'video_path': video_path,
             'srt_path': srt_path,
+            'mode': 'narration' if review_mode == 'narration' else 'api',
             'voice_id': config.get('voice_id', 'ngoc_huyen'),
             'voice_speed': voice_speed,
             'target_minutes': target_minutes,
@@ -794,17 +847,32 @@ class BatchQueueManager:
             'output_name': os.path.basename(output_path),
             'aspect_ratio': config.get('aspect_ratio', '9:16'),
             'auto_subtitles': bool(config.get('auto_subtitles', True)),
+            'subtitles_enabled': bool(config.get('auto_subtitles', True)),
+            'sub_font': config.get('sub_font', 'Montserrat'),
             'openai_model': config.get('openai_model', 'gpt-5.6-luna'),
-            'bgm': config.get('bgm', {'enabled': bgm_vol > 0, 'volume': bgm_vol}),
+            'bgm': bgm_config,
             'review_style': config.get('review_style', 'dramatic'),
-            'custom_style_prompt': config.get('custom_style_prompt', ''),
+            'custom_style_prompt': config.get('custom_prompt') or config.get('custom_style_prompt', ''),
+            'pacing': config.get('pacing', 'normal'),
+            'enable_scene_detect': bool(config.get('enable_scene_detect', True)),
+            'snap_threshold': float(config.get('snap_threshold', 0.6)),
+            'min_clip_duration': float(config.get('min_clip_duration', 1.2)),
+            'enable_crossfade': bool(config.get('enable_crossfade', False)),
+            'stem_separation': stem_config,
+            'remove_original_vocals': bool(stem_config.get('remove_vocals', False)),
+            'dynamic_blur': blur_config,
+            'logo': logo_config,
             'temp_dir': job_temp_dir,
             'skip_history_recording': True
         }
 
-        update_progress(65, "Đang tạo giọng đọc TTS & cắt ghép phân cảnh...")
+        update_progress(65, "Đang xử lý lồng tiếng TTS & cắt ghép phân cảnh...")
         last_error_msg = None
-        gen = auto_edit_pipeline.run_auto_edit_workflow(payload, check_stop)
+        if review_mode == 'narration':
+            gen = auto_edit_pipeline.run_narration_workflow(payload, check_stop)
+        else:
+            gen = auto_edit_pipeline.run_auto_edit_workflow(payload, check_stop)
+
         for chunk in gen:
             if check_stop():
                 task.status = 'cancelled'
@@ -820,7 +888,7 @@ class BatchQueueManager:
                         update_progress(scaled)
                     except Exception:
                         pass
-                elif any(k in line for k in ['Render', 'FFmpeg', 'TTS', 'Bước', 'kịch bản', 'timeline']):
+                elif any(k in line for k in ['Render', 'FFmpeg', 'TTS', 'Bước', 'kịch bản', 'timeline', 'Ghép', 'Lồng tiếng']):
                     update_progress(task.progress, line[:80])
 
         if last_error_msg and not os.path.exists(output_path):

@@ -36,7 +36,22 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
 
     # 0. Local Voice Engine (High Quality Preset & Instant Cloned Voices)
     import custom_voices
-    voice_profile = custom_voices.get_voice_by_id(voice_id)
+    voice_profile = custom_voices.resolve_voice_profile(voice_id)
+    print(f"[AI Dubbing] Synthesizing: voice_id='{voice_id}', gender='{voice_profile.get('gender')}', lang='{voice_profile.get('lang')}', provider='{voice_profile.get('provider')}'")
+
+    # Bảo vệ câu thoại: nếu văn bản có dấu tiếng Việt nhưng người dùng chọn giọng tiếng Anh (như Adam/Guy)
+    has_vi_diacritics = bool(re.search(r'[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]', text, re.IGNORECASE))
+    is_voice_en = any(w in str(voice_id).lower() for w in ['adam', 'en_', 'en-', 'guy', 'jenny', 'heart', 'michael', 'nicole', 'us'])
+    if has_vi_diacritics and is_voice_en:
+        is_male = voice_profile.get('gender') == 'male' or any(w in str(voice_id).lower() for w in ['adam', 'nam', 'duc', 'dung', 'dat', 'guy', 'michael'])
+        target_vi_voice = 'local_minh_duc' if is_male else 'local_ngoc_huyen'
+        print(f"[AI Dubbing] Phát hiện phụ đề tiếng Việt nhưng chọn giọng tiếng Anh ('{voice_id}'). Tự động chuyển sang giọng {('Nam' if is_male else 'Nữ')} Việt ('{target_vi_voice}') để phát âm chuẩn xác, không bị câm câu.")
+        return synthesize_sentence(text, target_vi_voice, speed, output_path, open_speaker_key, **kwargs)
+
+    # Chuẩn hóa voice_id Adam sang local_adam nếu dùng local_voice
+    if any(w in str(voice_id).lower() for w in ['kokoro_am_adam', 'en_adam', 'local_adam']) or voice_id == 'adam':
+        voice_id = 'local_adam'
+
     if (voice_profile and voice_profile.get('provider') == 'local_voice') or voice_id.startswith('local_'):
         try:
             import local_voice_engine
@@ -49,25 +64,29 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
                 target_channels=kwargs.get('target_channels')
             )
         except Exception as e:
-            print(f"[Local Voice] Synthesis error: {e}, falling back to Edge-TTS...")
-            edge_fallback = "edge_vi-VN-HoaiMyNeural" if any(f in voice_id for f in ['huyen', 'trinh', 'linh', 'ly', 'ngoc', 'female']) else "edge_vi-VN-NamMinhNeural"
+            print(f"[Local Voice] Synthesis error: {e}, falling back to Edge-TTS preserving gender/lang...")
+            edge_fallback = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
             return synthesize_sentence(text, edge_fallback, speed, output_path, open_speaker_key, **kwargs)
 
     # 0.1. RVC Voice Clone (Custom Trained Models)
     rvc_profile = voice_profile
     if (rvc_profile and rvc_profile.get('provider') == 'rvc') or voice_id.startswith('rvc_'):
-        base_voice = rvc_profile.get('base_voice', 'edge_vi-VN-HoaiMyNeural') if rvc_profile else 'edge_vi-VN-HoaiMyNeural'
+        base_voice = rvc_profile.get('base_voice')
+        if not base_voice:
+            base_voice = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
         temp_base_audio = os.path.join(os.path.dirname(os.path.abspath(output_path)), f"temp_base_{int(time.time()*1000)}.wav")
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         try:
             model_path = rvc_profile.get('model_path') if rvc_profile else None
             if not model_path or not os.path.exists(model_path):
-                print(f"[RVC] Không tìm thấy tệp model RVC ({model_path}), tự động chuyển sang giọng đọc Local Voice ONNX...")
+                print(f"[RVC] Không tìm thấy tệp model RVC ({model_path}), tự động chuyển sang giọng đọc dự phòng cùng giới tính/ngôn ngữ...")
+                fb_voice = custom_voices.get_fallback_voice(voice_id, target_provider='local_voice')
                 try:
                     import local_voice_engine
-                    return local_voice_engine.synthesize(text=text, voice_id="local_ngoc_huyen", speed=speed, output_path=output_path)
+                    return local_voice_engine.synthesize(text=text, voice_id=fb_voice, speed=speed, output_path=output_path)
                 except Exception:
-                    return synthesize_sentence(text, "edge_vi-VN-HoaiMyNeural", speed, output_path)
+                    fb_edge = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
+                    return synthesize_sentence(text, fb_edge, speed, output_path)
 
             synthesize_sentence(text, base_voice, speed, temp_base_audio, open_speaker_key)
             
@@ -92,12 +111,14 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
             )
             return output_path
         except Exception as rvc_err:
-            print(f"[RVC] Lỗi chuyển đổi giọng RVC ({rvc_err}), fallback sang Local Voice ONNX...")
+            print(f"[RVC] Lỗi chuyển đổi giọng RVC ({rvc_err}), fallback sang giọng cùng giới tính...")
+            fb_voice = custom_voices.get_fallback_voice(voice_id, target_provider='local_voice')
             try:
                 import local_voice_engine
-                return local_voice_engine.synthesize(text=text, voice_id="local_ngoc_huyen", speed=speed, output_path=output_path)
+                return local_voice_engine.synthesize(text=text, voice_id=fb_voice, speed=speed, output_path=output_path)
             except Exception:
-                return synthesize_sentence(text, "edge_vi-VN-HoaiMyNeural", speed, output_path)
+                fb_edge = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
+                return synthesize_sentence(text, fb_edge, speed, output_path)
         finally:
             if os.path.exists(temp_base_audio):
                 try:
@@ -130,25 +151,29 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
                 time.sleep(0.5)
                 
         if not success:
-            print(f"Edge-TTS failed after 3 attempts ({last_err}), automatically falling back to Local Voice offline...")
+            print(f"Edge-TTS failed after 3 attempts ({last_err}), automatically falling back to offline voice preserving gender/lang...")
+            fb_local = custom_voices.get_fallback_voice(voice_id, target_provider='local_voice')
             try:
                 import local_voice_engine
-                return local_voice_engine.synthesize(text=text, voice_id="local_ngoc_huyen", speed=speed, output_path=output_path)
+                return local_voice_engine.synthesize(text=text, voice_id=fb_local, speed=speed, output_path=output_path)
             except Exception:
                 pass
-            kokoro_fallback = 'ngoc_huyen' if 'hoaimy' in raw_voice.lower() or 'female' in raw_voice.lower() else 'manh_dung'
+            kokoro_fallback = custom_voices.get_fallback_voice(voice_id, target_provider='kokoro')
             return synthesize_sentence(text, kokoro_fallback, speed, output_path)
             
         return output_path
         
     # 2. Kokoro / Offline Voices (Ưu tiên Local Voice ONNX Lite 48kHz không cần EXE)
-    is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro']
+    is_kokoro = voice_id.startswith('kokoro_') or voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro', 'adam', 'local_adam']
     
     if is_kokoro or not open_speaker_key:
         # 2.1 Thử Local Voice ONNX Lite Engine trước (In-process, zero-setup)
         try:
             import local_voice_engine
-            local_vid = f"local_{voice_id}" if not voice_id.startswith('local_') else voice_id
+            if any(w in voice_id.lower() for w in ['adam']):
+                local_vid = "local_adam"
+            else:
+                local_vid = f"local_{voice_id}" if not voice_id.startswith('local_') else voice_id
             return local_voice_engine.synthesize(text=text, voice_id=local_vid, speed=speed, output_path=output_path)
         except Exception as e_lv:
             print(f"[Local Voice ONNX] Thử Kokoro EXE vì: {e_lv}")
@@ -168,7 +193,10 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
                 break
 
         if kokoro_exe:
-            voice_target = voice_id if voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc'] else 'ngoc_huyen'
+            if voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat']:
+                voice_target = voice_id
+            else:
+                voice_target = custom_voices.get_fallback_voice(voice_id, target_provider='kokoro')
             cmd = [
                 kokoro_exe,
                 "--text", text,
@@ -181,8 +209,8 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
             if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 100:
                 return output_path
 
-        # 2.3 Fallback an toàn sang Edge-TTS Miễn phí (Không cần API Key)
-        fallback_edge_voice = "edge_vi-VN-HoaiMyNeural" if any(f in voice_id for f in ['huyen', 'trinh', 'linh', 'heart', 'nicole']) else "edge_vi-VN-NamMinhNeural"
+        # 2.3 Fallback an toàn sang Edge-TTS Miễn phí (Bảo toàn giới tính & ngôn ngữ)
+        fallback_edge_voice = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
         return synthesize_sentence(text, fallback_edge_voice, speed, output_path)
     else:
         # 3. Call OpenSpeaker (with Retry & Kokoro Fallback)
@@ -221,9 +249,10 @@ def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=Non
                 last_error = e
                 time.sleep(1.0)
                 
-        # Fallback to Kokoro if OpenSpeaker fails
-        print(f"OpenSpeaker failed after 3 attempts ({last_error}), falling back to Kokoro offline for sentence...")
-        return synthesize_sentence(text, 'ngoc_huyen', speed, output_path)
+        # Fallback preserving gender/lang if OpenSpeaker fails
+        print(f"OpenSpeaker failed after 3 attempts ({last_error}), falling back to offline voice preserving gender/lang...")
+        fb_kokoro = custom_voices.get_fallback_voice(voice_id, target_provider='kokoro')
+        return synthesize_sentence(text, fb_kokoro, speed, output_path)
 
 def synthesize_openspeaker_with_transcript(text, voice_id, speed, output_audio_path, output_srt_path, open_speaker_key):
     """
@@ -502,9 +531,9 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
 
     # Check OpenSpeaker key if using OpenSpeaker voice
     import custom_voices
-    voice_profile = custom_voices.get_voice_by_id(voice_id) or {}
-    is_local = voice_id.startswith('local_') or voice_profile.get('provider') == 'local_voice'
-    is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro']
+    voice_profile = custom_voices.resolve_voice_profile(voice_id) or {}
+    is_local = voice_id.startswith('local_') or voice_profile.get('provider') == 'local_voice' or any(w in voice_id.lower() for w in ['adam', 'local_adam'])
+    is_kokoro = voice_id.startswith('kokoro_') or voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro', 'adam', 'local_adam']
     is_edge = voice_id.startswith('edge_')
     is_rvc = voice_id.startswith('rvc_') or voice_profile.get('provider') == 'rvc'
     
@@ -634,9 +663,37 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                         sentence_audios.append((item["target_out"], item["startSeconds"]))
                         yield ("progress", f"🎙️ [Tiến độ {completed_count}/{total}] ({pct}%) Đang tạo giọng câu #{item['idx']+1}: \"{item['text'][:26]}...\" ({item['startSeconds']:.1f}s)")
                     else:
-                        err = res.get("error", "Lỗi tạo audio GPU")
-                        error_list.append((item["idx"], item["text"], err))
-                        yield ("progress", f"⚠️ [Tiến độ {completed_count}/{total}] Lỗi tại câu #{item['idx']+1} (mốc {item['startSeconds']:.1f}s): {err}")
+                        # Cứu hộ tự động qua synthesize_sentence (thử lại qua CPU Engine hoặc Edge-TTS)
+                        fb_success = False
+                        try:
+                            synthesize_sentence(
+                                item["text"], voice_id, speed, item["target_out"], open_speaker_key,
+                                target_sample_rate=sample_rate, target_channels=channels
+                            )
+                            if os.path.exists(item["target_out"]) and os.path.getsize(item["target_out"]) > 100:
+                                fb_success = True
+                            else:
+                                fb_voice = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
+                                synthesize_sentence(
+                                    item["text"], fb_voice, speed, item["target_out"], open_speaker_key,
+                                    target_sample_rate=sample_rate, target_channels=channels
+                                )
+                                if os.path.exists(item["target_out"]) and os.path.getsize(item["target_out"]) > 100:
+                                    fb_success = True
+                        except Exception:
+                            pass
+
+                        if fb_success:
+                            try:
+                                shutil.copyfile(item["target_out"], item["cached_file"])
+                            except Exception:
+                                pass
+                            sentence_audios.append((item["target_out"], item["startSeconds"]))
+                            yield ("progress", f"🎙️ [Cứu hộ thành công] ({pct}%) Đã tạo giọng câu #{item['idx']+1}: \"{item['text'][:26]}...\" ({item['startSeconds']:.1f}s)")
+                        else:
+                            err = res.get("error", "Lỗi tạo audio GPU")
+                            error_list.append((item["idx"], item["text"], err))
+                            yield ("progress", f"⚠️ [Tiến độ {completed_count}/{total}] Lỗi tại câu #{item['idx']+1} (mốc {item['startSeconds']:.1f}s): {err}")
 
         finally:
             coordinator.release_gpu("tts")
@@ -692,6 +749,14 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                     last_err = str(ex)
                     time.sleep(0.3 * (attempt + 1))
                     
+            if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
+                # Cứu hộ tự động bằng Edge-TTS bảo toàn giới tính và ngôn ngữ
+                try:
+                    fb_voice = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
+                    synthesize_sentence(text, fb_voice, speed, target_out, open_speaker_key, target_sample_rate=sample_rate, target_channels=channels)
+                except Exception:
+                    pass
+
             if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
                 if not last_err:
                     if any(0x4E00 <= ord(c) <= 0x9FFF for c in text):

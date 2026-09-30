@@ -27,9 +27,677 @@
 3. **Kiểm tra xuất xưởng video thành phẩm:**
    - Đảm bảo video xuất ra tại `output/video_review.mp4` khớp tiếng, khớp hình và phụ đề rõ đẹp.
 
----
+- **Tối Ưu Hóa Tăng Tốc Phần Cứng GPU NVENC Cho FFmpeg & Khắc Phục Lỗi Ngốn CPU (01/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `review_phim.py`, `patches/active/review_phim.py`, `web/app.js`, `patches/active/web/app.js`):**
+  - **Hiện tượng:** Khi render video Review Phim hoặc Kể lại Video (Narration), tiến trình `ffmpeg.exe` chiếm tới 56% - 80% CPU và tốn nhiều RAM, trong khi GPU NVIDIA rời (như GeForce RTX 5060) không hoạt động (0% Video Encode).
+  - **Nguyên nhân cốt lõi:**
+    1. Trong quy trình `run_narration_workflow` và `review_phim.py`, bộ mã hóa video bị đặt mặc định cứng là `libx264` (CPU Software Encoding) với tham số `-preset veryfast -crf 22`.
+    2. Hàm `startReviewPipeline` ở giao diện `web/app.js` không truyền trường `encoder` trong payload gửi lên backend, khiến backend luôn rơi vào giá trị mặc định `libx264`.
+    3. Thiếu ánh xạ tham số tối ưu dành riêng cho GPU NVENC (`h264_nvenc -preset p4 -cq 22`, `hevc_nvenc -preset p4 -cq 24`) và thiếu cơ chế tự động chuyển dự phòng (Auto-Fallback) sang CPU khi GPU gặp sự cố.
+  - **Giải pháp xử lý triệt để:**
+    1. Bổ sung trường `encoder` vào payload trong `startReviewPipeline` (`web/app.js`), tự động lấy cấu hình từ phần tử `#exportEncoder` (mặc định `'auto'`).
+    2. Trong `auto_edit_pipeline.py` (cả `run_narration_workflow` và `run_auto_edit_workflow`), tự động gọi `detect_hardware_encoder()` để ưu tiên lựa chọn GPU NVENC (`h264_nvenc`, `hevc_nvenc`) nếu máy có GPU NVIDIA.
+    3. Ánh xạ chính xác các tham số encoder phần cứng chuẩn Studio (`-preset p4 -cq 22 -pix_fmt yuv420p` cho NVENC) giúp tối ưu hiệu năng xuất video vượt trội, tốc độ render nhanh hơn gấp 3 - 5 lần và giải phóng CPU hoàn toàn.
+    4. Xây dựng cơ chế tự động dự phòng Đa Tầng (Multi-Tier Auto-Fallback): Nếu quá trình render bằng GPU gặp sự cố driver hoặc bộ nhớ, hệ thống sẽ tự động chuyển sang `libx264` CPU để bảo đảm 100% video xuất ra thành công mà không bị crash giữa chừng.
+    5. Cập nhật tương tự cho quy trình dựng video tự động trong `review_phim.py`.
 
-### ⏳ CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH (STAGING CHANGELOG)
+- **Khắc Phục Lỗi Logo / Watermark Không Hiển Thị Trên Khung Preview Review Phim ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js), [web/js/features/video_studio_suite.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/video_studio_suite.js), [patches/active/web/js/features/video_studio_suite.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/video_studio_suite.js)) (01/10/2026):**
+  - **Hiện tượng:** Người dùng bật công tắc "Chèn Logo / Watermark" trong Review Phim và đã chọn ảnh logo (ví dụ `D:\Rust2Road\logoknen.png`), nhưng trên màn hình video preview không hiển thị hình ảnh logo hay khung điều khiển.
+  - **Nguyên nhân cốt lõi:**
+    1. *Khởi tạo trạng thái rỗng và không đồng bộ DOM:* `window.currentReviewLogoState` khởi tạo ban đầu là `{ enabled: false, path: '' }`. Khi tải trang hoặc khi người dùng đã nhập đường dẫn vào ô `#reviewLogoInputPath` và bật toggle `#reviewEnableLogoWatermark`, `currentReviewLogoState` không được tự động đồng bộ từ DOM, dẫn đến `renderReviewLogo()` thoát sớm ngay từ kiểm tra `!window.currentReviewLogoState.path`.
+    2. *Hệ tọa độ sai lệch do định vị sai thẻ cha:* `#reviewVideoLogoOverlay` nằm bên trong `.capcut-canvas-viewport` (hoặc `logoOverlay.offsetParent`), nhưng hàm tính toán cũ lại lấy `getBoundingClientRect()` của `#reviewVideoContainer` (vùng đen bên ngoài) và gán trực tiếp tọa độ mà không trừ offset của viewport, kết hợp với thuộc tính `overflow: hidden` của viewport khiến logo bị dịch chuyển ra ngoài vùng nhìn thấy hoặc bị ẩn.
+    3. *Thiếu sự kiện kích hoạt re-render khi chuyển tab và đổi tỉ lệ khung hình:* Khi chuyển tab sang Review Phim (`viewReview`), khi video phát hiện `loadedmetadata`, và khi hàm `applyAspectRatio()` thay đổi tỉ lệ canvas, `renderReviewLogo()` không được gọi lại để tính toán lại kích thước.
+    4. *Cơ chế tải ảnh qua thẻ `<img>`:* Thiếu xử lý trường hợp ảnh đã được trình duyệt nạp từ cache (`img.complete`), khiến sự kiện `onload` không kích hoạt lại sau khi đổi `src`.
+  - **Giải pháp xử lý triệt để:**
+    1. Bổ sung hàm tự động đồng bộ `syncReviewLogoStateFromDom()`: tự động đọc giá trị từ `#reviewEnableLogoWatermark`, `#reviewLogoInputPath`, `#reviewLogoOpacitySlider` và phục hồi vào `currentReviewLogoState`. Trong `renderReviewLogo()`, nếu phát hiện `currentReviewLogoState.path` còn rỗng nhưng trong ô input DOM đã có đường dẫn hợp lệ, hàm sẽ tự động phục hồi và tiếp tục hiển thị.
+    2. Chuẩn hóa hàm `getLogoParentViewport()` để lấy chính xác khung cha chứa overlay (`logoOverlay.offsetParent` hoặc `.capcut-canvas-viewport`), tính toán tọa độ tương đối chính xác (`pRect.left`, `pRect.top`) không bao giờ bị lệch ra ngoài khung video.
+    3. Thêm bộ kích hoạt `renderReviewLogo()` khi chuyển tab sang `viewReview`, khi video kích hoạt `loadedmetadata`, và tích hợp trực tiếp vào `applyAspectRatio()`.
+    4. Thêm kiểm tra `logoImg.complete` và `dataset.loadedPath` giúp ảnh hiển thị tức thì ngay cả khi lấy từ cache trình duyệt.
+
+- **Khắc Phục Lỗi Preview Không Nhận Phụ Đề SRT Mới Tạo/Nạp ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js)) (30/09/2026):**
+  - **Hiện tượng:** Sau khi tạo mới file phụ đề SRT (từ trích xuất OCR, Whisper ASR, dịch phụ đề AI, nạp kịch bản hoặc tải file SRT lên), khung xem trước (Preview Subtitle) trên video player không nhận diện được phụ đề mới hoặc tiếp tục hiển thị câu thoại cũ/bị trắng.
+  - **Nguyên nhân cốt lõi:**
+    1. *Bộ đệm cache trạng thái Preview Editor:* Trong `updateSubtitleLivePlayback`, hàm chỉ so sánh `window._lastPreviewSubId !== foundSub.id`. Khi file SRT mới được tạo hoặc nạp lại, câu đầu tiên vẫn có `id: 1` trùng với ID cũ, khiến logic cache hiểu nhầm phụ đề không thay đổi và bỏ qua lệnh render text mới.
+    2. *Thiếu cập nhật khi Video Tạm Dừng & Tua:* `updateSubtitleLivePlayback` chỉ được kích hoạt trong vòng lặp animation frame khi video đang phát (`!videoPlayer.paused`). Khi người dùng vừa tạo xong SRT hoặc tua video khi đang Pause, sự kiện cập nhật phụ đề preview không được gọi.
+    3. *Tìm kiếm nhị phân (Binary Search) nhạy cảm với khoảng thời gian:* Khi OCR/ASR tạo SRT có các mốc thời gian hơi lệch hoặc chồng lấn nhẹ, thuật toán Binary Search có thể trượt mục tiêu mà không có cơ chế bù tìm tuyến tính fallback.
+    4. *Khu vực Review Phim (`getReviewActiveSub`):* Logic cũ ưu tiên `window.reviewTabScannedAiBoxes` (vốn là tọa độ làm mờ xóa watermark) trước danh sách phụ đề thật, dẫn đến việc lấy nhầm text cũ của khung mờ thay vì phụ đề thuyết minh mới. Ngoài ra, việc nạp SRT vào Review chưa kích hoạt lại `syncReviewSubtitle` và `updateReviewSubPreview`.
+  - **Giải pháp xử lý triệt để:**
+    1. Bổ sung cơ chế theo dõi nội dung câu thoại `_lastPreviewSubText` song song với `_lastPreviewSubId`. Nếu nội dung văn bản thay đổi, khung preview lập tức cập nhật lại văn bản mới ngay lập tức.
+    2. Bổ sung cơ chế tìm kiếm tuyến tính (linear search fallback `srtData.find(...)`) khi Binary Search không khớp, đảm bảo không bỏ sót bất kỳ câu phụ đề nào.
+    3. Thêm bộ lắng nghe sự kiện tức thời cho `videoPlayer`: `pause`, `seeked`, `ended`, `timeupdate` đều chủ động gọi `updateSubtitleLivePlayback(videoPlayer.currentTime)`.
+    4. Xóa cache và kích hoạt render preview ngay khi hàm nạp dữ liệu `renderSrtTable()` hoàn tất.
+    5. Chuẩn hóa `getReviewActiveSub` và `getReviewSubtitleList`: ưu tiên `reviewNarrationSubtitles`, rồi đến `reviewParsedSubtitles`, loại bỏ hoàn toàn việc bị chiếm quyền bởi `reviewTabScannedAiBoxes`.
+    6. Kích hoạt đồng bộ tức thì `syncReviewSubtitle` và `updateReviewSubPreview` khi nạp kịch bản (`loadReviewScriptData`), nạp SRT review (`autoParseReviewSrt`), nạp narration (`applyNarrationSubtitles`) và khi chuyển đổi qua lại giữa các tab Script / Original.
+
+- **Chuẩn Hóa Hộp Thoại Hỏi Dùng Lại Tài Nguyên Đang Làm Dở (Có / Không) & Dọn Sạch Cache Khi Chọn Chạy Lại Từ Đầu ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Yêu cầu & Thực trạng:** Người dùng nhận thấy hệ thống tự động tái sử dụng tài nguyên ngầm và yêu cầu: Tất cả những thông báo phát hiện tài nguyên đang làm dở đều phải hiện lên hỏi người dùng có muốn dùng lại không, với 2 lựa chọn rõ ràng "Có" hoặc "Không" (nếu Có thì dùng lại, nếu Không thì chạy lại từ đầu).
+  - **Khắc phục & Chuẩn hóa:**
+    1. *Review Phim khi chọn Video (`handleSelectReviewVideo` trong `web/app.js`):* Trước đây hệ thống tự động nạp kịch bản cũ mà không hỏi. Đã bổ sung hộp thoại xác nhận Dark Mode: nếu phát hiện kịch bản cũ, hiển thị 2 lựa chọn `Có (Dùng lại)` hoặc `Không (Tạo mới từ đầu)` để người dùng chủ động quyết định.
+    2. *Review Phim khi bấm Bắt Đầu (`btnStartReview` trong `web/app.js`):* Chuẩn hóa modal hỏi tái sử dụng tài nguyên cũ với 2 lựa chọn rõ ràng: `Có (Dùng lại)` hoặc `Không (Chạy lại từ đầu)`.
+    3. *Biên Tập Phim khi chọn Video (`btnSelectEditorInput` trong `web/app.js`):* Chuẩn hóa hộp thoại phát hiện file phụ đề SRT / toạ độ AI Pixel có sẵn với 2 nút `Có (Dùng lại)` hoặc `Không (Làm mới từ đầu)`.
+    4. *Biên Tập Phim khi nạp SRT (`loadSrtToEditor` trong `web/app.js`):* Trước đây tự động nạp toạ độ AI Pixel ngầm và báo toast. Đã chuyển sang hỏi người dùng qua modal với 2 lựa chọn `Có (Dùng lại)` hoặc `Không (Quét lại từ đầu)`.
+    5. *Biên Tập Phim khi bấm Xuất Video (`executeExportPipeline` trong `web/app.js`):* Chuẩn hóa modal phát hiện dữ liệu xuất cũ với 2 lựa chọn `Có (Dùng lại)` hoặc `Không (Chạy lại từ đầu)`.
+    6. *Backend Dọn Sạch Cache Triệt Để (`routes/video_edit.py`):*
+       - Khắc phục lỗi loại trừ `dubbed_timeline.wav` và `tts_manifest.json` khỏi lệnh dọn dẹp khi `use_cache=False`. Giờ đây khi người dùng chọn "Không (Chạy lại từ đầu)", toàn bộ file cache trong `editor_temp_dir` được dọn sạch 100%.
+       - Bổ sung kiểm tra `use_cache` đối với file nhạc nền tách giọng `precomputed_cleaned_path`, tuyệt đối không dùng lại khi người dùng chọn chạy lại từ đầu.
+
+- **Bổ Sung Toàn Diện Hệ Thống Tùy Chỉnh Phụ Đề & Hiển Thị Trực Tiếp Cho Studio Review Phim ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Mô tả yêu cầu:** Người dùng yêu cầu tích hợp toàn diện tính năng phụ đề chuyên nghiệp cho phần Review Phim (Tóm tắt Auto-Edit & Kể lại Narration) giống hệt như tab Biên tập phim.
+  - **Khắc phục & Cài đặt tính năng hoàn chỉnh:**
+    + **Giao diện Cấu hình Phụ đề (`web/index.html`):**
+      * Bổ sung Card 5: *5. PHỤ ĐỀ CHO VIDEO REVIEW (SUBTITLES)* với công tắc Bật/Tắt phụ đề, nút Khôi phục mặc định và khung xem trước trực tiếp (Live Preview Box) phản hồi tức thời.
+      * Thêm thanh mẫu nhanh (Presets Carousel): Vàng Phim, Trắng Tinh, TikTok Box, Neon Glow, Cine Tag.
+      * Thêm 3 tab điều khiển chi tiết: *Phông chữ* (chọn font, In đậm, In nghiêng, IN HOA, cỡ chữ 10-80px, căn lề Trái/Giữa/Phải, vị trí nhanh Trên/Giữa/Dưới); *Màu & Hiệu ứng* (bảng chọn mã màu chữ, viền outline, độ dày viền, màu đổ bóng shadow, độ lệch bóng); *Vị trí & Nền* (chế độ nền Không/Màu nền/Làm mờ Blur Box, độ trong suốt opacity, độ mờ blur, thanh trượt tọa độ X, Y, Width, Height và nút căn giữa).
+      * Bổ sung khung phụ đề trực quan tương tác 8 hướng neo (`reviewSubPreviewBox`) nằm ngay trên màn hình player Review Phim.
+    + **Xử lý Tương tác & Đồng bộ Video (`web/app.js`):**
+      * Viết mới bộ điều khiển `initReviewSubtitleSuite()`, hỗ trợ tính toán tọa độ chính xác theo tỷ lệ thực của video (`getReviewVideoContentRect()`, `applyReviewBoxPercentToWrapper()`).
+      * Tích hợp công cụ chỉnh sửa 8 neo và kéo thả vị trí trực tiếp trên màn hình video player (`setupResizableAndDraggableBox`), tự động đồng bộ giá trị sang thanh trượt và badge tọa độ `(X, Y, W, H)`.
+      * Đồng bộ chữ phụ đề theo thời gian phát video thực tế (`syncReviewSubtitle`), hiển thị mượt mà khi video phát, tạm dừng hoặc tua trên timeline cho cả kịch bản AI review (`reviewScriptSentences`), SRT thuyết minh (`reviewNarrationSubtitles`) và SRT gốc (`reviewParsedSubtitles`).
+      * Cập nhật payload `startReviewPipeline` gửi đầy đủ `auto_subtitles: true/false` và từ điển thông số kiểu dáng chi tiết `subtitle_style` lấy từ `getReviewSubtitleStyle()`.
+    + **Quy trình Render Backend (`auto_edit_pipeline.py`):**
+      * Xây dựng hàm `generate_styled_ass(srt_source_path, ass_dest_path, cur_out_w, cur_out_h, subtitle_style, speed)` chuyển đổi file phụ đề SRT sang chuẩn ASS v4.00+ với hệ tọa độ `PlayResX/PlayResY` chuẩn 1:1 theo video xuất, áp dụng font chữ, màu sắc dạng ASS `&H00BBGGRR`, kích thước chuẩn tỷ lệ, viền outline, in đậm/nghiêng/hoa và tọa độ neo `\an` + `\pos`.
+      * Tích hợp render phụ đề styled ASS vào cả 2 quy trình Auto-Edit Recap (`run_auto_edit_workflow`) và Narration (`run_narration_workflow`) qua bộ lọc FFmpeg `subtitles=filename=...:fontsdir=...` (có fallback an toàn `force_style`).
+      * Tự động sao chép file phụ đề đồng bộ sang `<tên_video_xuat>.srt` đi kèm video xuất xưởng.
+    + Đồng bộ 100% sang toàn bộ thư mục `patches/active/`.
+
+- **Khắc Phục & Hoàn Thiện Tính Năng Phóng To Video (Video Zoom & Chống Bản Quyền) Cho Toàn Bộ Ứng Dụng ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [web/js/features/video_studio_suite.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/video_studio_suite.js), [auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):
+  - **Mô tả lỗi:** Tính năng Phóng to video (Zoom) không hoạt động như mong đợi:
+    + Người dùng kéo thanh trượt Zoom hoặc bấm nút preset (100%, 105%, 110%, 120%) nhưng khung video trên màn hình không phóng to tương ứng.
+    + Khi cuộn chuột hoặc kéo hộp bounding box CapCut để zoom trên màn hình player, thanh trượt zoom và nhãn % bên dưới không tự động cập nhật.
+    + Khi render video xuất xưởng trong Review Phim & Narration, bộ lọc FFmpeg zoom gặp lỗi logic: sau khi crop vùng hình ảnh, bộ lọc `scale=iw:ih` lại scale về kích thước của frame đã crop khiến video xuất ra bị co nhỏ hoặc viền đen thay vì phóng to lấp đầy độ phân giải chuẩn của video gốc.
+    + Sự không đồng nhất giữa giá trị dạng hệ số thập phân (`1.05`, `1.2`) và dạng phần trăm (`105`, `120`) giữa frontend và backend gây sai số hoặc bypass logic zoom.
+  - **Khắc phục triệt để:**
+    + **Giao diện HTML (`web/index.html`):** Bổ sung đầy đủ bộ điều khiển Phóng to video gồm thanh trượt Zoom (100% - 200%), nhãn hiển thị % và các phím tắt nhanh (100%, 105%, 110%, 120%) tại Card Biên Tập Phim; đồng thời bổ sung công tắc bật/tắt Zoom, thanh trượt (100% - 150%) và phím tắt (100%, 105% ⭐, 110%, 115%, 120%) tại Card Cấu hình Review Phim.
+    + **Bộ Studio CapCut (`web/js/features/video_studio_suite.js`):** Thêm 2 phương thức công khai `setZoom(zoomFactor)` và `setPan(panX, panY)` vào lớp `VideoStudioSuite`. Cập nhật callback `onConfigChange` của cả 2 instance Editor và Review để đồng bộ 2 chiều tức thời với thanh trượt và nút preset khi người dùng cuộn chuột hoặc tương tác trên màn hình video.
+    + **Bộ điều khiển Frontend (`web/app.js`):** Lắng nghe sự kiện `input` trên các thanh trượt zoom và sự kiện `click` trên tất cả các nút preset zoom để gọi trực tiếp `setZoom` vào player đang hoạt động. Cập nhật payload `startReviewPipeline` truyền chính xác `enable_zoom`, `video_zoom` (hệ số float chuẩn), `video_pan_x`, và `video_pan_y`.
+    + **Quy trình Render Backend (`auto_edit_pipeline.py` & `routes/video_edit.py`):**
+      * Chuẩn hóa `video_zoom`: tự động chia 100 nếu nhận giá trị > 5.0 (dạng phần trăm).
+      * Sửa lỗi FFmpeg Scale: Thay thế `scale=iw:ih` bằng `scale={vw}:{vh}:flags=lanczos` (với kích thước gốc thực tế của video) và dùng `trunc(iw/zoom/2)*2` để đảm bảo độ phân giải chẵn chia hết cho 2, phóng to lấp đầy 100% khung hình video mà không bị co méo hay giảm chất lượng.
+      * Tích hợp đầy đủ tọa độ dịch chuyển khung hình `video_pan_x` và `video_pan_y` vào công thức crop của FFmpeg.
+    + Đồng bộ 100% sang toàn bộ các file tương ứng trong `patches/active/`.
+
+- **Khắc Phục Lỗi NameError: name 'filter_script_path' is not defined trong Quy Trình Narration (Kể Lại Phim) ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [patches/active/auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/auto_edit_pipeline.py), [ffmpeg_installer.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/ffmpeg_installer.py)) (30/09/2026):**
+  - **Mô tả lỗi:** Khi render video Kể Lại Phim (Narration), hệ thống báo lỗi đỏ: `Lỗi không xác định trong Narration: name 'filter_script_path' is not defined | Traceback (most recent call last): File "D:\Tool\AI-Movie-Shorts\AI-Movie-Shorts\auto_edit_pipeline.py", line 3313, in run_narration_workflow if filter_script_path and os.path.exists(filter_script_path):`.
+  - **Nguyên nhân:** Khối kiểm tra dọn dẹp file kịch bản bộ lọc FFmpeg tham chiếu biến `filter_script_path` nhưng biến này chưa được khai báo và chưa ghi chuỗi bộ lọc phức tạp `full_filter` ra file script để tránh giới hạn ký tự dòng lệnh trên Windows (WinError 206).
+  - **Khắc phục:**
+    + Bổ sung hàm tiện ích `get_filter_script_flag(ffmpeg_exe)` vào `ffmpeg_installer.py` để tự động phát hiện cờ script tối ưu (`-/filter_complex` hoặc `-filter_complex_script`).
+    + Khởi tạo an toàn `filter_script_path = None` ngay đầu hàm `run_narration_workflow`.
+    + Tự động ghi `full_filter` ra file script tạm thời `narration_filter_*.txt` và truyền cờ FFmpeg tương ứng để video render ổn định kể cả khi có hàng chục đoạn làm mờ phụ đề gốc phức tạp.
+    + Thêm khối `finally:` trong `run_narration_workflow` để đảm bảo file filter script tạm luôn được dọn dẹp sạch sẽ khi render xong hoặc khi có ngoại lệ.
+    + Đồng bộ 100% vào `auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `ffmpeg_installer.py` và `patches/active/ffmpeg_installer.py`.
+
+
+- **Khắc Phục Lỗi NameError: name 'ROOT_DIR' is not defined trong Quy Trình Narration / Review Phim ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [patches/active/auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/auto_edit_pipeline.py)) (30/09/2026):**
+  - **Mô tả lỗi:** Khi render video Narration hoặc Review Phim có bật nhạc nền BGM (sử dụng preset hoặc chọn ngẫu nhiên từ thư mục `backgroundmusic`), hệ thống gặp lỗi dừng workflow: `NameError: name 'ROOT_DIR' is not defined` tại hàm `run_narration_workflow` (dòng 3263) và `run_auto_edit_workflow` (dòng 2597).
+  - **Nguyên nhân:** File `auto_edit_pipeline.py` tham chiếu trực tiếp đến biến toàn cục `ROOT_DIR` để ghép đường dẫn đến thư mục `backgroundmusic`, nhưng module chưa import `sys` và chưa định nghĩa hàm `get_app_root_dir()` cũng như biến `ROOT_DIR`.
+  - **Khắc phục:**
+    + Bổ sung `import sys` và hàm chuẩn hóa đường dẫn `get_app_root_dir()` (nhận diện chính xác thư mục gốc cả trong môi trường mã nguồn lẫn đóng gói).
+    + Khởi tạo biến toàn cục `ROOT_DIR = get_app_root_dir()`.
+    + Đồng bộ 100% vào cả file gốc `auto_edit_pipeline.py` và bản vá `patches/active/auto_edit_pipeline.py`.
+    + Kiểm thử nạp module và đường dẫn thư mục `backgroundmusic` đạt thành công 100%.
+
+- **Bỏ Qua Bước 1 AI Khi Đã Có SRT Thuyết Minh & Tích Hợp Thư Viện Nhạc Nền No-Copyright An Toàn Cho YouTube ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Mô tả yêu cầu người dùng:**
+    1. Khi người dùng đã tải lên file SRT kịch bản thuyết minh: Bỏ qua Bước 1 tạo kịch bản bằng AI (không bắt buộc nhập OpenAI API Key, không kiểm tra file SRT gốc bắt buộc, không gọi LLM tốn thời gian/token) mà chuyển thẳng sang Bước 2 (Tạo giọng đọc TTS & Ghép phim).
+    2. Tải sẵn các mẫu nhạc nền (BGM) phổ biến, không vi phạm bản quyền YouTube (No-Copyright / Creative Commons / Incompetech Kevin MacLeod) để dùng ngay trong ứng dụng.
+  - **Cải tiến triển khai:**
+    1. *Bỏ qua Bước 1 & Chuyển thẳng sang Bước 2 (`auto_edit_pipeline.py`, `web/app.js`):*
+       - Tự động nhận diện `continue_from_script = True` khi bảng kịch bản đã có dữ liệu hoặc khi tải file SRT thuyết minh lên.
+       - Gỡ bỏ hoàn toàn việc chặn OpenAI API Key và kiểm tra SRT phim gốc bắt buộc tại cả Frontend (`web/app.js`) và Backend (`auto_edit_pipeline.py` ở cả `run_auto_edit_workflow` và `run_narration_workflow`).
+       - Tự động sinh timeline SRT fallback từ nội dung câu kịch bản đã nạp nếu người dùng chỉ có video và SRT thuyết minh.
+       - Khi bấm nút `TIẾP TỤC DỰNG VIDEO (BƯỚC 2: TẠO VOICE & GHÉP PHIM)` (`#btnContinueReviewVideo`) hoặc nút `BẮT ĐẦU LÀM VIDEO` (`#btnStartReview`), hệ thống bỏ qua bước LLM và kích hoạt ngay Bước 2: Tạo giọng đọc TTS từng câu khớp timeline và dựng video.
+       - Cập nhật Stepper trực quan nhảy thẳng vào Bước 2 (`Tạo giọng đọc`).
+    2. *Tích Hợp Thư Viện Nhạc Nền No-Copyright YouTube-Safe (`backgroundmusic/`, `routes/video_edit.py`, `web/index.html`, `web/app.js`):*
+       - Tải về và tích hợp sẵn 8 bản nhạc nền phổ biến nhất thế giới từ Kevin MacLeod (Incompetech / YouTube Audio Library):
+         + `🛡️ [No-Copyright] Sneaky Snitch` (Hài hước / Hóm hỉnh)
+         + `🛡️ [No-Copyright] Monkeys Spinning Monkeys` (Vui nhộn / TikTok viral)
+         + `🛡️ [No-Copyright] Scheming Weasel` (Mưu mô / Cà khịa / Hồi hộp)
+         + `🛡️ [No-Copyright] The Complex` (Kịch tính / Hồi hộp / Trinh thám)
+         + `🛡️ [No-Copyright] Hitman` (Hành động / Điệp viên / Đấu trí)
+         + `🛡️ [No-Copyright] Volatile Reaction` (Gay cấn / Dồn dập)
+         + `🛡️ [No-Copyright] Heartbreaking` (Tình cảm / Lắng đọng / Buồn)
+         + `🛡️ [No-Copyright] Carefree` (Tươi sáng / Nhẹ nhàng)
+       - Nâng cấp API `/api/bgm/list` (`routes/video_edit.py`): Tự động nhận diện tag `is_safe: True`, gán thể loại (genre), hỗ trợ định dạng trả về kép (`tracks` và `files`).
+       - Nâng cấp bộ chọn BGM trên UI (`web/index.html`, `web/app.js`): Phân nhóm rõ ràng `<optgroup>` giữa "AN TOÀN YOUTUBE (NO-COPYRIGHT)" và "NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC", cho phép nghe thử trực tiếp trước khi xuất phim.
+    3. *Đồng bộ hóa & Kiểm thử:*
+       - Đồng bộ 100% sang `patches/active/` (`auto_edit_pipeline.py`, `routes/video_edit.py`, `web/index.html`, `web/app.js`).
+       - Kiểm thử cú pháp Node.js `node -c web/app.js` và Python `py_compile` đạt 0 lỗi.
+       - Chạy bộ kiểm thử tự động `tests/test_bgm_review_workflow.py` đạt **2/2 tests PASSED (100%)**.
+
+- **Bổ Sung Tính Năng Nút Tải Lên SRT Thuyết Minh & Nạp Kịch Bản Review Trực Tiếp ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+
+  - **Mô tả yêu cầu người dùng:** Bổ sung nút tải lên file `.srt` thuyết minh (kịch bản review / lời thuyết minh đã chuẩn bị trước) trực tiếp trong giao diện Review & Tóm Tắt Phim.
+  - **Cải tiến triển khai:**
+    1. *Giao diện (Frontend):*
+       - Thêm nút bấm **`📥 Tải lên SRT thuyết minh`** tại thanh công cụ trên cùng của bảng `KỊCH BẢN REVIEW & PHỤ ĐỀ` (`#btnUploadNarrationSrt`).
+       - Thêm nút bấm song hành **`📥 Tải lên SRT thuyết minh`** ngay trong thẻ cấu hình kịch bản (`Card 2: CHẾ ĐỘ & KỊCH BẢN`, `#btnUploadNarrationSrtCard`).
+       - Thêm nút thao tác nhanh trực quan khi bảng kịch bản đang trống (`#btnQuickUploadNarrationSrt`) và nút chọn nhanh phụ đề gốc trong tab Phụ đề gốc (`#btnQuickSelectReviewOriginalSrt`).
+       - Hỗ trợ kéo thả trực tiếp file `.srt` / `.vtt` / `.ass` vào bảng kịch bản để nạp tự động (tự nhận diện tab Kịch Bản Review để nạp thuyết minh hoặc tab Phụ Đề Gốc để nạp phụ đề phim).
+    2. *Xử lý dữ liệu:*
+       - Hỗ trợ chọn file qua desktop dialog (`selectFile('srt')`) lẫn tải file web qua `FileReader`.
+       - Tự động bóc tách các câu thoại vào `window.reviewScriptSentences` và lưu giữ mốc thời gian phụ đề gốc (`window.reviewNarrationSubtitles`).
+       - Bảng danh sách câu thoại tự động hiển thị chính xác mốc thời gian `start → end` chuẩn theo file SRT và cho phép tua video / nghe thử giọng đọc từng câu ngay lập tức.
+       - Tự động chuyển active tab sang `🎬 Kịch Bản Review`, cập nhật thống kê từ/câu, và thông báo Toast chuẩn Dark Mode.
+
+- **Khắc Phục Lỗi Không Thể Kéo Chỉnh Kích Thước Bounding Box Của Logo ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js)) (30/09/2026):**
+  - **Nguyên nhân:**
+    1. Trong hàm `setupInteractiveVideoLogo`, bộ lắng nghe sự kiện `mousemove` truy cập biến chưa được khai báo `img` (`const natAspect = img && ...`), trong khi biến DOM được khai báo ở phạm vi hàm là `logoImg`. Lỗi này sinh ra `ReferenceError: img is not defined` và ngắt ngay toàn bộ logic resize chuột.
+    2. Thuật toán clamp tỉ lệ khung hình cũ ở 4 góc neo (`nw`, `ne`, `sw`, `se`) bị vòng lặp khoá cứng (giới hạn `newHeight` bởi khoảng cách tới mép rồi nhân ngược lại `natAspect`), khiến khung logo bị đông cứng (freeze) không thể kéo to hơn khi ở gần viền hoặc khi người dùng di chuột theo trục đứng (`dy`).
+  - **Xử lý:**
+    1. Thay thế tham chiếu biến bằng `targetImg = logoImg || document.getElementById(...)` đảm bảo an toàn 100%, loại bỏ triệt để `ReferenceError`.
+    2. Nâng cấp thuật toán co giãn 2D đối xứng tự nhiên: Tính toán biến thiên độ co giãn `scaleDelta` dựa trên cả 2 hướng di chuột (`dx` và `dy * natAspect`), tính toán trước `maxAvailableW` theo giới hạn container trước khi clamp. Nhờ đó 4 góc neo co giãn mượt mà theo mọi hướng mà không bao giờ bị khựng, đồng thời 4 cạnh neo (`n`, `s`, `e`, `w`) cho phép co giãn tự do theo ý muốn.
+    3. Đồng bộ hoàn chỉnh trên cả 2 phân hệ Biên tập phim và Review phim.
+
+- **Khắc Phục Lỗi Cú Pháp Trình Duyệt: `Uncaught SyntaxError: Identifier 'reviewStyleSelect' has already been declared` ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js)) (30/09/2026):**
+  - **Nguyên nhân:** Khai báo trùng lặp `const reviewStyleSelect`, `reviewSelectedStyleBadge`, `reviewCustomStyleContainer` ở cả dòng 11528 và dòng 11951 trong phạm vi toàn cục của file `web/app.js` khiến trình duyệt báo lỗi `SyntaxError` và ngừng thực thi toàn bộ script JavaScript của trang web.
+  - **Xử lý:** Gỡ bỏ khối khai báo trùng lặp dư thừa, tối ưu bộ lắng nghe sự kiện đồng bộ với nhãn phong cách động `opt.text.split(' (')[0]` và kiểm tra toàn diện không còn bất kỳ biến trùng lặp nào trong file.
+
+- **Khắc Phục Lỗi Xuất Video Biên Tập Không Áp Dụng Zoom & Sửa Lỗi Logo Bị Méo Tỉ Lệ ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [web/js/features/video_studio_suite.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/video_studio_suite.js), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Mô tả yêu cầu người dùng:**
+    1. Đã chỉnh zoom trên trình phát biên tập phim nhưng video xuất ra không được zoom/pan/crop như đã chỉnh trong preview.
+    2. Phần tuỳ chỉnh logo watermark đang bị méo tỉ lệ khung hình (dẹt ngang hoặc bẹp dọc).
+  - **Nguyên nhân cốt lõi:**
+    1. *Về Video Zoom:* `buildEditorExportConfig()` đọc biến zoom cũ (`currentVideoZoom = 1.0`) thay vì đồng bộ từ `window.videoStudioInstances.editor.state` (CapCut-style player). Ngoài ra, bộ lọc FFmpeg crop thiếu căn chuẩn chẵn (`/2*2`) và thiếu filter upscale ngược lại canvas gốc (`scale={w}:{h}:flags=lanczos`), dẫn đến video xuất ra không khớp kích thước hoặc bỏ qua zoom.
+    2. *Về Logo bị méo:* Filter `scale2ref=w='main_w*...':h='main_h*...'` bị lỗi gán `main_w` (là kích thước gốc của chính logo) nhân với tỉ lệ khung hình của video, khiến logo bị méo gấp 1.77 lần (~16:9). Ở Frontend, khi tải ảnh logo lên chưa tự động tính `h_pct` từ `naturalWidth/naturalHeight`, và các nút kéo góc không khóa tỉ lệ khung hình.
+  - **Cải tiến triển khai:**
+    1. *Frontend (`web/app.js` & `web/js/features/video_studio_suite.js`):*
+       - `buildEditorExportConfig()` trực tiếp đọc và quy đổi chính xác các thông số `zoom`, `panX`, `panY`, `aspectRatio`, `fitMode`, `rotation`, `flipH` từ instance Player.
+       - Khi tải logo lên, hệ thống tự động đọc `img.naturalWidth / img.naturalHeight` để tính toán chiều cao `h_pct` chuẩn xác, tránh méo ngay từ đầu.
+       - Khóa tỉ lệ khung hình (proportional resizing) khi người dùng kéo các điểm neo góc (`nw`, `ne`, `sw`, `se`) trên overlay logo của cả phân hệ Biên tập phim và Review phim.
+    2. *Backend (`routes/video_edit.py` & `auto_edit_pipeline.py`):*
+       - Mở rộng payload validation chấp nhận dải `video_zoom` (0.2x - 5.0x) và toạ độ `video_pan_x/y`.
+       - Xử lý zoom/crop video với toạ độ căn chuẩn số chẵn và upscale lại đúng khung hình canvas (`scale={src_vw}:{src_vh}:flags=lanczos`), hỗ trợ đầy đủ xoay hình (`rotation`), lật ngang (`flipH`), và chế độ khung hình (`contain`, `cover`, `fill`).
+       - Xóa bỏ `scale2ref` gây méo; tính toán chính xác kích thước khung chứa `box_w`, `box_h`, toạ độ `box_x`, `box_y` theo độ phân giải video đích, áp dụng `scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2` và căn giữa bằng `overlay=x='{box_x}+({box_w}-overlay_w)/2':y='{box_y}+({box_h}-overlay_h)/2'`. Logo đảm bảo 100% giữ nguyên tỉ lệ gốc, sắc nét và không bao giờ bị méo.
+
+- **Tính Năng Chọn Ngôn Ngữ Đầu Ra Cho Kịch Bản Review Phim AI ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Mô tả yêu cầu người dùng:** Ở phần tạo kịch bản Review Phim AI, cho phép người dùng tùy chọn ngôn ngữ đầu ra (ví dụ: Tiếng Việt, Tiếng Anh, Tiếng Trung, Tiếng Nhật, Tiếng Hàn, Tiếng Pháp, Tiếng Tây Ban Nha, Tiếng Đức, Tiếng Nga, Tiếng Thái, Tiếng Indonesia...).
+  - **Cải tiến triển khai:**
+    1. *Giao diện người dùng (Card 2 - Chế độ & Kịch bản):* Bổ sung menu thả xuống `reviewScriptLang` đi kèm badge trực quan `reviewSelectedLangBadge` hỗ trợ 14 ngôn ngữ phổ biến toàn cầu với cờ quốc gia sinh động.
+    2. *Tầng điều khiển Frontend (`web/app.js`):* Đồng bộ trường `script_language` và `target_lang` vào payload khởi chạy tiến trình `startReviewPipeline` (cả Bước 1 tạo kịch bản riêng và toàn bộ quy trình). Tự động cập nhật badge ngôn ngữ thời gian thực khi người dùng thay đổi lựa chọn.
+    3. *Tầng xử lý AI Backend (`auto_edit_pipeline.py`):*
+       - Xây dựng từ điển ánh xạ `LANGUAGE_NAMES` và hàm tạo chỉ thị cưỡng chế `get_language_directive(lang_code)`.
+       - Tự động gắn chỉ thị bắt buộc vào các prompt AI (`prompt_map_chunk`, `prompt_reduce_script`, `prompt_narration`) yêu cầu LLM viết 100% kịch bản, lời dẫn, hook mở đầu, câu giữ chân khán giả và outro theo đúng ngôn ngữ đích với văn phong bản xứ của YouTuber.
+       - Tích hợp `script_language` vào `current_script_fingerprint` và MD5 cache key của từng chunk, đảm bảo chuyển đổi ngôn ngữ sẽ sinh mới kịch bản chính xác thay vì nhận nhầm bản dịch cũ.
+       - Nâng cấp bộ tách câu `split_text_to_sentences` hỗ trợ toàn diện cả dấu ngắt câu phương Tây (`.!?`, `,;`) lẫn hệ chữ tượng hình CJK (`。！？`, `，；`).
+
+- **Hiển Thị Số % & Tiến Độ Chi Tiết Khi Tách Âm AI (Stem Separator) Vào System Log Trong Phân Hệ Review Phim ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Mô tả yêu cầu người dùng:** Khi chạy tác vụ Tách âm thanh AI (MDX-Net / Stem Separator) trong phân hệ Review Phim, thanh System Log cần báo số % và tiến độ chi tiết từng phân đoạn (ví dụ: `🎛️ Đang tách âm AI (21%): đoạn 10/543 [còn ~1808s]`) thay vì chỉ hiện dòng thông báo tĩnh rồi im lặng trong nhiều phút.
+  - **Cải tiến triển khai:**
+    1. *Bộ điều phối luồng đa nhiệm (`run_audio_separator_with_progress`):* Xây dựng luồng thực thi nền `threading.Thread` kèm hàng đợi `queue.Queue` kết nối trực tiếp với các callback `progress_cb`, `logger_cb`, `cancel_check_cb` của `audio_separator.separate_audio_stems`.
+    2. *Đồng bộ trực tiếp lên System Log:* Bắt sự kiện mỗi khi tiến độ thay đổi và truyền về frontend qua Server-Sent Events (SSE). Báo cáo chính xác theo thời gian thực: `🎛️ Đang tách âm AI (X%): đoạn Y/Z [còn ~...s]`.
+    3. *Hỗ trợ toàn diện cả 2 chế độ Review:*
+       - Chế độ **Kể lại phim (Narration):** Tách giọng thoại cũ, bảo lưu SFX và báo tiến độ trực quan vào System Log trước khi mix voice.
+       - Chế độ **Tóm tắt (Auto-Edit):** Khi người dùng kích hoạt `reviewStemSeparationEnabled`, hệ thống tự động tách âm SFX, báo tiến độ real-time vào System Log và tự động mix track SFX sạch thoại vào bản video xuất thành phẩm.
+    4. *Đồng bộ hóa trong tab Biên tập (Editor):* Cập nhật vòng lặp lắng nghe `fetch('/api/audio/separate/progress')` trong `web/app.js` để tự động ghi nhận các mốc % tách âm vào System Log chính.
+
+- **Khắc Phục Lỗi Telegram Bắn Thông Báo Spam Cho Từng Câu Thoại Nhỏ Trong Phân Hệ Review Phim ([routes/tts.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/tts.py), [auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [review_phim.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/review_phim.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Nguyên nhân:** Khi tạo giọng đọc Voice-over cho kịch bản Review Phim (hoặc Kể lại phim), hệ thống bóc tách kịch bản thành hàng trăm câu thoại nhỏ (`sent_0.mp3`, `sent_1.mp3`, ..., `sent_494.mp3`) rồi gọi API nội bộ `/api/tts/openspeaker` hoặc `/api/tts/kokoro` để sinh audio. Tại 2 route này, `notifier.notify_task_success(task_type='tts')` tự động kích hoạt sau mỗi file tạo ra khiến Telegram nhận hàng trăm tin nhắn spam liên tục (`sent_34.mp3`, `sent_35.mp3`...) thay vì chỉ báo 1 lần khi toàn bộ quy trình dựng video hoàn tất.
+  - **Xử lý:**
+    1. Trong `routes/tts.py` (cả Kokoro & OpenSpeaker): Bổ sung bộ lọc nhận diện `skip_notify`. Tự động bỏ qua thông báo Telegram nếu `skip_notify=True`, hoặc nếu tên file thuộc dạng câu thoại con (`sent_*`, `narration_*`, `temp_*`), hoặc nếu thư mục đầu ra là thư mục tạm của chuỗi xử lý (`auto_edit_temp`, `clips/audio`, `sentences`, `temp`).
+    2. Trong `auto_edit_pipeline.py` và `review_phim.py`: Truyền rõ ràng cờ `"skip_notify": True` trong payload sinh audio từng câu của tiến trình tạo voice review.
+    3. Đảm bảo Telegram chỉ gửi duy nhất 1 thông báo tổng kết đầy đủ (Tên phim, dung lượng, thời gian hoàn thành, giọng đọc) khi toàn bộ quy trình Review Phim Auto-Edit kết thúc.
+
+- **Khắc Phục Lỗi Mất / Ẩn Thanh System Log Console Dưới Cùng ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [patches/active/web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/index.html)) (30/09/2026):**
+  - **Nguyên nhân:** Khối `review-bottom-grid` trong giao diện Review Phim thiếu 1 thẻ đóng `</div>` trước cụm Action Dashboard. Do đó `<div id="viewReview">` không được đóng lại và nuốt toàn bộ các view phía sau cùng thanh `terminalOverlay` (System Log). Khi chuyển sang tab khác (ví dụ: Biên tập phim `viewEditor`), do `viewReview` mang `style="display: none;"` nên toàn bộ thanh System Log bị ẩn mất hoàn toàn.
+  - **Xử lý:** Bổ sung chính xác thẻ đóng `</div>` cho `review-bottom-grid`. Cân bằng lại toàn bộ cây DOM (`div balance: 0`), đưa `terminalOverlay` trở lại làm con trực tiếp của `body`, luôn ghim cố định ở đáy màn hình và hiển thị rõ ràng trên mọi tab cũng như trên các modal.
+
+- **Bố Cục Bảng Phụ Đề & Kịch Bản Cạnh Màn Hình Preview (50/50 Split View Hàng Trên) Cho Phân Hệ Review Phim ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/style.css), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Yêu cầu:** Sắp xếp lại giao diện phân hệ Review Phim theo đúng bố cục 50/50 như phân hệ Biên tập phim: Bảng phụ đề / kịch bản đặt song song cạnh màn hình preview video ở hàng trên (`.review-top-row`), các khối cài đặt (Card 1-4) chuyển xuống hàng dưới (`.review-bottom-grid`).
+  - **Cải tiến triển khai:**
+    1. *Bố cục hàng trên (.review-top-row 50/50):*
+       - Cột trái (50%): Trình phát video Review (`#reviewVideoPlayerCard`) tích hợp thanh header chọn video nhanh (Input đường dẫn, nút [Chọn File] và trạng thái sẵn sàng), canvas khung hình preview 16:9 / 9:16 và thanh điều khiển playback.
+       - Cột phải (50%): Bảng phụ đề & duyệt kịch bản (`#reviewScriptEditorCard`) hiển thị trực quan đồng cấp ngang hàng (chiều cao 720px, scroll mượt mà).
+    2. *Hỗ trợ chuyển đổi 2 chế độ dữ liệu (Dual Tab Navigation):*
+       - Tab `🎬 Kịch Bản Review`: Duyệt và chỉnh sửa kịch bản AI tạo ra với thời gian đọc ước tính (~phút), từng câu thoại kèm nút `▶ Tua video`, `🎙️ Nghe thử giọng AI (TTS)` và `🗑️ Xóa`.
+       - Tab `📄 Phụ Đề Gốc (.srt)`: Duyệt danh sách các đoạn thoại trích xuất từ file SRT gốc kèm mốc thời gian thực (`00:00:09 → 00:00:15`), nút `▶` nhảy video đến mốc thời gian tương ứng.
+    3. *Bảng 4 cột chuẩn hóa trực quan:*
+       - Gồm `#`, `THỜI GIAN`, `HÀNH ĐỘNG` (Tua video, Nghe thử giọng, Xóa) và `NỘI DUNG` (click vào để sửa trực tiếp inline hoặc chuyển chế độ toàn văn `📝 Toàn văn`).
+       - Bộ lọc nhanh (Tất cả, Chưa đọc, Đã sửa) và ô tìm kiếm từ khóa real-time.
+    4. *Bố cục hàng dưới (.review-bottom-grid):*
+       - Khối cấu hình Card 1 (Phim & Phụ đề) và Card 2 (Chế độ & Kịch bản AI) cùng các Card âm thanh / hiệu ứng được xếp gọn gàng thành hệ thống lưới bên dưới.
+    5. *Đồng bộ 100% bản vá:*
+       - Cập nhật đồng bộ các tệp `web/index.html`, `web/style.css`, `web/app.js` sang thư mục `patches/active/`.
+
+- **Tạm Dừng Xuất Kịch Bản Review Phim Cho Phép Người Dùng Chỉnh Sửa Trực Tiếp Trước Khi Dựng Video ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/style.css), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (30/09/2026):**
+  - **Yêu cầu:** Ở phân hệ Review Phim, khi AI hoàn thành tạo kịch bản review (Bước 1), hệ thống tạm dừng lại và xuất toàn bộ kịch bản ra giao diện bảng tương tự bảng SRT của phân hệ Biên tập phim để người dùng xem trước, chỉnh sửa câu thoại, thêm/xóa/nghe thử giọng đọc rồi mới bấm tiếp tục dựng video.
+  - **Cải tiến triển khai:**
+    1. *Backend (`auto_edit_pipeline.py` & `routes/video_edit.py`):*
+       - Bổ sung các tham số `pause_after_script` (mặc định True), `custom_script` và `continue_from_script` vào cả 2 workflow (`run_auto_edit_workflow` và `run_narration_workflow`).
+       - Tự động phát sinh sự kiện SSE `[SCRIPT_READY]` chứa đầy đủ nội dung kịch bản, danh sách câu thoại đã bóc tách (`sentences`), số từ, số câu và thời lượng đọc ước tính khi hoàn thành Bước 1.
+       - Khi `pause_after_script=True` và `continue_from_script=False`, quy trình tạm dừng an toàn và lưu `script.txt` (hoặc `narration_script.txt`) vào thư mục tạm mà không xóa cache.
+       - Khi người dùng bấm tiếp tục (`continue_from_script=True`), bỏ qua Bước 1 LLM và chuyển thẳng sang Bước 2 (TTS) với kịch bản đã chỉnh sửa.
+       - Bổ sung API `/api/review/save_script` cho phép lưu kịch bản đã sửa trực tiếp từ giao diện vào cache của dự án.
+       - Nâng cấp API `/api/review/check_cache` để đọc và trả về kịch bản đã có sẵn khi người dùng chọn video.
+    2. *Giao diện Frontend (`web/index.html` & `web/style.css`):*
+       - Thêm tùy chọn "Dừng lại xuất kịch bản để duyệt & chỉnh sửa trước khi dựng video" (checkbox `reviewPauseAfterScript`, bật sẵn) và nút "✨ Tạo kịch bản review bằng AI (Bước 1)" (`btnGenerateReviewScriptOnly`).
+       - Thiết kế khối Card chuyên biệt `reviewScriptEditorCard` đặt ngay dưới bảng cài đặt Review Phim, gồm:
+         - Thanh tiêu đề với huy hiệu đếm số câu/từ/thời lượng ước tính, nút chuyển đổi Chế độ văn bản (Full text) / Chế độ bảng (Table), nút Thêm câu mới, nút Tạo lại kịch bản.
+         - Ô tìm kiếm / lọc nhanh câu thoại theo từ khóa.
+         - Bảng danh sách câu thoại `.review-script-table` chuẩn Dark Mode với cột Số thứ tự, Thao tác (🔊 Nghe thử giọng TTS hiện tại, ❌ Xóa câu), và ô nhập liệu văn bản tự co giãn (`auto-resize`).
+         - Nút "💾 Lưu Kịch Bản" và nút nổi bật "🚀 TIẾP TỤC DỰNG VIDEO (BƯỚC 2: TẠO VOICE & GHÉP PHIM)".
+    3. *Logic điều khiển (`web/app.js`):*
+       - Quản lý trạng thái kịch bản thông qua `window.reviewScriptSentences` và `window.reviewScriptFullText`.
+       - Lắng nghe sự kiện `[SCRIPT_READY]` từ Server SSE Stream để tự động cuộn xuống và hiển thị bảng kịch bản ngay khi AI tạo xong.
+       - Hỗ trợ nghe thử trực tiếp từng câu thoại bằng API TTS (`/api/tts/sentence_preview`) với đúng giọng đọc và tốc độ đang cấu hình trong tab Review Phim.
+       - Tự động nạp kịch bản cũ khi người dùng chọn video đã từng phân tích kịch bản trước đó.
+    4. *Đồng bộ 100% bản vá:*
+       - Đồng bộ toàn bộ các tệp thay đổi sang `patches/active/` để sẵn sàng cho bản phát hành khi người dùng yêu cầu.
+
+- **Tối Ưu Bố Cục Phân Hệ Xử Lý Hàng Loạt Rộng Bằng Một Nửa Màn Hình (50/50 Split View) ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/style.css), [web/js/features/batch_queue.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_queue.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (29/09/2026):**
+  - **Yêu cầu:** Thiết lập phần danh sách video review phim chiếm đúng rộng bằng 1 nửa màn hình (50% viewport width) song song với khu vực cài đặt thông số review.
+  - **Cải tiến triển khai:**
+    1. Thiết lập container chính `.main-layout` trong `#viewBatchQueue` phủ rộng 100% màn hình (`width: 100%; max-width: 100%; box-sizing: border-box;`) thay vì bị giới hạn cứng 1600px như trước.
+    2. Cột trái (Bảng danh sách video review): Thiết lập kích thước cố định bằng chính xác một nửa màn hình (`flex: 0 0 calc(50% - 8px); width: calc(50% - 8px); max-width: calc(50% - 8px); box-sizing: border-box;`). Bảng co giãn theo chiều dọc (`height: calc(100vh - 215px)`), các cột Tên video, SRT, Trạng thái, Nút bấm được định tỷ lệ chuẩn xác không gây tràn ngang.
+    3. Cột phải (3 Thẻ Cài đặt Review Phim toàn cục):
+       - Áp dụng `flex-shrink: 0 !important;` và `min-height: auto;` cho toàn bộ các Card cài đặt (Card 1, Card 2, Card 3). Tuyệt đối không ép (nhồi nhét) các thẻ co lại trên 1 màn hình gây che khuất / đè nội dung.
+       - Tích hợp thanh cuộn dọc riêng biệt chuẩn Dark Mode (`overflow-y: auto; scrollbar-width: thin; scrollbar-color: #38bdf8 #0f172a;`) với thanh trượt Cyan sắc nét, giúp cuộn mượt mà qua toàn bộ thông số (BGM, Ducking, UVR5 Stem, Sanitizer, Dynamic Blur, Subtitles, Watermark) mà không bị che khuất bất kỳ trường dữ liệu nào.
+    4. Bổ sung quy tắc CSS chuyên biệt `#queueEditorTableContainer` trong `web/style.css` để bảng tự động co giãn `width: 100%` mà không bị ép `min-width: 900px` từ bảng cũ.
+    5. Khắc phục từ khóa `async` cho sự kiện xóa danh sách `btnClearAll` trong `batch_queue.js`.
+    6. Đồng bộ toàn bộ các tệp thay đổi sang `patches/active/`.
+
+- **Khắc Phục Lỗi Hiển Thị Mã Code Trên Hộp Thoại Xác Nhận ([web/js/utils.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/utils.js), [web/js/features/batch_queue.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_queue.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (29/09/2026):**
+  - **Hiện tượng lỗi:** Khi người dùng bấm nút "⚡ Tự Động Toàn Trình Review (Treo Máy Qua Đêm)", hộp thoại xác nhận hiện lên và bị in toàn bộ đoạn mã JavaScript callback (`async () => { // Tự động bật auto-asr... }`) đè lên tiêu đề và biểu tượng của modal.
+  - **Nguyên nhân gốc rễ:** Hàm `showConfirmModal` trong `web/js/utils.js` có chữ ký gốc `showConfirmModal(title, message, icon)` và trả về một Promise. Khi gọi dạng callback `showConfirmModal(title, message, onConfirm)`, tham số callback thứ 3 bị gán nhầm vào biến `icon`, dẫn tới template string render toàn bộ nội dung hàm `${escapeHtml(icon)}` vào vị trí icon của modal, đồng thời hàm callback không được kích hoạt khi bấm nút "Xác Nhận".
+  - **Giải pháp xử lý triệt để:**
+    1. Cập nhật `showConfirmModal` trong `web/js/utils.js` để tự động nhận diện cả 2 kiểu gọi: Kiểu Promise (`const ok = await showConfirmModal(title, message, icon)`) và kiểu Callback (`showConfirmModal(title, message, onConfirm, onCancel)`).
+    2. Bổ sung cơ chế bảo vệ: Tuyệt đối không cho phép object hoặc function lọt vào biến `icon`, tự động fallback về icon mặc định `❓` hoặc icon phù hợp.
+    3. Cập nhật toàn bộ các lời gọi `showConfirmModal` trong `batch_queue.js` (`startAutoAllInOnePipeline`, `btnQueueClearAll`, `btnQueueStopBatch`) sang cú pháp async/await chuẩn với icon rõ ràng (`⚡`, `🗑️`, `🛑`).
+    4. Đồng bộ 100% sang thư mục bản vá `patches/active/`.
+
+- **Đồng Bộ Giao Diện & Quy Trình Xử Lý Hàng Loạt Chuẩn Review Phim ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/js/features/batch_queue.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_queue.js), [batch_queue_manager.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/batch_queue_manager.py), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (29/09/2026):**
+  - **Yêu cầu & Mục tiêu:**
+    Tái thiết kế toàn bộ phân hệ "Xử Lý Hàng Loạt" (`#viewBatchQueue`) để sở hữu bố cục giao diện bảng, thao tác kéo thả và trải nghiệm trực quan đẳng cấp giống hệt phân hệ "Biên tập hàng loạt" (`#viewBatchEditor`), nhưng tập trung 100% chuyên sâu vào các tính năng của **Review Phim** (Auto-Edit & Narration), thay vì các chức năng biên tập video thông thường.
+  - **Kiến trúc giải pháp hoàn chỉnh:**
+    1. *Giao Diện Bảng Danh Sách Video Phim Full-Width (Batch Movie Review Table):*
+       - Bỏ hoàn toàn bố cục 2 cột chật hẹp cũ (trái 440px / phải bảng nhỏ). Chuyển sang bố cục Card tràn viền cao cấp chiếm 48vh tương tự `#viewBatchEditor`.
+       - Thanh Toolbar đầy đủ tính năng: `➕ Thêm nhiều Video`, `📂 Chọn Thư Mục`, `🔗 Nạp từ URL` (Douyin/TikTok/YouTube), `📄 Thêm nhiều SRT`, `⚡ Tự động khớp Video & SRT`, `🧹 Dọn đã xong`, `🗑️ Xóa tất cả`.
+       - Tích hợp cụm công cụ trích xuất phụ đề linh hoạt: Menu chọn phương thức (`🎙️ Quét ASR` / `🔍 Quét OCR`), nút cấu hình `⚙️`, nút `🎙️ Quét Phụ Đề Hàng Loạt`, nút `🤖 Soát & Bù Sub AI`, và nút `⚡ Tự Động Toàn Trình Review (Treo Máy Qua Đêm)`.
+       - Thanh KPI thống kê thời gian thực: Tổng video, Sẵn sàng, Chưa có SRT, Đang xử lý, Hoàn thành, Lỗi / Hủy.
+       - Hỗ trợ Kéo & Thả (Drag & Drop) trực tiếp file video và file SRT vào lòng bảng với overlay hướng dẫn sinh động.
+    2. *Bộ 3 Thẻ Cài Đặt Review Phim Toàn Cục (3 Bottom Cards):*
+       - **Card 1: 🎭 Chế độ & Kịch bản Review:**
+         - Nút chuyển đổi chế độ review: `✂️ Tóm tắt (Auto-Edit - cắt ghép cảnh)` vs `🎙️ Kể lại (Narration - giữ 100% video, lồng tiếng)`.
+         - Thời lượng Review mục tiêu: 3m (TikTok/Shorts), 5m (Chuẩn Review), 8m, 10m, 15m; hiển thị ước tính số từ tự động (~1,050 từ với 3.5 từ/s).
+         - Phong cách Review: Kịch tính, Hài hước, Phân tích, Mì ăn liền, Kinh dị, Lắng đọng hoặc Tùy chỉnh (nhập prompt riêng).
+         - Tự động trích xuất phụ đề ASR bằng Whisper Native C++ nếu video chưa có SRT.
+       - **Card 2: 🗣️ Giọng đọc & Âm thanh Review:**
+         - Chọn giọng đọc Review AI với bảng Modal Voice Library, nghe thử giọng đọc trực tiếp.
+         - Slider điều chỉnh tốc độ đọc (0.8x - 1.5x) và số luồng TTS đa luồng (2 - 16 luồng).
+         - Bộ điều khiển BGM kịch tính: Toggle bật/tắt, chọn danh sách nhạc nền (Blade Runner 2049, Reality, Paris...), nút nghe thử trực tiếp (`/api/bgm/stream`), slider âm lượng và tính năng né tiếng thông minh (Audio Ducking).
+         - Bộ tách & lọc âm gốc AI (Stem Separator): Toggle UVR5/MDX, xóa vocal cũ để giữ 100% SFX môi trường và BGM gốc.
+       - **Card 3: 🎬 Cấu hình Dựng phim & Xuất bản:**
+         - Tỷ lệ khung hình: Dọc 9:16 (Shorts/TikTok), Ngang 16:9 (YouTube), hoặc Tỷ lệ gốc.
+         - Nhịp độ cắt cảnh (Pacing): Dồn dập (2-4s) hoặc Chuẩn điện ảnh (4-7s).
+         - Bộ cắt cảnh chống nháy thông minh (Scene Sanitizer qua PySceneDetect) và chuyển cảnh mịn Crossfade 0.15s.
+         - Dynamic Blur làm mờ sub gốc tự động với nhận diện pixel RapidOCR AI.
+         - Tùy chọn chèn phụ đề chữ (chọn font Montserrat, Inter, Anton) và logo bản quyền.
+    3. *Hàng Điều Khiển Thực Thi & Tự Động Hóa Qua Đêm:*
+       - Thanh tiến độ tổng quan (`#queueOverallProgressContainer`) cập nhật mượt mà theo phần trăm và trạng thái từng bước.
+       - Tùy chọn thư mục xuất linh hoạt hoặc bật "📍 Lưu cùng thư mục video gốc".
+       - Chức năng tự động đếm ngược 60s và tắt máy tính (Shutdown PC) khi xong toàn bộ hàng đợi, có thể bấm nút hủy giữ máy chạy.
+       - Tích hợp thông báo tức thời qua Telegram Bot cho từng video và khi hoàn thành toàn bộ batch.
+    4. *Cơ Chế Backend & Bảo Mật Bản Quyền 2 Tầng:*
+       - Backend (`batch_queue_manager.py`): Tự động nạp `task.srt_path`, tự động bắt cặp `.srt` cùng tên, chuẩn hóa các cấu hình BGM, Stem, Dynamic Blur, Voice, Pacing và phân nhánh luồng Auto-Edit / Narration.
+       - Kiểm tra bản quyền chặt chẽ 2 tầng (`can_access_batch` và `can_access_review`) cả trên giao diện và Flask API.
+    5. *Đồng bộ OTA Patch:*
+       - Đồng bộ đầy đủ 100% mã nguồn sang thư mục `patches/active/` (`web/index.html`, `web/js/features/batch_queue.js`, `batch_queue_manager.py`, `web/app.js`).
+
+- **Tích Hợp Chức Năng Quét Giọng Nói ASR Whisper Vào Biên Tập Hàng Loạt ([web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [routes/asr.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/asr.py), [patches/active/](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/)) (29/09/2026):**
+  - **Yêu cầu & Đặt vấn đề:**
+    Trong mục Biên tập hàng loạt, thay vì chỉ có một lựa chọn cố định là quét OCR khung hình hàng loạt, người dùng muốn bổ sung chức năng quét ASR Whisper nhận dạng trực tiếp từ giọng nói video, cho phép tự do chọn lựa phương thức trích xuất (OCR vs ASR), lưu cấu hình này (cả cấp độ mặc định toàn cục và cho từng video riêng lẻ), đồng thời áp dụng mượt mà vào quy trình quét 1-click cũng như quy trình "Tự Động Toàn Trình (Treo Máy Qua Đêm)".
+  - **Kiến trúc giải pháp hoàn chỉnh:**
+    1. *Toolbar Biên Tập Hàng Loạt Thông Minh:*
+       - Bổ sung menu chọn phương thức `#batchExtractMethodSelect` với 2 tùy chọn: `🔍 Quét OCR (Khung hình)` và `🎙️ Quét ASR (Giọng nói Whisper)`.
+       - Nút ⚙️ `#btnBatchConfigExtract` mở popup cài đặt chi tiết thông số trích xuất (`#batchExtractConfigModal`).
+       - Nút quét phụ đề linh hoạt `#btnBatchScanOcr` tự động đổi tên nhãn và biểu tượng tương ứng theo phương thức đã chọn (`🔍 Quét OCR Hàng Loạt` hoặc `🎙️ Quét ASR Hàng Loạt`).
+    2. *Popup Cài Đặt Chi Tiết Trích Xuất (`#batchExtractConfigModal`):*
+       - Tùy chỉnh chi tiết Model Whisper AI (`whisper`, `small`, `medium`), Ngôn ngữ nhận diện (`auto`, `zh`, `vi`, `en`, `ja`, `ko`), Thiết bị xử lý phần cứng (`auto`, `cuda`, `cpu`), Tách giọng thoại UVR/MDX (`isolateVocals`).
+       - Tùy chỉnh thông số OCR: FPS quét hình ảnh, Số luồng CPU, Thiết bị quét GPU CUDA/CPU.
+       - Cho phép lưu và áp dụng đồng loạt cho toàn bộ video trong danh sách.
+    3. *Popup Modal Chi Tiết Video (`#batchItemDetailModal`):*
+       - Nâng cấp thanh điều hướng trích xuất `#batchModalOcrGuideBar` với cụm nút chuyển đổi trực quan `🔍 Quét OCR` / `🎙️ Quét ASR`.
+       - Tự động chuyển đổi giữa tab OCR (vẽ khung chữ nhật) và tab ASR (chọn ngôn ngữ / model Whisper) của trình biên tập.
+       - Hỗ trợ lưu riêng cấu hình OCR/ASR cho video hiện tại (`🎯 Lưu Video Này`) hoặc áp dụng cho tất cả video (`🌐 Áp Dụng Cho Tất Cả`).
+    4. *Bảng Danh Sách Video (Batch Table):*
+       - Hiển thị badge phương thức bên cạnh tên video: `🎙️ ASR` hoặc `🔍 OCR` giúp người dùng nhận biết ngay cấu hình trích xuất của từng clip.
+       - Hỗ trợ trạng thái mới `🎙️ Đã quét ASR` (`asr_done`) bên cạnh `📄 Đã quét OCR` (`ocr_done`).
+    5. *Điều Phối Trích Xuất Phụ Đề & Tự Động Toàn Trình:*
+       - Hàm `startBatchSubtitleScan()` tự động điều phối `runAsrScanOnItem` hoặc `runOcrScanOnItem` theo cấu hình của từng video.
+       - Bước 1 trong quy trình "Tự Động Toàn Trình (Treo Máy Qua Đêm)" (`startBatchAllInOnePipeline`) tự động phân nhánh trích xuất ASR hoặc OCR, nối tiếp trơn tru sang các bước Chuẩn hóa, Bot Soát Bù Sub AI, Làm sạch/Dịch, Lồng tiếng và Xuất video.
+       - Nút dừng tác vụ (`stopCurrentBatchTask`) đồng thời ngắt cả tiến trình ASR ngầm (`/api/asr/stop`).
+    6. *Bảo Mật & Phân Giải Đường Dẫn Backend (`routes/asr.py`):*
+       - Tích hợp kiểm tra bản quyền `can_access_editor`, tự động tìm kiếm media hệ thống `find_media_on_system` và đăng ký đường dẫn `register_user_path` để mọi video được nạp vào batch đều chạy ASR mượt mà, không bị chặn quyền.
+    7. *Đồng bộ OTA Patch:*
+       - Đồng bộ 100% tất cả các tệp sửa đổi sang thư mục `patches/active/` (`web/index.html`, `web/js/features/batch_editor.js`, `routes/asr.py`).
+
+- **Khắc Phục Lỗi Dừng Xuất Video Khi Có Câu Rác OCR Ngắn Bị Bỏ Qua ([web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js)) (29/09/2026):**
+  - **Nguyên nhân lỗi:** Khi quét OCR video xuất hiện câu rác ngắn ($\le 5$ ký tự Hán thuần túy, watermark hoặc ký tự nhận diện lỗi), engine dịch thuật cố cứu hộ qua Google Translate. Nếu Google Translate thất bại hoặc trả về không hợp lệ, hệ thống chủ động đánh dấu `_ocr_garbage_skipped = true` và `translation = ''` để không chặn xuất video. Tuy nhiên, sang **[Bước 5/6] Hậu kiểm**, hàm `validateSubtitlesForExport` vẫn duyệt qua câu rác này với chuỗi dịch rỗng và kích hoạt cờ chặn an toàn: `Kiểm tra phụ đề sau dịch không đạt yêu cầu xuất video: Phát hiện 1 câu lỗi: ID X: Chưa có bản dịch`, khiến toàn bộ tiến trình xuất video bị ngắt quãng.
+  - **Giải pháp khắc phục:**
+    1. *Bộ lọc triệt để trước khi hậu kiểm:* Tự động loại bỏ hoàn toàn các câu có cờ `_ocr_garbage_skipped` hoặc `translation` rỗng trong `executeSubtitlesTranslateBatch` và trước khi chuẩn hóa / thẩm định ở Bước 5.
+    2. *Thẩm định an toàn:* Cập nhật `validateSubtitlesForExport` tự động bỏ qua (skip) các đối tượng có cờ `_ocr_garbage_skipped`, đảm bảo danh sách phụ đề đạt 100% hợp lệ và tiến trình xuất video hàng loạt chạy xuyên suốt, mượt mà.
+
+- **Ra Mắt AI Subtitle Inspector Bot — Giám Định & Đối Soát Phụ Đề Video 2 Chiều ([subtitle_inspector.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/subtitle_inspector.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js)) (28/09/2026):**
+  - **Yêu cầu & Đặt vấn đề:**
+    Khi người dùng thực hiện quét OCR phụ đề, có tình trạng video gốc có chữ nhưng bị lướt nhanh hoặc mờ dẫn đến OCR bị miss câu thoại. Ngược lại, một số trường hợp file phụ đề lại có câu thoại thừa/ảo (không có chữ xuất hiện trong video). Người dùng yêu cầu tạo một con bot tự động xem và đối soát video: phát hiện đoạn nào có sub ở video gốc mà thiếu trong SRT thì cảnh báo và bổ sung, đoạn nào SRT có mà video không có thì cảnh báo câu ảo.
+  - **Kiến trúc giải pháp (AI Subtitle Inspector Bot Tăng Tốc GPU & Chống Crash Driver Tuyệt Đối):**
+    1. *Khắc phục triệt để lỗi crash app (`nvwgf2umx.dll` / `0xc0000005`):*
+       - **Nguyên nhân crash:** Khi sử dụng `ThreadPoolExecutor` đa luồng gọi đồng thời DirectML (`DmlExecutionProvider`), driver DirectX 12 của NVIDIA (`nvwgf2umx.dll`) bị xung đột tài nguyên đa luồng dẫn đến lỗi bộ nhớ Access Violation làm văng app.
+       - **Giải pháp triệt để:** Thiết lập cơ chế `_gpu_ocr_lock` (Mutex Lock) độc quyền cho các tác vụ suy luận GPU, tái sử dụng 1 GPU session duy nhất an toàn tuyệt đối.
+    2. *Đột phá Tốc độ Quét (Hyper-Fast Single-Pass Monotonic Probing & Turbo Modes):*
+       - **Nguyên nhân tốc độ cũ chậm:** `cap.set()` trong OpenCV mất 150-250ms cho mỗi lần seek ngẫu nhiên. Với video 40 phút có hơn 430 khoảng trống, tổng số lần seek lên đến hơn 1.200 lần khiến người dùng phải đợi hàng phút.
+       - **Thuật toán Duyệt Đơn Luồng Tuần Tự (Single-Pass Monotonic):** Sắp xếp toàn bộ mốc thăm dò phụ đề ảo và mốc khoảng trống theo trục thời gian tăng dần duy nhất.
+       - **Tận dụng `cap.grab()` siêu tốc:** Với các bước nhảy ngắn $\le 3.5$s (~100 frames), chuyển sang dùng `cap.grab()` tuần tự (đo đạc đạt 1.050 FPS, chỉ tốn 0.95ms/frame — nhanh gấp ~150 lần so với `cap.set()`).
+       - **Bộ lọc Trống (<0.1ms):** Khung hình được kiểm tra biến thiên độ tương phản & Laplacian (`_is_blank_or_no_text_crop`) trong <0.1ms, loại bỏ ngay các cảnh nền tối/không có chữ mà không tiêu tốn GPU inference.
+       - **3 Chế độ Quét Linh Hoạt trên Giao diện:**
+         + ⚡ **Siêu Tốc (Turbo - Khuyên dùng):** Bỏ qua khoảng ngắt câu ngắn $< 0.85$s, chỉ mất ~10-15s cho toàn bộ tập phim 40 phút.
+         + ⚖️ **Cân Bằng (Balanced):** Quét khoảng trống $\ge 0.7$s.
+         + 🔬 **Soi Kỹ Toàn Diện (Deep):** Quét khoảng trống $\ge 0.5$s với mật độ lấy mẫu dày.
+       - **Cơ chế Tự Động Nạp Lại Module Backend (Hot Reload):** Tích hợp `importlib.reload(subtitle_inspector)` trong Flask routes để mã tối ưu có hiệu lực tức thì ngay khi sửa mà không cần tắt/mở lại server.
+    3. *Tầng API Backend (`routes/subtitles.py` & `patches/active/routes/subtitles.py`):*
+       - `POST /api/subtitles/inspect_stream`: Truyền phát Server-Sent Events (SSE) theo thời gian thực (real-time progress, log chi tiết, cảnh báo từng câu).
+       - `POST /api/subtitles/inspect`: API đồng bộ trả về danh sách cảnh báo.
+       - `POST /api/subtitles/apply_inspector_fixes`: Áp dụng thêm các câu bị sót và loại bỏ câu ảo, tự động chạy qua `deterministic_normalize_subtitles` để sắp xếp, khử trùng lặp và sửa chồng lấn timestamp.
+       - Bảo vệ phân quyền 2 tầng với `license_manager.check_permission('can_access_editor')` và `is_path_allowed`.
+    3. *Giao diện Người dùng (`web/index.html` & `web/app.js`):*
+       - Thêm nút hành động nổi bật `🤖 Bot Soát Sub AI` trên thanh công cụ Subtitle Editor.
+       - Giao diện Modal chuẩn Dark Mode cao cấp (`modalSubtitleInspector`): Hiển thị thanh tiến độ %, log realtime, 2 huy hiệu thống kê số câu sót và số câu ảo.
+       - Thêm nút chuyển nhanh `🔍 Đối chiếu trên Bảng Phụ Đề`: Tự động nạp các câu nghi vấn vào bảng và kích hoạt bộ lọc chuyên dụng.
+       - **Bộ lọc chuyên dụng `🤖 AI Check`:** Bổ sung thẻ lọc segmented tab `🤖 AI Check (X)` ngay cạnh `Trùng lặp`, `Có thể lỗi`, `Chưa dịch`.
+       - **Trải nghiệm Đối Chiếu Video 1 Click (Click-to-Seek):**
+         + Các dòng câu nghi ngờ phụ đề ảo được gắn viền cam/vàng `[🚫 AI: Nghi ảo]`.
+         + Các dòng câu vừa được AI tự động bù từ video được gắn viền xanh cyan `[✨ AI: Bổ sung]`.
+         + Click vào bất kỳ dòng nào trong bảng, trình phát video sẽ tự động nhảy (seek) đến đúng khung hình đó và dừng lại để người dùng soi tận mắt đối chiếu xem có đúng là lỗi không trước khi quyết định sửa hoặc xóa.
+    4. *Tích Hợp Toàn Diện Vào Biên Tập Hàng Loạt (`web/js/features/batch_editor.js` & `web/index.html`):*
+       - **Nút hành động hàng loạt 1-click:** Bổ sung nút `🤖 Soát & Bù Sub AI` trên thanh công cụ Bảng hàng loạt để chạy đối soát và tự động bù phụ đề cho toàn bộ video trong danh sách.
+       - **Tự động đối soát sau Quét OCR:** Khi chạy `Quét OCR Hàng Loạt`, hệ thống tự động gọi Bot giám định lại video, bù ngay các câu thoại bị trôi và lọc câu ảo trước khi lưu file `_novacut.srt`.
+       - **Tích hợp Bước 2.5 vào Toàn trình Tự động (All-In-One Pipeline):** Trước khi dịch thuật và lồng tiếng AI, hệ thống tự động đối soát để đảm bảo không bỏ sót bất kỳ câu thoại nào của video gốc.
+       - **Cài đặt linh hoạt:** Thêm toggle `Bot Soát & Bù Sub AI Tự Động` (`#batch_enableSubtitleInspector`) và menu chọn tốc độ quét (`#batch_inspectorSpeedMode`) trong card *Phụ Đề & Làm Mờ Hàng Loạt*.
+       - **Tùy chọn Quy trình Dịch & Làm sạch / Nguyên Dịch Thôi trong Toàn Trình:**
+         + Bổ sung menu lựa chọn `#batch_translationCleanMode` trong card *Phụ Đề & Làm Mờ Hàng Loạt* với 2 chế độ: "✨ Dịch & Làm Sạch (Chuẩn)" và "⚡ Nguyên Dịch Thôi (Bỏ qua làm sạch)".
+         + Khi bấm `⚡ Tự Động Toàn Trình (Treo Máy Qua Đêm)`, hệ thống chủ động hiển thị hộp thoại chọn phương án xử lý phụ đề (tự động ẩn thẻ "Chỉ làm sạch" để người dùng tập trung vào 2 phương án xuất video toàn trình).
+         + Bước 3/6 trong pipeline tự động: Nếu chọn "Nguyên dịch thôi", hệ thống tự động bỏ qua bước làm sạch phụ đề AI (giữ nguyên cấu trúc câu đã được bù từ video gốc) và chuyển thẳng sang Bước 4/6 Dịch thuật AI song song.
+       - **Huy hiệu trực quan:** Hiển thị huy hiệu `🤖 Đã soát AI` trên từng dòng video trong bảng hàng loạt.
+    5. *Kiểm thử tự động:* Toàn bộ 7 unit tests và API tests trong `tests/test_subtitle_inspector.py`, `tests/test_subtitle_inspector_api.py`, và `tests/test_batch_subtitle_inspector.py` đều pass 100%.
+
+
+- **Tự Động Phát Hiện Môi Trường & Tự Tải Cài Đặt PyTorch AI Cho Bộ Tách Âm Gốc (Stem Separator / MDX-NET) ([audio_separator.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/audio_separator.py), [patches/active/audio_separator.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/audio_separator.py), [mdx_separator.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/mdx_separator.py), [patches/active/mdx_separator.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/mdx_separator.py)) (27/09/2026):**
+  - **Hiện tượng người dùng báo:**
+    Khi người dùng bấm "⚡ Tách & Nghe Thử Âm SFX" hoặc sử dụng tính năng Tách & Lọc Âm Gốc AI (Stem Separator), tiến trình dừng lại ở 5% và báo lỗi đỏ: `❌ Lỗi: No module named 'torch'`.
+  - **Nguyên nhân cốt lõi:**
+    1. *Thiếu PyTorch trong runtime đóng gói:* Bản build `NovaCut.exe` loại trừ gói `torch` và `torchaudio` để tránh phình dung lượng bộ cài lên 3GB - 4GB.
+    2. *Ô nhiễm biến môi trường PyInstaller:* Khi app chạy chế độ đóng gói (`NovaCut.exe`), PyInstaller gán các biến môi trường `PYTHONHOME` và `PYTHONPATH` trỏ vào thư mục `_internal`. Khi `audio_separator.py` gọi tiến trình con Python hệ thống, tiến trình con này bị ép tìm thư viện trong `_internal` (vốn không có `torch`), dẫn đến `ModuleNotFoundError: No module named 'torch'`.
+    3. *Chưa có cơ chế tự động cài đặt (Auto-Bootstrap):* Nếu máy tính người dùng chưa có PyTorch hoặc chạy môi trường Python chưa cài đặt, hệ thống lập tức ném lỗi thay vì tự động tải và cài đặt cho người dùng.
+  - **Giải pháp xử lý triệt để:**
+    1. *Vệ sinh biến môi trường con (`_clean_child_env`):* Loại bỏ triệt để `PYTHONHOME`, `PYTHONPATH`, `PYTHONEXECUTABLE`, `_MEIPASS`, `_MEIPASS2` khi khởi chạy subprocess, giúp tiến trình con nạp đúng `site-packages` của nó.
+    2. *Tự động quét và ưu tiên các runtime sẵn có (`_find_or_prepare_mdx_python`):* Tự động quét kiểm tra `torch` & `torchaudio` trên tất cả các runtime nội bộ (`runtimes/vieneu_gpu`, `.asr_venv`, `rvc_env`), Python đang chạy, các bản cài đặt chuẩn Windows (Python 3.12, 3.11, 3.10) và PATH. Nếu đã có runtime phù hợp, lập tức kích hoạt sử dụng mà không cần tải lại.
+    3. *Tự động tải & cài đặt PyTorch thông minh (Auto-Download / Auto-Install):* Nếu máy khách hoàn toàn chưa có PyTorch, hệ thống tự động kiểm tra phần cứng (`nvidia-smi`):
+       - Có GPU NVIDIA: Tự động tải bản PyTorch CUDA tương thích kiến trúc mới (RTX 50-series / cu124).
+       - Không có GPU: Tự động tải bản CPU siêu nhẹ.
+       - Tự động tạo venv tách biệt tại `runtimes/mdx_runtime` (hoặc cài trực tiếp vào Python cơ sở), cập nhật real-time trạng thái download trên thanh tiến trình và System Log của giao diện web.
+    4. *Tối ưu hóa bootstrap ONNX Runtime:* Cập nhật `mdx_separator.py` không gỡ cài đặt đè khi đã có DirectML, CUDA hoặc CPU provider hợp lệ; chặn fallback in-process sai trong bản frozen exe.
+    5. *Đồng bộ toàn diện:* Đã đồng bộ mã nguồn hoàn chỉnh vào `patches/active/audio_separator.py` và `patches/active/mdx_separator.py`. Kiểm thử thực tế pipeline chạy trọn vẹn từ 5% đến 100% thành công mỹ mãn.
+
+- **Khắc Phục Lỗi Biên Tập Hàng Loạt Bị Block Vì Câu Rác OCR Ngắn (Tự Động Bỏ Qua Gracefully) ([web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py)) (26/09/2026):**
+  - **Hiện tượng người dùng báo:**
+    Khi dịch phụ đề trong Biên tập hàng loạt, một số video bị báo lỗi `❌ Dịch thuật thất bại: còn X/... câu chưa được dịch hoặc sai ngôn ngữ target`. Kiểm tra kỹ thì các câu bị lỗi chỉ là **1–3 chữ Hán đơn lẻ** như `"水"`, `"业"`, `"白山"`, `"江小白。"` — đây là rác OCR từ watermark/logo góc màn hình, không phải thoại thực sự. Vì chúng mà toàn bộ video bị block không xuất được.
+  - **Nguyên nhân cốt lõi:**
+    Bộ hậu kiểm cuối cùng trong `batch_editor.js` không phân biệt câu rác OCR ngắn vô nghĩa với câu thoại thực sự bị thiếu bản dịch. Nó đối xử như nhau và ném lỗi block video cho cả hai loại.
+  - **Giải pháp xử lý:**
+    1. *Tầng cứu hộ mới (Tầng 3b) trong `batch_editor.js`:* Sau các tầng retry và làm sạch chữ Hán, thêm bước phân loại thông minh: câu gốc chỉ gồm ≤5 ký tự Hán thuần túy (không có ký tự nào khác) được phân loại là **rác OCR**. Hệ thống cố thử dịch chúng qua Google Translate (`mode: 'free'`). Nếu Google Translate thành công và kết quả không còn chữ Hán → chấp nhận. Nếu vẫn thất bại → gán chuỗi rỗng, đánh dấu `_ocr_garbage_skipped: true` và **tiếp tục xuất video bình thường** (không throw lỗi). Chỉ ném lỗi nếu còn câu **DÀI thực sự** chưa được dịch (không phải rác OCR ngắn).
+    2. *Cập nhật lưới an toàn backend (`routes/subtitles.py`):* Trong vòng lặp hậu kiểm cuối cùng, thêm phân loại OCR garbage tương tự. Câu rác được thử Google Translate trước; nếu kết quả vẫn còn chữ Hán hoặc Google Translate thất bại → gán `translation = ''` và `_ocr_garbage_skipped = True`, in log cảnh báo nhưng không raise exception.
+    3. *Thông báo thân thiện:* Log system hiển thị rõ số câu rác OCR đã được bỏ qua gracefully (`🧹 Phát hiện X câu rác OCR...`, `✅ X dịch được, Y bỏ qua gracefully`, `ℹ️ Z câu rác OCR sẽ không hiển thị trên phụ đề`).
+    4. *Đồng bộ toàn diện:* Đã đồng bộ vào `patches/active/web/js/features/batch_editor.js` và `patches/active/routes/subtitles.py`.
+
+- **Nâng Cấp Hệ Thống AI Dịch Thuật & Làm Sạch Phụ Đề Sang Qwen 3.8 Flash & GPT-6 Luna, Triệt Tiêu Lỗi Rate Limit 429 Khi Dịch Hàng Loạt ([translation_config.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/translation_config.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [routes/state.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/state.py), [routes/core.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/core.py), [web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html)) (25/09/2026):**
+  - **Hiện tượng người dùng báo:**
+    Khi dịch phụ đề trong Biên tập hàng loạt cho video có số câu lớn (hơn 2.700 câu), các Worker W1, W2, W4, W5, W6 đồng loạt báo `⚠️ Nhóm ... phản hồi không đầy đủ, sẽ tự động retry cứu hộ` và cuối cùng báo lỗi `❌ Dịch thuật thất bại: còn 2514/2751 câu chưa được dịch hoặc sai ngôn ngữ target`. Người dùng yêu cầu kiểm tra và chuyển mô hình làm sạch sang `openai/gpt-6-luna` và dịch sang `qwen/qwen3.8-flash`.
+  - **Nguyên nhân cốt lõi:**
+    1. *Nghẽn Rate Limit upstream 429:* Trong `batch_editor.js`, số luồng worker dịch thuật được cấu hình ghim cứng 6 luồng (`CONCURRENCY = 6`) với mẻ 100 câu (`BATCH_SIZE = 100`) và độ trễ khởi động quá thấp (120ms). Khi 6 worker đồng loạt gửi các request lớn lên OpenRouter/Alibaba trong cùng 1 giây, upstream Alibaba lập tức trả về lỗi HTTP 429 Rate Limit khiến hàng loạt mẻ dịch bị rỗng.
+    2. *Mô hình cũ:* Hệ thống vẫn đang trỏ về `qwen/qwen3.7-flash` và `openai/gpt-5.6-luna-pro`, chưa khai thác phiên bản mới nhất `qwen/qwen3.8-flash` và `openai/gpt-6-luna` trên OpenRouter.
+  - **Giải pháp xử lý triệt để:**
+    1. *Nâng cấp mô hình làm sạch phụ đề AI (Clean SRT):* Cập nhật toàn bộ backend (`routes/subtitles.py`) và frontend (`batch_editor.js`, `app.js`, `index.html`) sang **GPT-6 Luna** (`openai/gpt-6-luna` trên OpenRouter / `gpt-6-luna` trên direct).
+    2. *Nâng cấp mô hình dịch thuật AI (Translate SRT):* Cập nhật cấu hình trung tâm (`translation_config.py`, `routes/state.py`, `routes/subtitles.py`, `batch_editor.js`, `app.js`, `index.html`) sang **Qwen 3.8 Flash** (`qwen/qwen3.8-flash`).
+    3. *Tối ưu luồng xử lý song song chống nghẽn 429:* Giảm số worker dịch trong `batch_editor.js` xuống 3 luồng (`CONCURRENCY = 3`), mẻ `BATCH_SIZE = 80`, tăng giãn cách worker lên `500ms`, đồng bộ với cấu hình chuẩn của `translation_config.py`, triệt tiêu hoàn toàn hiện tượng 429 Rate Limit khi xử lý phụ đề dài.
+    4. *Đồng bộ toàn diện:* Đã đồng bộ mã nguồn hoàn chỉnh vào thư mục bản vá `patches/active/`.
+
+- **Khắc Phục Lỗi Xuất Video Biên Tập / Hàng Loạt Bị Thiếu Giọng Đọc AI (Không Tạo Được Voice) ([routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [patches/active/routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/video_edit.py), [ai_dubbing.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/ai_dubbing.py), [patches/active/ai_dubbing.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/ai_dubbing.py), [local_voice_engine.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/local_voice_engine.py), [patches/active/local_voice_engine.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/local_voice_engine.py), [web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js)) (25/09/2026):**
+  - **Hiện tượng người dùng báo:**
+    Các bước OCR, dịch phụ đề và dựng video hoạt động tốt, nhưng khi xuất video thành phẩm thì không có giọng đọc AI (video bị câm tiếng lồng tiếng, chỉ có tiếng gốc hoặc không tạo được voice).
+  - **Nguyên nhân cốt lõi:**
+    1. *Mất dữ liệu phụ đề khi tắt burn-in (`subtitles_enabled=False`):* Trong `batch_editor.js`, khi `subtitles_enabled=false`, trường `subtitles` được gửi đi dưới dạng `undefined`, còn phụ đề được đặt trong `subtitles_for_dubbing`. Tuy nhiên backend `routes/video_edit.py` trước đây chỉ đọc `subs_for_dubbing = subtitles or []` mà không trích xuất `data.get('subtitles_for_dubbing')`, khiến mảng câu thoại lồng tiếng bị rỗng hoàn toàn.
+    2. *Đảo ngược độ ưu tiên trường kiểm tra dịch:* Trong `routes/video_edit.py`, kiểm tra `s.get('text', '') or s.get('translation', '')` đọc trường `text` (vốn là chữ Hán từ OCR) trước `translation` (tiếng Việt). Khiến hệ thống luôn ngộ nhận phụ đề chưa dịch, kích hoạt khối cứu hộ và cố ghi đè bằng file SRT cũ hoặc rỗng.
+    3. *Lỗi biến chưa khởi tạo trong Engine Voice:*
+       - Trong `ai_dubbing.py` (`build_dubbing_track_for_subtitles_generator`): Thiếu định nghĩa biến `voice_profile` gây `NameError: name 'voice_profile' is not defined`.
+       - Trong `local_voice_engine.py` (`synthesize`): Thiếu gán biến kênh `dst_ch` khi IPC GPU khả dụng gây `UnboundLocalError`.
+    4. *Thiếu cơ chế Cứu hộ / Fallback trong luồng Batch GPU của `ai_dubbing.py`:* Khi một câu trong lô GPU gặp lỗi hoặc trả về file rỗng, hệ thống chỉ ghi log cảnh báo mà không chuyển sang CPU hay Edge-TTS như luồng đơn, khiến `sentence_audios` có thể bị rỗng.
+    5. *Âm thầm bỏ qua lỗi lồng tiếng khi xuất video:* Backend trước đây chỉ ghi log cảnh báo khi không tạo được `dub_track` và vẫn tiếp tục xuất video không tiếng, thay vì báo lỗi dừng tác vụ để người dùng phát hiện kịp thời.
+  - **Giải pháp xử lý triệt để:**
+    1. *Đồng bộ trường phụ đề lồng tiếng:* Trong `routes/video_edit.py`, `subs_for_dubbing` được trích xuất ưu tiên từ `data.get('subtitles_for_dubbing') or subtitles or []`. Trong `batch_editor.js`, `subtitles_for_dubbing` luôn được gửi đầy đủ cùng mảng phụ đề đã chuẩn hóa.
+    2. *Ưu tiên kiểm tra bản dịch trước:* Đảo thứ tự kiểm tra thành `s.get('translation', '') or s.get('text', '')`, đảm bảo không kích hoạt nhầm logic phục hồi khi phụ đề đã có bản dịch hợp lệ.
+    3. *Khắc phục hoàn toàn lỗi biến engine:* Sửa triệt để `voice_profile` trong `ai_dubbing.py` và `dst_ch` trong `local_voice_engine.py`.
+    4. *Bổ sung cơ chế Fallback per-sentence trong GPU Batch Mode:* Nếu câu nào trong GPU batch bị lỗi hoặc file âm thanh rỗng, tự động thử lại ngay lập tức bằng `synthesize_sentence` (fallback qua CPU Engine Pool hoặc Edge-TTS), bảo đảm 100% không bao giờ bị mất tiếng.
+    5. *Chặn xuất video câm tiếng:* Nếu tùy chọn lồng tiếng AI được bật mà không tạo được `dub_track`, backend sẽ dừng quy trình xuất và gọi `job.set_failed()` để hiển thị thông báo lỗi rõ ràng trên giao diện.
+
+- **Khắc Phục Lỗi Biên Tập Hàng Loạt Bị Báo "Kiểm tra phụ đề sau dịch không đạt yêu cầu xuất video: Danh sách phụ đề rỗng" ([web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py), [subtitle_postprocessor.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/subtitle_postprocessor.py), [patches/active/subtitle_postprocessor.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/subtitle_postprocessor.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [patches/active/routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/video_edit.py), [tests/test_batch_editor_fixes.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_batch_editor_fixes.py)) (24/09/2026):**
+  - **Hiện tượng người dùng báo:**
+    Khi chạy biên tập hàng loạt (All-In-One Pipeline), sau khi quét OCR thành công (ví dụ: 108 câu), sang Bước 2/6 chuẩn hóa & khử câu trùng dưới 0.7 giây thì toàn bộ danh sách phụ đề bị xóa sạch. Dẫn đến bước 3 và bước 4 bị bỏ qua, bước 5 ném ngoại lệ dừng xuất video: `Kiểm tra phụ đề sau dịch không đạt yêu cầu xuất video: Danh sách phụ đề rỗng`.
+  - **Nguyên nhân cốt lõi:**
+    1. *Lệch định dạng trường thời gian:* Mảng phụ đề trả về từ `/api/read_srt` và OCR sử dụng các trường `startSeconds`, `endSeconds` (kiểu float) và chuỗi `time` (ví dụ `00:00:00.440 - 00:00:03.480`), không chứa thuộc tính `start` hay `start_time`.
+    2. *Lỗi lọc trong hàm chuẩn hóa client:* Trong `normalizeAndDedupSubtitles` (`batch_editor.js`), logic fallback chỉ đọc `s.start || s.start_time`. Do hai trường này đều là `undefined`, hàm `srtTimeToSeconds` trả về `0` cho cả `sSec` và `eSec`. Điều kiện `if (eSec <= sSec) return;` kích hoạt với `0 <= 0`, dẫn đến toàn bộ 100% câu thoại bị loại bỏ ngay lập tức, trả về mảng rỗng `[]`.
+    3. *Thiếu Route Backend:* Backend chưa đăng ký route `POST /api/subtitles/normalize_dedup`, buộc frontend phải nhảy vào khối fallback client bị lỗi.
+    4. *Ghi đè bản dịch và hardcode ngôn ngữ:* Hàm chuẩn hóa cũ tự động gán `translation: trans || text`, khiến câu OCR tiếng Trung bị ép vào cột bản dịch trước khi dịch. Ngoài ra, `video_edit.py` bị hardcode kiểm tra `target_lang='vi'`, gây lỗi giả khi người dùng chọn xuất video dịch sang tiếng Anh (`target_lang='en'`).
+  - **Giải pháp xử lý triệt để:**
+    1. *Tương thích đa hình trường thời gian (Polymorphic Timestamps):* Viết lại `srtTimeToSeconds` và logic bóc tách thời gian trong `normalizeAndDedupSubtitles` (`batch_editor.js`), `subtitle_postprocessor.py`, và `routes/subtitles.py` (`export_temp_srt`). Hỗ trợ đầy đủ: `startSeconds`, `endSeconds`, `start_sec`, `end_sec`, `start`, `end`, `start_time`, `end_time` và chuỗi `time` (`00:00:00.000 - ...` hoặc `... --> ...`). Đảm bảo 100% câu phụ đề từ OCR/SRT được giữ nguyên vẹn.
+    2. *Bổ sung đầy đủ thuộc tính trả về:* Cập nhật kết quả của `normalizeAndDedupSubtitles` trả về đầy đủ `id`, `startSeconds`, `endSeconds`, `start`, `end`, `time`, `text`, `translation` (bảo toàn chuỗi rỗng cho câu chưa dịch).
+    3. *Đăng ký Route Backend `POST /api/subtitles/normalize_dedup`:* Tích hợp trực tiếp với engine xử lý chuẩn xác `subtitle_postprocessor.deterministic_normalize_subtitles`.
+    4. *Động hóa ngôn ngữ đích:* Truyền chính xác `target_lang` (`'vi'`, `'en'`, ...) từ cấu hình người dùng vào `itemOverrides` và `routes/video_edit.py`, không hardcode `'vi'`.
+
+
+- **Khắc Phục 3 Lỗi Nghiêm Trọng Trong Biên Tập Hàng Loạt: Sai Giọng Đọc (Adam Nhảy Sang Ngọc Huyền), Câu Có Tiếng Câu Không, và Lỗi Không Dịch Được Khi Xuất ([local_voice_worker.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/local_voice_worker.py), [patches/active/local_voice_worker.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/local_voice_worker.py), [local_voice_engine.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/local_voice_engine.py), [patches/active/local_voice_engine.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/local_voice_engine.py), [custom_voices.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/custom_voices.py), [patches/active/custom_voices.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/custom_voices.py), [ai_dubbing.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/ai_dubbing.py), [patches/active/ai_dubbing.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/ai_dubbing.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js), [web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js)) (24/09/2026):
+  - **Hiện tượng người dùng báo:**
+    1. Khi xuất video trong Biên tập hàng loạt báo lỗi: `Dịch thuật thất bại: còn 20/482 câu chưa được dịch hoặc sai ngôn ngữ target...`.
+    2. Video xuất ra thì bị tình trạng câu có tiếng lồng tiếng câu không (ngắt quãng / câm tiếng trên timeline).
+    3. Lồng tiếng bị sai giọng đọc: Người dùng chọn giọng nam `Adam` nhưng khi video xuất ra đoạn có tiếng lồng tiếng thì lại phát giọng nữ `Ngọc Huyền`.
+  - **Nguyên nhân cốt lõi:**
+    1. *Sai giọng Adam ➔ Ngọc Huyền:* Modal chọn giọng gán `voice_id` là `kokoro_am_adam`. Frontend không lưu `gender` và `lang` tương ứng vào input. Trong `local_voice_worker.py`, từ điển `preset_map` ánh xạ `local_adam` thành `"Adam (EN)"` trong khi tên model Vieneu thực tế là `"Adam"`. Đặc biệt, tại dòng fallback mặc định bị hardcode: `target_voice = preset_map.get(voice_id, "Ngọc Huyền")` khiến mọi voice ID không match chính xác đều bị ép về giọng nữ `Ngọc Huyền`.
+    2. *Câu có tiếng câu không:* Người dùng chọn giọng tiếng Anh (`Adam`), nhưng phụ đề video đã được dịch sang tiếng Việt. Bộ phonemizer tiếng Anh không đọc được dấu tiếng Việt dẫn đến lỗi hoặc crash. Khi một câu bị lỗi, `ai_dubbing.py` (dòng 766–772) âm thầm bỏ qua (`continue`) thay vì bù đắp âm thanh, làm câu đó bị mất hẳn tiếng trên timeline video.
+    3. *Lỗi dịch thuật thất bại:* Video nguồn Bilibili có phụ đề song ngữ 2 dòng (dòng trên tiếng Trung, dòng dưới tiếng Anh). OCR nhận diện gom cả hai dòng tạo thành các câu nhiễu đuôi (vd: `...AMT变速箱, Its` hoặc `...超跑, but a wet`). Hậu kiểm `subtitle_postprocessor.py` phát hiện chữ Hán sót lại liền đánh dấu câu chưa hợp lệ. Ở backend, nếu 1 câu trong chunk bị lỗi thì toàn bộ chunk bị quăng exception, dẫn đến vòng lặp cứu hộ không cứu được các đoạn này và chặn xuất video.
+  - **Giải pháp xử lý:**
+    1. *Khắc phục triệt để giọng đọc & Giữ nguyên giới tính:*
+       - Ánh xạ chính xác các alias của Adam (`"local_adam"`, `"kokoro_am_adam"`, `"adam"`, `"en_adam"`) về preset chuẩn `"Adam"`.
+       - Xóa bỏ hoàn toàn hardcoded fallback `"Ngọc Huyền"`, thay thế bằng hàm suy luận giới tính động (`Minh Đức` cho nam, `Adam` cho nam EN, `Ngọc Huyền` cho nữ).
+       - Bổ sung `dataset.gender`, `dataset.lang`, `dataset.provider` vào thẻ voice card và truyền đầy đủ vào `dubbingConfig` khi xuất video.
+    2. *Bảo đảm 100% âm lượng timeline & Không bao giờ bỏ rơi câu thoại:*
+       - Trong `ai_dubbing.py`, nhận diện nếu text có dấu tiếng Việt mà chọn giọng tiếng Anh (như Adam), tự động chuyển hướng sang giọng tiếng Việt cùng giới tính (`local_minh_duc` / Edge-TTS Nam) để đọc chuẩn ngữ âm mà không đổi giới tính.
+       - Tích hợp lớp cứu hộ Edge-TTS tự động trước khi chấp nhận bỏ cuộc: nếu bộ tổng hợp cục bộ thất bại, Edge-TTS cùng giới tính sẽ lập tức tạo audio dự phòng, đảm bảo mọi câu thoại trên timeline đều có âm thanh lồng tiếng đầy đủ.
+    3. *Bộ lọc làm sạch nhiễu OCR song ngữ & Cứu hộ dịch phụ đề:*
+       - Thêm regex tiền xử lý làm sạch các mảnh tiếng Anh rác bị dính sau dấu câu tiếng Trung trước khi gửi dịch.
+       - Trong `batch_editor.js`, bổ sung bước rescue dọn dẹp ký tự Hán sót lại trước khi xác thực cuối cùng, đảm bảo phụ đề đạt 100% sạch sẽ và quy trình xuất video thành công mượt mà.
+
+- **Sắp Xếp & Đánh Số Thứ Tự Video Douyin Tải Hàng Loạt Từ Cũ Nhất Đến Mới Nhất (#1 Là Tập Đầu Tiên) ([douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/douyin_browser_downloader.py), [patches/active/douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/douyin_browser_downloader.py), [routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/download.py), [patches/active/routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/download.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [patches/active/web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js), [tests/test_douyin_download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_douyin_download.py)) (24/09/2026):**
+  - **Yêu cầu của người dùng:** Khi tải video hàng loạt từ Douyin, video đăng lâu nhất (cũ nhất / tập 1) phải được đánh số 1 (`001_`), sau đó tăng dần về gần đây và video đăng mới nhất (tập cuối) sẽ mang số lớn nhất.
+  - **Giải pháp xử lý:**
+    1. *Thêm thuật toán sắp xếp theo thời gian đăng bài (`sort_videos_chronological`):* Bổ sung hàm sắp xếp ưu tiên `mix_order` (số tập tuyển tập 1..N) và `create_time` (thời gian đăng bài tăng dần) trong `douyin_browser_downloader.py`. Video đăng lâu nhất đứng đầu danh sách, video mới nhất đứng cuối.
+    2. *Tích hợp vào Route tải hàng loạt (`routes/download.py`):* Nhận cờ `sort_order='oldest_first'` và tự động sắp xếp danh sách video trước khi đưa vào worker tải, đảm bảo các file tải về luôn được gắn tiền tố `001_`, `002_`... từ tập đầu tiên đến tập cuối.
+    3. *Cập nhật giao diện (`web/index.html`):* Đặt tùy chọn `📅 Đăng lâu nhất ➔ Mới nhất (#1 là tập đầu)` làm tùy chọn sắp xếp mặc định (`selected`) trong menu `#douyinSortSelect`.
+    4. *Cập nhật logic giao diện (`web/app.js`):* Trong `getFilteredAndSortedDouyinVideos`, triển khai thuật toán sắp xếp theo `mix_order` / `create_time` tăng dần khi chọn `oldest_first`. Khi bấm tải, danh sách `selectedList` được đồng bộ chính xác theo thứ tự hiển thị này.
+    5. *Kiểm thử tự động:* Bổ sung unit test `test_10_sort_videos_chronological` vào `tests/test_douyin_download.py`, toàn bộ 10/10 tests PASS 100%.
+
+- **Sửa Lỗi Dịch Phụ Đề Hàng Loạt Bị Mất ID & Báo Thiếu Câu ([routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py), [subtitle_postprocessor.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/subtitle_postprocessor.py), [patches/active/subtitle_postprocessor.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/subtitle_postprocessor.py), [web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [patches/active/web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/js/features/batch_editor.js), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js), [tests/test_batch_editor_fixes.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_batch_editor_fixes.py)) (24/09/2026):**
+  - **Hiện tượng người dùng báo:** Khi dịch phụ đề trong Biên tập hàng loạt, cả 6 worker đều thông báo `✅ Dịch xong nhóm 101–200`, `201–300`... đạt 100% (550/550 câu). Nhưng ngay lập tức hệ thống cảnh báo `⚠️ Phát hiện 450/550 câu chưa dịch xong. Đang kích hoạt cứu hộ retry theo từng ID...` và cuối cùng báo lỗi: `❌ Dịch thuật thất bại: còn 450/550 câu chưa được dịch hoặc sai ngôn ngữ target (ID 101, 102, 103...)`.
+  - **Nguyên nhân cốt lõi:**
+    1. Trong `routes/subtitles.py` (`translate_subtitles`), cuối hàm có dòng gọi `subtitles = subtitle_postprocessor.deterministic_normalize_subtitles(subtitles, dedup_window=0.7)`.
+    2. Trong `subtitle_postprocessor.py`, hàm này tự động chạy vòng lặp đánh lại ID tuần tự: `item['id'] = idx` từ 1..N. Khi worker gửi lên chunk gồm các câu có ID 101–200, hàm này xóa ID 101–200 và đổi thành 1–100.
+    3. Phía Frontend (`batch_editor.js`), việc ghi nhận bản dịch được ánh xạ qua `const target = subMap.get(String(item.id))`. Do các chunk 2, 3, 4, 5, 6 đều trả về ID 1..100, chúng liên tục ghi đè lên các câu 1..100 đầu tiên. Toàn bộ 450 câu từ 101 đến 550 không hề được gán bản dịch và giữ nguyên tiếng Trung.
+    4. Vòng lặp cứu hộ gửi các batch 20 câu (101–120) lên cũng lại bị đổi thành 1–20 và ghi đè tiếp lên các câu đầu, dẫn đến việc cứu hộ không thể cứu được các câu sau ID 100.
+  - **Giải pháp xử lý:**
+    1. *Bảo toàn ID trong endpoint dịch (`routes/subtitles.py` & `patches/active`):* Gỡ bỏ việc gọi `deterministic_normalize_subtitles` trong `translate_subtitles`. Giữ nguyên 100% cấu trúc, ID gốc và số lượng câu của chunk phụ đề gửi lên.
+    2. *Hỗ trợ cờ reindex linh hoạt (`subtitle_postprocessor.py` & `patches/active`):* Bổ sung tham số `reindex: bool = True` vào `deterministic_normalize_subtitles`. Khi `reindex=False`, hàm sẽ bảo toàn `item['id'] = item.get('id', idx)` thay vì ép buộc đánh lại từ 1..N.
+    3. *Cơ chế phòng vệ hai lớp (Index Fallback) phía Frontend (`batch_editor.js`, `web/app.js` & `patches/active`):* Nếu ID trả về không tìm thấy trong `subMap` (hoặc bị sai lệch), frontend tự động kích hoạt ánh xạ fallback theo vị trí `chunk[cIdx].id` tương ứng trong mảng chunk ban đầu, đảm bảo 100% câu dịch đều được đưa vào đúng dòng phụ đề.
+    4. *Kiểm thử tự động:* Bổ sung 2 bài kiểm tra mới trong `tests/test_batch_editor_fixes.py` xác thực việc bảo toàn ID của chunk và hàm normalize khi `reindex=False`, nâng tổng số test lên 11/11 tests PASS.
+
+- **Khắc Phục Lỗi Mở Thư Mục Lưu Video Trong Lịch Sử Xuất Video ([routes/export_history.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/export_history.py), [patches/active/routes/export_history.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/export_history.py), [export_history.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/export_history.py), [patches/active/export_history.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/export_history.py), [web_app.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web_app.py), [patches/active/web_app.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web_app.py), [tests/test_export_history.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_export_history.py)) (24/09/2026):**
+  - **Hiện tượng người dùng báo:** Trong phần Lịch sử xuất video, khi ấn vào nút/icon mở thư mục lưu video thì File Explorer không mở đúng địa chỉ thư mục chứa video (bị văng về Documents hoặc mở thư mục sai).
+  - **Nguyên nhân cốt lõi:**
+    1. Khi lệnh `explorer /select,"<file_path>"` được gọi trên Windows với các ổ đĩa ảo, ổ đĩa đám mây (Google Drive Virtual Drive `G:\`), ổ mạng UNC (`\\`), hoặc khi đường dẫn chưa được chuẩn hóa ký tự ổ đĩa viết hoa (vd: `d:\` thay vì `D:\`), Windows Explorer không nhận diện được tham số `/select` và tự động fallback về thư mục mặc định của người dùng (`This PC` hoặc `Documents`).
+    2. Khi file video đã bị người dùng di chuyển hoặc đổi tên sau khi xuất, lệnh mở file thất bại mà không có fallback mở thư mục cha còn tồn tại.
+  - **Giải pháp xử lý:**
+    1. *Chuẩn hóa đường dẫn tuyệt đối (Canonicalization):* Sử dụng `os.path.realpath`, ép viết hoa ký tự ổ đĩa Windows (`D:\`, `G:\`...) và kiểm tra tồn tại của file / thư mục cha.
+    2. *Xử lý chuyên biệt cho Cloud / Virtual Drive:* Nhận diện ổ đĩa ảo (Google Drive `G:\` hoặc ổ mạng `\\`) để mở trực tiếp bằng `os.startfile(folder_dir)` an toàn, tránh lỗi của `explorer /select`.
+    3. *Fallback thư mục cha thông minh:* Nếu file không còn nhưng thư mục cha vẫn tồn tại, tự động mở thư mục cha bằng `os.startfile(folder_dir)`.
+    4. *Chuẩn hóa CSDL SQLite:* Cập nhật toàn bộ 75 bản ghi lịch sử xuất hiện có trong database sang định dạng ổ đĩa viết hoa chuẩn Windows.
+    5. *Cô lập kiểm thử:* Cập nhật `tests/test_export_history.py` để cô lập hoàn toàn môi trường DB tạm trong `setUp`/`tearDown`, ngăn chặn dữ liệu test ghi vào database thực tế của người dùng. Toàn bộ 15/15 tests đều PASS 100%.
+
+- **Tái Cấu Trúc & Sửa Chữa Triệt Để Luồng Biên Tập Hàng Loạt (Batch Editor Pipeline) ([web/js/features/batch_editor.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/js/features/batch_editor.js), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [subtitle_postprocessor.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/subtitle_postprocessor.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [routes/tts.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/tts.py), [ai_dubbing.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/ai_dubbing.py), [custom_voices.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/custom_voices.py), [local_voice_engine.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/local_voice_engine.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html)) (24/09/2026):**
+  - **Hiện tượng & Báo cáo kiểm định:** Theo báo cáo kiểm định luồng Biên tập hàng loạt (`reports/batch_editor_audit_2026-09-24.md`), hệ thống tồn tại 10 bất cập nghiêm trọng: giọng nam bị nhảy sang nữ (Ngọc Huyền) khi fallback; preview voice đọc sai ngôn ngữ và cache lỏng lẻo; tắt phụ đề nhưng FFmpeg vẫn burn-in SRT từ file tạm; SRT sau OCR/dịch bị chồng lấn, câu lặp dưới 0.7s không gộp, câu lỗi vẫn cho export; pipeline all-in-one không chuẩn thứ tự; fresh_run không xóa sạch temp/cache; ghi đè file SRT gốc.
+  - **Giải pháp xử lý triệt để:**
+    1. *Bảo toàn Giới tính & Ngôn ngữ (Gender & Language Preservation):* Xóa bỏ hoàn toàn hard-code fallback về 'Ngọc Huyền'. Hàm `get_fallback_voice` và `select_preset_for_voice` luôn đảm bảo Nam ra Nam, Nữ ra Nữ. Nếu không tìm thấy voice cùng giới tính và ngôn ngữ đích, ném ngoại lệ rõ ràng thay vì đổi giới tính người dùng đã chọn.
+    2. *Voice Preview chuẩn ngôn ngữ & Multi-factor Cache:* `/api/tts/preview` hỗ trợ đầy đủ `voice_id`, `text`, `lang/locale`, `gender`, `speed`. Backend từ chối mismatch ngôn ngữ (400). Cache key đa nhân tố: `prev_{voice_id}_{cache_hash}.wav` cấu thành từ `voice + text + locale + speed + engine_version`.
+    3. *Bảo đảm tuyệt đối khi tắt phụ đề (`subtitles_enabled=false`):* Backend loại bỏ hoàn toàn filter `subtitles=` và `ass=` trong chuỗi FFmpeg filter graph qua `sanitize_filter_complex_graph`. Không nạp manualSrt / temp SRT. Phân định rõ 3 luồng: phụ đề mới xuất xưởng, phụ đề gốc cần làm mờ (`original_subtitles_for_blur`) và transcript khớp TTS (`subtitles_for_dubbing`).
+    4. *Hậu kiểm SRT Deterministic:* Tạo module `subtitle_postprocessor.py` thực hiện: chuẩn hóa timestamp, sắp xếp theo thời gian, loại bỏ câu hỏng (`end <= start`), xử lý overlap, gộp các câu liên tiếp trùng lặp nếu khoảng cách < 0.7s (nếu >= 0.7s giữ nguyên), đánh lại ID số nguyên liên tục từ 1..N.
+    5. *Chặn xuất video nếu phụ đề lỗi:* Hàm `validate_subtitles_for_export` kiểm tra nghiêm ngặt: không cho xuất nếu còn câu chưa dịch, chữ Hán sót lại, câu song ngữ ngoài ý muốn, text lỗi API (`[Lỗi`, `Quota`), hoặc sai ngôn ngữ đích. Frontend tự động gọi AI dịch bù các ID lỗi trước khi thất bại và báo lỗi rõ ràng.
+    6. *Chuẩn hóa thứ tự Pipeline All-in-One:* Cố định quy trình 7 bước: `OCR -> normalize/dedup (<0.7s) -> clean AI -> translate -> validate -> TTS -> export`.
+    7. *Fresh Run thực sự (`fresh_run=true`):* Bổ sung checkbox trên giao diện. Backend purge sạch temp cũ (`dubbed_timeline.wav`, `stem_cleaned.wav`, `ai_blur_boxes.json`, `tts_manifest.json`, file SRT tạm) khi kích hoạt fresh run, đảm bảo không tái sử dụng rác từ lần chạy trước.
+    8. *Bảo vệ phụ đề gốc (`replace_original=False`):* Phụ đề dịch/chuẩn hóa được lưu thành file `_novacut.srt` thay vì ghi đè lên file gốc của người dùng.
+    9. *Bộ test hồi quy tự động:* Bổ sung suite `tests/test_batch_editor_fixes.py` với 9 bài kiểm thử chuyên biệt đạt 100% tỷ lệ vượt qua cùng toàn bộ 123 tests của dự án.
+
+- **Tối Ưu & Khắc Phục Lỗi Quét & Tự Động Chọn Video Tải Hàng Loạt Douyin ([douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/douyin_browser_downloader.py), [patches/active/douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/douyin_browser_downloader.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [patches/active/web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js)) (24/09/2026):**
+  - **Hiện tượng người dùng phản ánh:**
+    1. Khi vừa quét danh sách xong, người dùng chưa chọn video nào nhưng hệ thống đã hiển thị "Đã chọn: 24 / 61 video" và tự ý chọn trước.
+    2. Trên màn hình không hiển thị hết tất cả các video đã quét, người dùng chỉ nhìn thấy một phần danh sách.
+    3. Quá trình quét kênh bị thiếu video so với thực tế của kênh Douyin (chỉ dừng ở 1-2 trang đầu).
+  - **Nguyên nhân cốt lõi:**
+    1. Trong `web/app.js`: Khi nhận dữ liệu quét xong, code mặc định gán `selectedDouyinVideoIds = new Set(scannedDouyinVideos.map(v => v.aweme_id))` và checkbox "Chọn tất cả" có sẵn thuộc tính `checked`, gây hiểu lầm là người dùng đã chọn trước trong khi người dùng muốn tự tay lựa chọn hoặc bấm chọn tất cả sau.
+    2. Khi thẻ card render `<img>` thumbnail Douyin, do thiếu thuộc tính `referrerpolicy="no-referrer"`, một số ảnh bìa bị Douyin CDN trả về lỗi 403 Forbidden và kích hoạt `onerror="this.style.display='none'"` làm mất ảnh hoặc thẻ trông như bị ẩn.
+    3. Trong `douyin_browser_downloader.py`: Cơ chế quét danh sách video trước đây chỉ dựa vào cuộn chuột thụ động để kích hoạt Infinite Scroll. Khi Douyin Web chặn hoặc trễ tải sau 24 video, code dừng quét sớm sau 5 lần thử (`no_new_count >= 5`), dẫn đến việc bỏ sót toàn bộ các video còn lại của kênh.
+  - **Giải pháp xử lý:**
+    1. *Giao diện & Trạng thái lựa chọn:* Sau khi phân tích kênh hoàn tất, mặc định khởi tạo `selectedDouyinVideoIds = new Set()` (0 video đã chọn, checkbox unchecked). Người dùng nắm toàn quyền quyết định.
+    2. *Thêm bộ nút thao tác nhanh:* Bổ sung 3 nút hành động tiện ích trên thanh công cụ: **✔ Chọn hết**, **✕ Bỏ chọn**, **🔄 Đảo chọn**.
+    3. *Khắc phục hiển thị danh sách & Ảnh bìa:* Thêm `referrerpolicy="no-referrer"` và khối fallback thumbnail gradient sang trọng có icon Douyin Reels khi ảnh bị chặn hoặc đang nạp, đảm bảo 100% video đều hiển thị trực quan, rõ ràng, có đầy đủ số thứ tự, thời lượng, lượt tim và tiêu đề.
+    4. *Cập nhật thống kê chi tiết:* Thanh tóm tắt hiển thị rõ: `Đã chọn: X / Y video (Đang hiển thị: Z)`.
+    5. *Nâng cấp Hybrid Pagination Engine quét kênh Douyin:* Tự động tận dụng session và `last_url` từ request API Post đầu tiên để gọi tiếp `window.fetch()` trực tiếp từ bên trong browser context theo `max_cursor` khi cuộn chuột bị kẹt. Đảm bảo quét đầy đủ 100% video của kênh theo giới hạn đã chọn (30, 50, 100, 200, 500+ video) mà không bị thiếu.
+    6. *Nâng giới hạn quét:* Bổ sung tùy chọn quét 100 video (mặc định khuyên dùng), 200 video và Tất cả video kênh (500+).
+
+- **Khắc Phục & Nâng Cấp Bộ Máy Tìm Kiếm Video Kênh Douyin Thông Minh ([web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [patches/active/web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/index.html)) (24/09/2026):**
+  - **Hiện tượng người dùng phản ánh:** Phần tìm kiếm video trên giao diện tải hàng loạt Douyin không hoạt động hoặc không lọc được video khi nhập từ khóa.
+  - **Nguyên nhân cốt lõi:**
+    1. Bộ lọc cũ chỉ đối chiếu một trường `v.title.toLowerCase().includes(query)`. Khi đối tượng video chứa tiêu đề ở thuộc tính `v.desc` hoặc `v.clean_title` thay vì `v.title`, kết quả trả về rỗng.
+    2. Video phim ngắn hoặc clip Douyin thường có tiêu đề tiếng Trung (ví dụ `第1集`, `第15集`) hoặc theo số tập. Người dùng Việt Nam thường tìm theo `tập 1`, `tap 1`, `ep 1`, `#1`, hoặc chỉ nhập số `1`, `01`, `15`. So khớp chuỗi thô hoàn toàn thất bại.
+    3. Tìm kiếm có dấu/không dấu: Khi người dùng gõ tiếng Việt không dấu (vd: `huyen lenh`, `co trang`) hoặc có dấu, chuỗi không được chuẩn hóa loại bỏ dấu thanh dẫn đến không khớp.
+    4. Thiếu nút xóa nhanh (`✕`) để đưa danh sách về hiển thị toàn bộ chỉ với 1 click.
+  - **Giải pháp xử lý:**
+    1. *Thuật toán Tìm kiếm Đa Thuộc Tính Chuẩn Hóa (`removeDiacritics`):* Tự động xóa dấu tiếng Việt và chuẩn hóa chữ thường, tìm kiếm xuyên suốt qua `title`, `clean_title`, `desc`, `author`, `aweme_id`.
+    2. *Smart Episode & Number Matching:* Tự động nhận diện mẫu tìm kiếm số tập (`tập X`, `tap X`, `ep X`, `#X`, hoặc số nguyên `X`) và so khớp linh hoạt với số thứ tự danh sách (`#1`, `#2`...), trường `mix_order` của bộ phim, định dạng tập phim tiếng Trung (`第X集`, `第X话`), cũng như tìm kiếm số độc lập (word-boundary) trong tiêu đề để tránh bắt nhầm (ví dụ tìm tập 1 không bị dính vào tập 10, 11).
+    3. *Bổ sung nút ✕ Xóa Nhanh Tìm Kiếm:* Tích hợp nút `btnClearDouyinVideoSearch` trên thanh tìm kiếm, tự động hiện khi có từ khóa và ẩn khi rỗng; bấm vào sẽ xóa từ khóa và khôi phục toàn bộ danh sách tức thì.
+    4. *Tự động cập nhật thống kê bộ lọc:* Thanh trạng thái phản ánh chính xác số lượng video phù hợp tìm kiếm đang hiển thị trên lưới.
+
+
+- **Triển Khai Hệ Thống Đăng Nhập & Quản Lý Cookie Douyin Tương Tự Bilibili ([douyin_cookie_manager.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/douyin_cookie_manager.py), [patches/active/douyin_cookie_manager.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/douyin_cookie_manager.py), [routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/download.py), [patches/active/routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/download.py), [douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/douyin_browser_downloader.py), [patches/active/douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/douyin_browser_downloader.py), [downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/downloader.py), [patches/active/downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/downloader.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [patches/active/web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/index.html), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [patches/active/web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/web/app.js), [tests/test_douyin_cookie.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_douyin_cookie.py)) (24/09/2026):**
+  - **Mục tiêu:** Hỗ trợ người dùng đăng nhập tài khoản Douyin và lưu Cookie/Session tương tự Bilibili để mở khóa quét toàn bộ kênh không giới hạn (vượt mốc 18 video của khách vãng lai), chống bị chặn popup đăng nhập của Douyin và giảm thiểu tối đa Captcha kéo trượt (slider captcha) / Rate-limit WAF.
+  - **Chi tiết thực thi:**
+    1. *Module Quản lý Cookie Độc Lập (`douyin_cookie_manager.py` & `patches/active/douyin_cookie_manager.py`):*
+       - Tự động chuẩn hóa chuỗi Cookie từ nhiều định dạng: chuỗi thô (`key=val;`), mảng JSON (xuất từ tiện ích Cookie-Editor), hoặc định dạng Netscape `cookies.txt`.
+       - Xác minh trực tiếp với máy chủ Douyin thông qua endpoint chính thức `https://www.douyin.com/passport/web/account/info/` để phát hiện phiên hợp lệ, lấy tên người dùng (`uname`), avatar và ID người dùng.
+       - Hỗ trợ chuyển đổi sang danh sách `dict` chuẩn Playwright (`get_douyin_cookie_list_for_playwright`) để nạp vào trình duyệt.
+       - Tự động trích xuất cookie từ Playwright Context và lưu vào `douyin_cookie.txt` sau khi đăng nhập thành công.
+    2. *Tích hợp API Routes (`routes/download.py` & `patches/active/routes/download.py`):*
+       - Bổ sung `GET /api/download/douyin/status`: Xác minh cookie và trả về thông tin tài khoản thời gian thực.
+       - Bổ sung `POST /api/download/douyin/save_cookie`: Tiếp nhận chuỗi cookie thủ công, định dạng, lưu và xác thực ngay lập tức.
+       - Bổ sung `POST /api/download/douyin/logout`: Đăng xuất và xóa sạch session Douyin.
+       - Cập nhật `POST /api/download/douyin/open_login`: Mở trình duyệt đăng nhập và tự động đồng bộ session sau khi xong.
+    3. *Tích hợp Engine Tải & Quét Kênh:*
+       - Trong `douyin_browser_downloader.py`: Tự động nạp `douyin_cookie.txt` vào Playwright Context khi quét kênh (`scan_channel_videos`), quét bộ sưu tập (`scan_collection_videos`), và trích xuất thông tin video lẻ (`get_single_video_info`).
+       - Trong `downloader.py`: Tự động gửi header `Cookie: <douyin_cookie>` cho các request HTTP Direct và nạp vào Playwright fallback khi phân tích video.
+    4. *Giao diện Modal Dark Mode Chuẩn Bilibili (`web/index.html` & `web/app.js`):*
+       - Thêm nút **"🎵 Tài Khoản Douyin"** (`#btnDouyinLoginModal`) trên Hero Card khu vực Tải Video (bên cạnh Bilibili) và liên kết với nút tại khu vực Quét kênh.
+       - Tạo Modal Đăng nhập Douyin (`#modalDouyinLogin`) với Thẻ trạng thái tài khoản (🟢 Đã đăng nhập / ⚠️ Hết hạn / 📺 Chưa đăng nhập), nút Đăng xuất, Tab Đăng nhập bằng Trình duyệt và Tab Nhập Cookie thủ công.
+       - Kiểm tra trạng thái đăng nhập Douyin ngay khi mở app và cập nhật giao diện theo thời gian thực.
+    5. *Kiểm thử:* Toàn bộ 8 unit tests trong `tests/test_douyin_cookie.py` và 38 unit tests các module tải video đều PASS 100%.
+
+
+- **Khắc Phục Lỗi Phân Tích Video Douyin Đơn Lẻ Bị Tự Động Chuyển Sang Video Top Trending Khác ([downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/downloader.py), [patches/active/downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/downloader.py), [douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/douyin_browser_downloader.py), [patches/active/douyin_browser_downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/douyin_browser_downloader.py)) (24/09/2026):**
+  - **Hiện tượng:** Khi người dùng nhập/dán URL một video Douyin đơn lẻ bất kỳ vào ô phân tích, hệ thống tự động nhảy sang video khác (cụ thể: `"比电影更夸张？专业保镖到底在做什么？"` của kênh `"影视飓风"` có URL `https://www.douyin.com/video/7688235974236654911`).
+  - **Nguyên nhân cốt lõi:**
+    1. Khi trình duyệt tự động mở Douyin để phân tích hoặc khi gọi API feed, Douyin luôn trả về gói gợi ý `/aweme/v1/web/tab/feed/` chứa video đang đứng Top 1 trending (tại thời điểm này là video của kênh "影视飓风").
+    2. Trong `downloader.py` (hàm `_find_aweme_detail_in_json`), khi có `target_video_id` nhưng không tìm thấy trong mẩu JSON hiện tại, logic cũ lại nhảy xuống Bước 2 (Fallback) và lấy phần tử đầu tiên của danh sách `aweme_list[0]`, vô tình gán video top 1 trending làm kết quả.
+    3. Trong `douyin_browser_downloader.py`, cơ chế lắng nghe phản hồi mạng `on_res` và `get_single_video_info` cũng có fallback tương tự `if not aweme_detail and j.get("aweme_list"): aweme_detail = j["aweme_list"][0]`, khiến dữ liệu video người dùng yêu cầu bị đè bởi video đề xuất.
+    4. Trong `downloader.resolve_douyin_media`, trước khi nạp link video thật, hệ thống từng gọi `page.goto("https://www.douyin.com/")` để kích hoạt cookie, dẫn đến việc feed trang chủ nạp trước và cướp quyền video mục tiêu; đồng thời danh sách `_collect_details` không lọc theo ID khiến URL video đơn bị biến thành danh sách nhiều video của feed gợi ý.
+  - **Chi tiết khắc phục:**
+    1. Chuẩn hóa hàm `_find_aweme_detail_in_json`: Khi có `target_video_id`, bắt buộc chỉ trả về kết quả khớp chính xác ID (`_find_exact`), tuyệt đối không fallback sang video khác ID.
+    2. Cập nhật `douyin_browser_downloader.py`: Loại bỏ hoàn toàn fallback lấy `aweme_list[0]` khi `vid` được chỉ định; trong listener `on_res`, chỉ bắt và cập nhật `captured_data["video"]` khi ID trùng khớp 100% với `vid`.
+    3. Tối ưu `resolve_douyin_media`:
+       - Thay thế việc mở trang chủ `page.goto("https://www.douyin.com/")` bằng việc lấy cookie `ttwid` nhẹ qua HTTP GET `https://live.douyin.com/1` rồi nạp thẳng vào context và truy cập trực tiếp `target_url`.
+       - Lọc sạch danh sách `_collect_details`, chỉ giữ video có `aid == str(video_id)` để ngăn việc gán nhầm danh sách đa video.
+       - Kiểm tra cache: Không sử dụng cache nếu `video_id` của bản ghi trong cache khác với `video_id` đang truy vấn.
+    4. Đồng bộ 100% các sửa đổi sang bản vá OTA `patches/active/downloader.py` và `patches/active/douyin_browser_downloader.py`.
+    5. Kiểm thử thực tế: Phân tích thành công chính xác video mục tiêu mà không còn hiện tượng nhảy sang video `"比电影更夸张？"`, toàn bộ 38 unit tests đều PASS 100%.
+
+  - **Nguyên nhân cốt lõi:**
+    1. Hàm `downloader.resolve_unique_filename(...)` trả về một tuple `(final_path, file_stem)`. Khi gán trực tiếp `file_path = downloader.resolve_unique_filename(...)` trong luồng tải hàng loạt `download_channel_batch`, biến `file_path` mang giá trị `tuple`. Khi truyền vào `os.path.exists(file_path)` hoặc `os.path.getsize(file_path)`, Python ném ngoại lệ `TypeError: _path_exists: path should be string, bytes, os.PathLike or integer, not tuple` làm ngắt tiến trình tải.
+    2. Trong `download_channel_batch`, hàm `save_batch_manifest()` gọi `with lock:`, trong khi các khối xử lý của luồng worker đã nắm giữ `with lock:`. Do dùng `threading.Lock()` không tái nhập (non-reentrant), việc gọi `save_batch_manifest()` dẫn tới khóa chết (self-deadlock).
+  - **Chi tiết khắc phục:**
+    1. Trích xuất chuẩn xác chuỗi đường dẫn từ `downloader.resolve_unique_filename(...)` với cơ chế kiểm tra `isinstance(..., (list, tuple))` an toàn tuyệt đối.
+    2. Chuyển đổi `lock` trong `download_channel_batch` sang `threading.RLock()` (Reentrant Lock), cho phép luồng cùng cấp ghi manifest nhiều lần mà không bao giờ bị deadlock.
+    3. Bọc toàn bộ thân hàm `_worker` vào khối `try...except` an toàn và xử lý `f.result()` linh hoạt, đảm bảo nếu 1 video gặp sự cố thì không làm crash toàn bộ tiến trình tải cả kênh.
+    4. Đồng bộ 100% sang bản vá OTA `patches/active/douyin_browser_downloader.py`.
+    5. Bổ sung unit test `test_09_download_channel_batch_safe_paths` vào `tests/test_douyin_download.py` và kiểm thử toàn bộ 9/9 test case đều vượt qua (100% PASS).
+
+- **Triển Khai Hệ Thống Thông Báo Telegram Toàn Diện Cho Mọi Tiến Trình Của App ([telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/telegram_notifier.py), [patches/active/telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/telegram_notifier.py), [routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/download.py), [patches/active/routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/download.py), [routes/asr.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/asr.py), [patches/active/routes/asr.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/asr.py), [routes/audio.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/audio.py), [patches/active/routes/audio.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/audio.py), [routes/tts.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/tts.py), [patches/active/routes/tts.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/tts.py), [routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/subtitles.py), [patches/active/routes/subtitles.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/subtitles.py), [routes/capcut.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/capcut.py), [patches/active/routes/capcut.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/capcut.py), [social_workflow.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/social_workflow.py), [patches/active/social_workflow.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/social_workflow.py), [routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/video_edit.py), [patches/active/routes/video_edit.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/video_edit.py), [routes/comic_review.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/comic_review.py), [patches/active/routes/comic_review.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/comic_review.py), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [tests/test_telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_telegram_notifier.py)) (24/09/2026):**
+  - **Mục tiêu:** Đáp ứng yêu cầu của người dùng: "Tất cả các tiến trình của app khi xong đều báo về telegram".
+  - **Chi tiết thực thi:**
+    1. *Nâng cấp Lõi Telegram Notifier (`telegram_notifier.py`, `patches/active/telegram_notifier.py`):*
+       - Mở rộng hệ thống nhận diện `type_headers` với icon và tiêu đề chuyên biệt: Tải Video (`⬇️`), Tải Video Hàng Chờ (`📥`), Tạo Giọng Đọc AI (`🔊`), Trích Xuất Phụ Đề ASR (`📝`), Trích Xuất Phụ Đề OCR (`🔍`), Phụ Đề & Dịch Thuật AI (`🌐`), Tách Âm Thanh AI (`🎵`), Clone Voice Studio (`🧬`), Đồng Bộ CapCut PC (`✂️`), Đăng Video Mạng Xã Hội (`🚀`), Tiến Trình Hệ Thống (`⚡`).
+       - Tối ưu định dạng thông báo: hiển thị linh hoạt (ẩn các trường tệp kết quả rỗng đối với tác vụ đồng bộ CapCut hoặc đăng mạng xã hội), tự động tính dung lượng và thời gian thực hiện, bảo mật chống rò rỉ token/keys.
+    2. *Tích hợp Module Tải Video (`routes/download.py`, `patches/active/routes/download.py`, `web/app.js`):*
+       - Tự động báo về Telegram sau mỗi video tải xong (kèm tiêu đề, độ phân giải, thời lượng, dung lượng file, định dạng video) hoặc báo lỗi kèm nguyên nhân chi tiết nếu tải thất bại.
+       - Thêm API `/api/download/queue_finished`: Khi người dùng tải hàng loạt link bằng Hàng chờ Download Queue, hệ thống tự động gửi tin nhắn báo cáo tổng kết toàn bộ hàng chờ (tổng số video, số thành công, số lỗi, thời gian tải).
+       - Tự động gửi thông báo khi hoàn tất tải hàng loạt video Douyin (`api_download_douyin_batch_download`) và khi ghép video Douyin (`api_download_douyin_merge`).
+    3. *Tích hợp Module Trích Xuất Phụ Đề ASR Whisper (`routes/asr.py`, `patches/active/routes/asr.py`):*
+       - Tự động gửi thông báo khi nhận dạng xong phụ đề SRT từ video (kèm tên video, model Whisper, ngôn ngữ nhận dạng, đường dẫn SRT và thời gian xử lý) hoặc báo lỗi nếu ASR gặp sự cố.
+    4. *Tích hợp Module Tách Âm Thanh AI (`routes/audio.py`, `patches/active/routes/audio.py`):*
+       - Báo Telegram khi hoàn tất tách Vocal, lọc BGM và giữ lại âm gốc/SFX (kèm mô hình MDX/Neural, thiết bị CPU/CUDA, file âm thanh sạch đã xuất).
+    5. *Tích hợp Module Tạo Giọng Đọc TTS & Clone Voice Studio (`routes/tts.py`, `patches/active/routes/tts.py`):*
+       - Gửi thông báo khi hoàn tất tổng hợp giọng đọc kịch bản qua Kokoro TTS / OpenSpeaker (kèm Voice ID, tốc độ, thời lượng audio, file âm thanh).
+       - Gửi thông báo khi tạo và lưu thành công hồ sơ giọng mới trong Clone Voice Studio.
+    6. *Tích hợp Module Dịch & Làm Sạch Phụ Đề AI (`routes/subtitles.py`, `patches/active/routes/subtitles.py`):*
+       - Gửi thông báo khi hoàn tất dịch phụ đề AI (kèm số câu dịch, cặp ngôn ngữ nguồn ➔ đích, chế độ Online/Local, phong cách dịch).
+       - Gửi thông báo khi AI làm sạch và tối ưu xong phụ đề.
+    7. *Tích hợp Module Đồng Bộ Dự Án CapCut PC (`routes/capcut.py`, `patches/active/routes/capcut.py`):*
+       - Gửi thông báo khi hoàn tất đồng bộ video và timeline phụ đề vào CapCut Draft của người dùng.
+    8. *Tích hợp Module Đăng Video Mạng Xã Hội (`social_workflow.py`, `patches/active/social_workflow.py`):*
+       - Tự động gửi báo cáo trạng thái đăng tải video lên các nền tảng (TikTok, YouTube, Facebook, v.v.) sau khi worker nền hoàn tất.
+    9. *Tích hợp Module Trích Xuất Phụ Đề OCR & Comic Review (`routes/video_edit.py`, `routes/comic_review.py`):*
+       - Báo Telegram khi quét xong khung chữ phụ đề video qua OCR.
+       - Bổ sung thông báo lỗi chi tiết khi tiến trình Review Truyện Tranh gặp sự cố.
+    10. *Khắc phục triệt để lỗi không kết nối được Telegram Bot ([telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/telegram_notifier.py), [patches/active/telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/telegram_notifier.py), [tests/test_telegram_notifier.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_telegram_notifier.py)):*
+       - Gỡ bỏ hoàn toàn logic chặn/xóa nhầm Chat ID (`DEV_LEGACY_CHAT_ID = "5011367599"`) khiến hệ thống tự động reset chat_id về rỗng khi người dùng kết nối.
+       - Cách ly triệt để các bài unit test (`TestTelegramFlaskRoutes`) vào thư mục tạm `TemporaryDirectory()`, ngăn chặn việc chạy test ghi đè token giả lập `1234567890:...` vào file cấu hình thật gây lỗi HTTP 401 Unauthorized trên Telegram API.
+       - Bổ sung cơ chế tự động phục hồi `DEFAULT_BOT_TOKEN` nếu token trong file cấu hình bị lỗi hoặc rỗng.
+       - Nới lỏng khung thời gian bắt tin nhắn trong `poll_connect_session` (cho phép nhận diện mã kết nối và tin nhắn trong vòng 24 giờ thay vì 15 phút), tự động trích xuất tên và username Telegram của người dùng.
+       - Đã liên kết và đồng bộ thành công tài khoản Telegram của Jin (`@jin_1608`, Chat ID: `5011367599`) vào cấu hình hệ thống và gửi tin nhắn xác nhận.
+    11. *Đồng bộ hóa 100% sang `patches/active/` và kiểm thử tự động:*
+        - Toàn bộ các file `.py` được cập nhật đều đồng bộ tuyệt đối với thư mục bản vá OTA `patches/active/`.
+        - Mở rộng test suite `tests/test_telegram_notifier.py` lên 23 tests (bao gồm test đa dạng tất cả các loại tiến trình `task_type` và API tổng kết hàng chờ), đạt **23/23 tests PASSED**.
+
+
+- **Triển Khai Tính Năng Tải Nhiều Video Cùng Lúc Kèm Hàng Chờ (Download Queue Studio) ([routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/routes/download.py), [patches/active/routes/download.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/patches/active/routes/download.py), [web/index.html](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/index.html), [web/style.css](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/style.css), [web/app.js](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/web/app.js), [tests/test_download_queue.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/tests/test_download_queue.py)) (24/09/2026):**
+  - **Tính năng mới:** Bổ sung phân hệ Tải nhiều video cùng lúc với cơ chế hàng chờ (Download Queue) thông minh trong Trình Tải Video Đa Nền Tảng (Download Hub).
+  - **Chi tiết thực thi:**
+    1. *Giao diện Sub-tab & Nhập nhiều link (`web/index.html`, `web/style.css`):* Thêm sub-tab `tabDownloadMulti` ("Tải Nhiều Link (Hàng Chờ) - QUEUE BATCH"), textarea nhập nhiều liên kết (mỗi link 1 dòng), nút dán từ clipboard, nút xóa trắng, huy hiệu đếm link hợp lệ thời gian thực.
+    2. *Smart Paste Sniffer (`web/app.js`):* Tự động phát hiện khi người dùng dán danh sách nhiều liên kết vào ô URL ở tab Tải đơn lẻ và tự động chuyển sang tab Hàng chờ kèm thông báo tiện lợi.
+    3. *Hàng Chờ Đa Luồng Linh Hoạt (`DownloadQueueManager` trong `web/app.js`):*
+       - Tùy chỉnh số luồng tải đồng thời: 1 luồng (tuần tự), 2 luồng (cân bằng), 3 luồng (tối đa).
+       - Bảng thống kê trạng thái thời gian thực: Tổng link, Chờ tải, Đang tải, Hoàn tất, Lỗi.
+       - Thanh tiến trình tổng thể (Overall Progress Bar) tính % hoàn thành và tốc độ tải.
+       - Bộ nút điều khiển hàng chờ: Bắt đầu tải, Tạm dừng, Tiếp tục, Hủy/Dừng, Tải lại link lỗi, Xóa hết.
+       - Từng dòng video hiển thị huy hiệu nền tảng (YouTube, TikTok, Douyin, Bilibili, Facebook...), thanh progress bar riêng, tiến độ %, tốc độ tải, dung lượng, và các nút thao tác nhanh (Mở file, Nạp Biên tập, Thử lại, Xóa).
+    4. *Tích Hợp Sâu Phân Hệ Biên Tập & Batch Studio:* Hỗ trợ 1-click nạp tất cả video đã tải vào "Biên Tập Phim" (`sendVideoToEditor`) hoặc nạp toàn bộ danh sách vào "Hàng Đợi Batch Studio" (`/api/batch/add`); tự động lưu lịch sử tải video.
+    5. *Nâng Cấp Backend Đa Luồng & Hủy Tác Vụ (`routes/download.py`, `patches/active/routes/download.py`):*
+       - Hỗ trợ quản lý đa tác vụ với `_active_downloads` theo `task_id` và sự kiện `cancel_event`.
+       - Giới hạn an toàn tối đa 5 tác vụ tải song song trên máy chủ (`MAX_CONCURRENT_DOWNLOADS = 5`, trả về HTTP 429 nếu vượt ngưỡng).
+       - Thêm API `/api/download/cancel` hủy 1 tác vụ hoặc hủy toàn bộ `all: true`.
+       - Thêm API `/api/download/active_tasks` tra cứu tác vụ đang chạy.
+       - Tuân thủ nghiêm ngặt việc kiểm tra bản quyền `can_access_editor`.
+    6. *Kiểm thử tự động:* Tạo mới bộ test `tests/test_download_queue.py` gồm 6/6 tests (kiểm tra API active_tasks, cancel task đơn lẻ, cancel all, concurrency limit 429, license permission 403, invalid URL 400) đạt 100% PASSED.
 
 - **Sửa Lỗi Concat Audio Do Dấu Nháy Đơn Trong Tên Thư Mục/Video ([auto_edit_pipeline.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/auto_edit_pipeline.py), [downloader.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/downloader.py), [comic_video_renderer.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/comic_video_renderer.py), [review_phim.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/review_phim.py)) (23/09/2026):**
   - **Nguyên nhân lỗi:** Khi tên file video chứa dấu nháy đơn `'` (ví dụ: `...TO_IT'S_OWNER...`), tên thư mục tạm `auto_edit_temp` cũng chứa dấu `'`. Khi ghi danh sách ghép audio vào `concat.txt` bằng cú pháp `file 'path'`, dấu nháy đơn làm vỡ cú pháp chuỗi của FFmpeg concat demuxer khiến FFmpeg nuốt mất dấu `'` và báo lỗi `Impossible to open ... No such file or directory`.

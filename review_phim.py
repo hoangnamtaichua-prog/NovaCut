@@ -103,6 +103,19 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
     yield "data: BẮT ĐẦU QUÁ TRÌNH DỰNG VIDEO TỰ ĐỘNG...\n\n"
     ffmpeg_path = ffmpeg_installer.ensure_ffmpeg()
     
+    enc_name = 'libx264'
+    enc_args = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
+    try:
+        detected_enc, is_gpu, _ = ffmpeg_installer.detect_hardware_encoder(ffmpeg_path)
+        if detected_enc == 'h264_nvenc':
+            enc_name = 'h264_nvenc'
+            enc_args = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '22', '-pix_fmt', 'yuv420p']
+        elif detected_enc == 'hevc_nvenc':
+            enc_name = 'hevc_nvenc'
+            enc_args = ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-cq', '24', '-pix_fmt', 'yuv420p']
+    except Exception:
+        pass
+    
     movie_title = os.path.splitext(os.path.basename(video_path))[0]
     
     # 1. Generate Voiceovers using existing Kokoro/RVC logic via HTTP or importing directly
@@ -158,7 +171,8 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
                         "voice_id": voice_id,
                         "speed": 1.0,
                         "output_dir": os.path.abspath(os.path.join('clips', 'audio')),
-                        "filename": f'narration_{i}.wav'
+                        "filename": f'narration_{i}.wav',
+                        "skip_notify": True
                     })
                     if res.status_code != 200:
                         yield f"data: 🛑 Lỗi tạo TTS: {res.text}\n\n"
@@ -204,7 +218,7 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
                 '-i', audio_out_path,
                 '-filter_complex', f"[0:v]setpts=PTS/{speed_ratio:.6f},fps=30,settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v]",
                 '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '22',
+                *enc_args,
                 '-r', '30', '-video_track_timescale', '90000', '-g', '60', '-keyint_min', '60',
                 '-c:a', 'aac', '-b:a', '192k',
                 '-t', str(audio_dur),
@@ -275,7 +289,7 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
         '-i', final_hz_out,
         '-filter_complex', "[0:v]crop=ih*9/16:ih,scale=1080:1920[v]",
         '-map', '[v]', '-map', '0:a',
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22',
+        *enc_args,
         '-c:a', 'copy',
         final_vt_out
     ]

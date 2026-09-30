@@ -23,6 +23,16 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # ─── BƯỚC 0: TỰ ĐỘNG CÀI ĐẶT DIRECTML TRONG TIẾN TRÌNH CÔ LẬP (TRÁNH KHÓA DLL) ───
 
+def _clean_child_env():
+    """Loại bỏ triệt để các biến môi trường PyInstaller để tiến trình con không bị trỏ vào _internal."""
+    env = os.environ.copy()
+    for var in ["PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "_MEIPASS", "_MEIPASS2"]:
+        env.pop(var, None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
 def _bootstrap_onnxruntime():
     """
     Kiểm tra và cài đặt onnxruntime-directml mà KHÔNG import vào tiến trình chính trước,
@@ -42,6 +52,8 @@ def _bootstrap_onnxruntime():
         "        print('OK_DML')\n"
         "    elif has_session and 'CUDAExecutionProvider' in provs:\n"
         "        print('OK_CUDA')\n"
+        "    elif has_session and 'CPUExecutionProvider' in provs:\n"
+        "        print('OK_CPU')\n"
         "    else:\n"
         "        print('NEED_REPAIR')\n"
         "except Exception:\n"
@@ -51,14 +63,15 @@ def _bootstrap_onnxruntime():
     try:
         res_check = subprocess.run(
             [sys.executable, "-c", check_code],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15, env=_clean_child_env(),
+            creationflags=0x08000000 if os.name == 'nt' else 0
         )
         status = res_check.stdout.strip()
     except Exception:
         status = "NEED_INSTALL"
 
-    # Nếu đã có DmlExecutionProvider sẵn sàng hoạt động thì không cần cài lại
-    if status == "OK_DML":
+    # Nếu đã có DmlExecutionProvider, CUDA, hoặc CPU sẵn sàng hoạt động thì không cần cài lại
+    if status in ("OK_DML", "OK_CUDA", "OK_CPU"):
         return
 
     print("[AI-Installer] 🚀 Đang tự động cấu hình động cơ GPU DirectML (Hỗ trợ 100% RTX 5060 & Windows GPU)...")
@@ -66,12 +79,14 @@ def _bootstrap_onnxruntime():
         # Gỡ sạch các bản cũ bị lỗi hoặc thiếu file
         subprocess.run(
             [sys.executable, "-m", "pip", "uninstall", "-y", "onnxruntime", "onnxruntime-gpu", "onnxruntime-directml"],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, timeout=60, env=_clean_child_env(),
+            creationflags=0x08000000 if os.name == 'nt' else 0
         )
         # Cài đặt sạch onnxruntime-directml
         res = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-cache-dir", "--no-warn-script-location", "onnxruntime-directml"],
-            capture_output=True, text=True, timeout=180
+            capture_output=True, text=True, timeout=180, env=_clean_child_env(),
+            creationflags=0x08000000 if os.name == 'nt' else 0
         )
         print(f"[AI-Installer] ✅ Đã kích hoạt thành công onnxruntime-directml (Code: {res.returncode})")
     except Exception as e:

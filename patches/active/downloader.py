@@ -271,7 +271,7 @@ def _find_aweme_detail_in_json(data, target_video_id=None):
     """
     if target_video_id:
         target_str = str(target_video_id).strip()
-        # 1. Tìm chính xác video có ID trùng khớp trước
+        # Tìm chính xác video có ID trùng khớp tuyệt đối, không bao giờ lấy nhầm video đề xuất feed khác ID
         def _find_exact(node):
             if isinstance(node, dict):
                 cur_id = str(node.get('aweme_id') or node.get('id') or node.get('awemeId') or '')
@@ -288,11 +288,9 @@ def _find_aweme_detail_in_json(data, target_video_id=None):
                         if found: return found
             return None
 
-        exact_match = _find_exact(data)
-        if exact_match:
-            return exact_match
+        return _find_exact(data)
 
-    # 2. Fallback tìm video đầu tiên nếu không có target_video_id hoặc không khớp ID tuyệt đối
+    # 2. Fallback tìm video đầu tiên CHỈ KHI hoàn toàn KHÔNG có target_video_id
     if isinstance(data, dict):
         if ('aweme_id' in data or 'id' in data) and 'video' in data and isinstance(data.get('video'), dict):
             video = data['video']
@@ -301,20 +299,20 @@ def _find_aweme_detail_in_json(data, target_video_id=None):
                 
         for key in ['aweme_detail', 'awemeDetail', 'videoDetail', 'itemStruct', 'itemInfo', 'item_list']:
             if key in data:
-                res = _find_aweme_detail_in_json(data[key], target_video_id)
+                res = _find_aweme_detail_in_json(data[key], None)
                 if res:
                     return res
 
         for k, v in data.items():
             if isinstance(v, (dict, list)):
-                res = _find_aweme_detail_in_json(v, target_video_id)
+                res = _find_aweme_detail_in_json(v, None)
                 if res:
                     return res
                     
     elif isinstance(data, list):
         for item in data:
             if isinstance(item, (dict, list)):
-                res = _find_aweme_detail_in_json(item, target_video_id)
+                res = _find_aweme_detail_in_json(item, None)
                 if res:
                     return res
 
@@ -843,6 +841,13 @@ def _resolve_douyin_http_direct(url, video_id=None):
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,vi;q=0.7',
             'Referer': 'https://www.douyin.com/'
         }
+        try:
+            import douyin_cookie_manager
+            user_c = douyin_cookie_manager.get_douyin_custom_cookie()
+            if user_c:
+                headers['Cookie'] = user_c
+        except Exception:
+            pass
         target_url = url
         # 1. Giải mã link rút gọn nếu có
         if 'v.douyin.com' in url or not video_id:
@@ -984,6 +989,9 @@ def resolve_douyin_media(url, use_cache=True):
             if k and k in _DOUYIN_RESOLVE_CACHE:
                 entry = _DOUYIN_RESOLVE_CACHE[k]
                 c_data = entry.get('data') or {}
+                # Kiểm tra video_id nếu có để tránh cache nhầm video đề xuất feed
+                if video_id and str(c_data.get('video_id') or '') != str(video_id):
+                    continue
                 if c_data.get('title') and c_data.get('title') != 'Video Douyin' and (c_data.get('duration', 0) > 0 or c_data.get('video_urls')):
                     if now - entry.get('timestamp', 0) < 1800:
                         return c_data
@@ -1016,6 +1024,9 @@ def resolve_douyin_media(url, use_cache=True):
     def _collect_details(det_list):
         for d in det_list:
             aid = str(d.get('aweme_id') or d.get('id') or '')
+            # Nếu có video_id chỉ định trước (link video đơn), không thu thập các video khác ID từ feed vào danh sách multi-video
+            if video_id and aid != str(video_id):
+                continue
             if aid and aid not in seen_captured_ids:
                 seen_captured_ids.add(aid)
                 captured_all_details.append(d)
@@ -1064,7 +1075,7 @@ def resolve_douyin_media(url, use_cache=True):
                                 elif data.get('aweme_list'):
                                     _collect_details(data['aweme_list'])
                                     for itm in data['aweme_list']:
-                                        if str(itm.get('aweme_id') or '') == str(video_id):
+                                        if not video_id or str(itm.get('aweme_id') or '') == str(video_id):
                                             captured_data['detail'] = itm
                                             break
                             found_items = _find_all_aweme_details_in_json(data)
@@ -1073,7 +1084,8 @@ def resolve_douyin_media(url, use_cache=True):
                                 if not captured_data.get('detail'):
                                     det = _find_aweme_detail_in_json(data, target_video_id=video_id)
                                     if det:
-                                        captured_data['detail'] = det
+                                        if not video_id or str(det.get('aweme_id') or det.get('id') or '') == str(video_id):
+                                            captured_data['detail'] = det
                                     elif not video_id:
                                         captured_data['detail'] = found_items[0]
                         except Exception:
@@ -1088,14 +1100,22 @@ def resolve_douyin_media(url, use_cache=True):
 
             page.on('response', handle_response)
                     
-            # 1. Khởi tạo cookie Douyin
+            # 1. Khởi tạo cookie Douyin (ưu tiên cookie người dùng đã đăng nhập / lưu thủ công)
             try:
-                page.goto("https://www.douyin.com/", timeout=10000)
-                time.sleep(1.2)
+                import douyin_cookie_manager
+                custom_cookies = douyin_cookie_manager.get_douyin_cookie_list_for_playwright()
+                if custom_cookies:
+                    context.add_cookies(custom_cookies)
+                else:
+                    s_tw = requests.Session()
+                    s_tw.get("https://live.douyin.com/1", headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'}, timeout=4)
+                    tw = s_tw.cookies.get("ttwid")
+                    if tw:
+                        context.add_cookies([{"name": "ttwid", "value": tw, "domain": ".douyin.com", "path": "/"}])
             except Exception:
                 pass
 
-            # 2. Mở target URL
+            # 2. Mở trực tiếp target URL
             try:
                 page.goto(target_url, timeout=20000)
             except Exception:
@@ -1114,7 +1134,8 @@ def resolve_douyin_media(url, use_cache=True):
                     if not captured_data.get('detail'):
                         det = _find_aweme_detail_in_json({'items': ssr_all}, target_video_id=video_id)
                         if det:
-                            captured_data['detail'] = det
+                            if not video_id or str(det.get('aweme_id') or det.get('id') or '') == str(video_id):
+                                captured_data['detail'] = det
                         elif not video_id:
                             captured_data['detail'] = ssr_all[0]
             except Exception:

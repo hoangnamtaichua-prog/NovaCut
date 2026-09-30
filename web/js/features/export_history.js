@@ -16,6 +16,7 @@ let activeScanId = null;
 let scanPollInterval = null;
 let currentCandidates = [];
 let pendingDeleteId = null;
+let currentDetailItem = null;
 
 const TOOL_LABELS = {
     'editor': { label: 'Biên tập phim', color: '#0ea5e9' },
@@ -105,12 +106,42 @@ function setupExportHistoryEventListeners() {
         });
     }
 
-    // Modal Details Close
+    // Modal Details Actions
     const btnCloseDetail = document.getElementById('btnCloseExportDetailModal');
+    const btnDetailClose = document.getElementById('btnDetailClose');
     const modalDetail = document.getElementById('exportDetailModal');
     if (btnCloseDetail && modalDetail) {
         btnCloseDetail.addEventListener('click', () => {
             modalDetail.style.display = 'none';
+        });
+    }
+    if (btnDetailClose && modalDetail) {
+        btnDetailClose.addEventListener('click', () => {
+            modalDetail.style.display = 'none';
+        });
+    }
+    const btnDetailOpenVideo = document.getElementById('btnDetailOpenVideo');
+    if (btnDetailOpenVideo) {
+        btnDetailOpenVideo.addEventListener('click', () => {
+            if (currentDetailItem && currentDetailItem.id) {
+                handleOpenVideo(currentDetailItem.id);
+            }
+        });
+    }
+    const btnDetailRevealFolder = document.getElementById('btnDetailRevealFolder');
+    if (btnDetailRevealFolder) {
+        btnDetailRevealFolder.addEventListener('click', () => {
+            if (currentDetailItem && currentDetailItem.id) {
+                handleRevealFolder(currentDetailItem.id);
+            }
+        });
+    }
+    const btnDetailCopyPath = document.getElementById('btnDetailCopyPath');
+    if (btnDetailCopyPath) {
+        btnDetailCopyPath.addEventListener('click', () => {
+            if (currentDetailItem && currentDetailItem.output_path) {
+                handleCopyPath(currentDetailItem.output_path);
+            }
         });
     }
 
@@ -271,13 +302,17 @@ function renderExportTable(items) {
         const nameEl = document.createElement('div');
         nameEl.style.cssText = 'font-weight: 700; color: #f9fafb; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;';
         nameEl.textContent = item.filename || 'Chưa đặt tên';
-        nameEl.title = item.output_path || '';
+        nameEl.title = `Click để phát video: ${item.output_path || ''}`;
         nameEl.addEventListener('click', () => handleOpenVideo(item.id));
 
         const pathEl = document.createElement('div');
-        pathEl.style.cssText = 'font-size: 11.5px; color: #9ca3af; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: all;';
+        pathEl.style.cssText = 'font-size: 11.5px; color: #9ca3af; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: all; cursor: pointer;';
         pathEl.textContent = item.output_path || '';
-        pathEl.title = item.output_path || '';
+        pathEl.title = `Click để mở thư mục lưu video trong File Explorer: ${item.output_path || ''}`;
+        pathEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleRevealFolder(item.id);
+        });
 
         fileCol.appendChild(nameEl);
         fileCol.appendChild(pathEl);
@@ -464,7 +499,7 @@ async function handleRevealFolder(id) {
             });
             return;
         }
-        showToast('Đã mở thư mục trong Explorer', 'info');
+        showToast(data.message || 'Đã mở thư mục trong Explorer', 'info');
     } catch (e) {
         showToast(`Lỗi khi mở thư mục: ${e.message}`, 'error');
     }
@@ -498,6 +533,7 @@ async function handleCopyPath(path) {
  * Mở modal chi tiết
  */
 function handleShowDetail(item) {
+    currentDetailItem = item;
     const modal = document.getElementById('exportDetailModal');
     if (!modal) return;
 

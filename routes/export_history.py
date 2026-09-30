@@ -1,9 +1,11 @@
 import os
+import sys
 import subprocess
 import logging
 from flask import Blueprint, request, jsonify
 
 from routes.security import register_user_path
+from routes.state import ROOT_DIR
 import license_manager
 from export_history import get_export_history_service
 
@@ -122,7 +124,16 @@ def open_export_video(record_id):
                 'message': 'Không tìm thấy bản ghi lịch sử'
             }), 404
 
-        output_path = item.get('output_path', '')
+        output_path = str(item.get('output_path') or '').strip().strip('"\'')
+        if not output_path:
+            return jsonify({
+                'success': False,
+                'error': 'INVALID_PATH',
+                'message': 'Đường dẫn tệp video trống hoặc không hợp lệ'
+            }), 400
+
+        if not os.path.isabs(output_path):
+            output_path = os.path.abspath(os.path.join(ROOT_DIR, output_path))
         norm_path = os.path.normpath(output_path)
         
         # Kiểm tra phần mở rộng video hợp lệ
@@ -147,6 +158,8 @@ def open_export_video(record_id):
         # Mở file an toàn trên Windows
         if os.name == 'nt':
             os.startfile(norm_path)
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', norm_path])
         else:
             subprocess.Popen(['xdg-open', norm_path])
 
@@ -173,39 +186,106 @@ def reveal_export_folder(record_id):
                 'message': 'Không tìm thấy bản ghi lịch sử'
             }), 404
 
-        output_path = item.get('output_path', '')
+        output_path = str(item.get('output_path') or '').strip().strip('"\'')
+        if not output_path:
+            return jsonify({
+                'success': False,
+                'error': 'INVALID_PATH',
+                'message': 'Đường dẫn tệp video trống hoặc không hợp lệ'
+            }), 400
+
+        if not os.path.isabs(output_path):
+            output_path = os.path.abspath(os.path.join(ROOT_DIR, output_path))
+
+        # Phân giải realpath để lấy đúng ký tự hoa/thường trên hệ thống tệp
+        try:
+            if os.path.exists(output_path):
+                output_path = os.path.realpath(output_path)
+        except Exception:
+            pass
+
         norm_path = os.path.normpath(output_path)
-        folder = os.path.dirname(norm_path)
+        # Chuẩn hóa ký tự ổ đĩa trên Windows thành chữ HOA (C:\, D:\, G:\)
+        if os.name == 'nt' and len(norm_path) >= 2 and norm_path[1] == ':':
+            norm_path = norm_path[0].upper() + norm_path[1:]
+
+        folder = os.path.dirname(norm_path) if not os.path.isdir(norm_path) else norm_path
+        if os.name == 'nt' and len(folder) >= 2 and folder[1] == ':':
+            folder = folder[0].upper() + folder[1:]
+
+        # Nếu thư mục cụ thể không còn tồn tại, tìm thư mục cha gần nhất còn tồn tại
+        if not os.path.exists(folder):
+            curr = folder
+            fallback_folder = None
+            for _ in range(5):
+                parent = os.path.dirname(curr)
+                if parent and parent != curr and os.path.isdir(parent):
+                    fallback_folder = parent
+                    break
+                curr = parent
+            if fallback_folder:
+                folder = fallback_folder
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'FOLDER_NOT_FOUND',
+                    'message': f'Thư mục chứa tệp không còn tồn tại trên ổ đĩa ({folder})'
+                }), 404
 
         register_user_path(norm_path)
         register_user_path(folder)
 
-        if os.path.exists(norm_path):
+        if os.path.exists(norm_path) and not os.path.isdir(norm_path):
             if os.name == 'nt':
-                # Sử dụng explorer /select,path để highlight file
-                subprocess.Popen(['explorer', f'/select,{norm_path}'])
+                # Trên Windows:
+                # 1. Ổ đĩa ảo/mạng như Google Drive (G:\) hoặc đường dẫn UNC (\\) không tương thích với explorer /select
+                #    và sẽ tự động rơi về thư mục Documents mặc định -> mở thẳng thư mục qua os.startfile.
+                # 2. Với ổ đĩa cục bộ, explorer /select,"<norm_path>" yêu cầu ổ đĩa viết HOA và nháy kép.
+                is_cloud_or_virtual = norm_path.upper().startswith(('G:', '\\\\')) or 'GOOGLE DRIVE' in norm_path.upper()
+                if not is_cloud_or_virtual:
+                    try:
+                        subprocess.Popen(f'explorer /select,"{norm_path}"')
+                    except Exception:
+                        try:
+                            os.startfile(folder)
+                        except Exception:
+                            subprocess.Popen(f'explorer "{folder}"')
+                else:
+                    try:
+                        os.startfile(folder)
+                    except Exception:
+                        subprocess.Popen(f'explorer "{folder}"')
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', '-R', norm_path])
             else:
                 subprocess.Popen(['xdg-open', folder])
             return jsonify({
                 'success': True,
-                'message': 'Đã mở thư mục và chọn video',
-                'path': norm_path
+                'message': f'Đã mở thư mục lưu trữ video trong File Explorer: {folder}',
+                'path': norm_path,
+                'folder': folder
             })
         elif os.path.exists(folder):
             if os.name == 'nt':
-                subprocess.Popen(['explorer', folder])
+                try:
+                    os.startfile(folder)
+                except Exception:
+                    subprocess.Popen(f'explorer "{folder}"')
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', folder])
             else:
                 subprocess.Popen(['xdg-open', folder])
             return jsonify({
                 'success': True,
-                'message': 'Tệp video đã bị xóa nhưng thư mục cha vẫn tồn tại, đã mở thư mục',
-                'path': folder
+                'message': f'Đã mở thư mục lưu trữ trong File Explorer: {folder}',
+                'path': folder,
+                'folder': folder
             })
         else:
             return jsonify({
                 'success': False,
                 'error': 'FOLDER_NOT_FOUND',
-                'message': 'Thư mục chứa tệp không còn tồn tại trên ổ đĩa'
+                'message': f'Thư mục chứa tệp không còn tồn tại trên ổ đĩa ({folder})'
             }), 404
     except Exception as e:
         logger.error(f"[ExportHistory] Error revealing folder {record_id}: {e}", exc_info=True)

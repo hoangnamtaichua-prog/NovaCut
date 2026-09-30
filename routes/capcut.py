@@ -65,9 +65,49 @@ def api_capcut_sync():
         
         if result.get('success') and relaunch:
             capcut_sync.relaunch_capcut()
+
+        # Gửi thông báo Telegram về tiến trình đồng bộ CapCut
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                draft_name = os.path.basename(draft_path.rstrip('/\\')) if draft_path else "CapCut Project"
+                if result.get('success'):
+                    notifier.notify_task_success(
+                        task_type='capcut',
+                        task_title='Đồng Bộ Dự Án CapCut',
+                        video_title=draft_name,
+                        output_path=draft_path,
+                        extra_info={
+                            'Khớp video & phụ đề': 'Thành công',
+                            'Thao tác video ngắn': short_video_action,
+                            'Thao tác video dài': long_video_action
+                        }
+                    )
+                else:
+                    notifier.notify_task_failure(
+                        task_type='capcut',
+                        task_title='Đồng Bộ Dự Án CapCut',
+                        video_title=draft_name,
+                        error_message=result.get('error', 'Lỗi đồng bộ CapCut')
+                    )
+        except Exception as _te:
+            logging.getLogger(__name__).warning(f"[Telegram] Error sending CapCut notification: {_te}")
             
         return jsonify(result)
     except Exception as e:
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                notifier.notify_task_failure(
+                    task_type='capcut',
+                    task_title='Đồng Bộ Dự Án CapCut',
+                    video_title=os.path.basename(draft_path.rstrip('/\\')) if ('draft_path' in locals() and draft_path) else "CapCut Project",
+                    error_message=str(e)
+                )
+        except Exception:
+            pass
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @capcut_bp.route('/api/capcut/open_folder', methods=['POST'])

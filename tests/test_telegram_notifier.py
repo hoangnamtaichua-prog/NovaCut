@@ -291,12 +291,31 @@ class TestTelegramNotifier(unittest.TestCase):
 
 class TestTelegramFlaskRoutes(unittest.TestCase):
     def setUp(self):
+        import tempfile
+        import telegram_notifier
         self.app = web_app.app
         self.client = self.app.test_client()
         self.notifier = get_telegram_notifier()
+
+        # Isolate config paths to temporary directory
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._orig_config_file = telegram_notifier.CONFIG_FILE
+        self._orig_fallback_config_file = telegram_notifier.FALLBACK_CONFIG_FILE
+        telegram_notifier.CONFIG_FILE = os.path.join(self._temp_dir.name, "telegram_config.json")
+        telegram_notifier.FALLBACK_CONFIG_FILE = os.path.join(self._temp_dir.name, "fallback.json")
+
         self.notifier.enabled = True
         self.notifier.bot_token = "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ1234567"
         self.notifier.chat_id = "987654321"
+
+    def tearDown(self):
+        import telegram_notifier
+        telegram_notifier.CONFIG_FILE = self._orig_config_file
+        telegram_notifier.FALLBACK_CONFIG_FILE = self._orig_fallback_config_file
+        try:
+            self._temp_dir.cleanup()
+        except Exception:
+            pass
 
     def test_get_telegram_config(self):
         """GET /api/telegram/config trả về cấu hình an toàn, token được che giấu."""
@@ -354,6 +373,70 @@ class TestTelegramFlaskRoutes(unittest.TestCase):
         self.assertIn("skipped", data)
         self.notifier.enabled = True
 
+    @patch.object(TelegramNotifier, "send_async")
+    def test_notify_task_success_all_types(self, mock_send):
+        """Kiểm tra notify_task_success cho tất cả các tiến trình mới trong ứng dụng."""
+        task_types = [
+            'download', 'download_batch', 'tts', 'asr', 'ocr',
+            'subtitle', 'audio', 'clone_voice', 'capcut', 'social', 'editor', 'comic'
+        ]
+        for t_type in task_types:
+            ok = self.notifier.notify_task_success(
+                task_type=t_type,
+                video_title=f"Test_{t_type}",
+                output_path=f"output/{t_type}_sample.mp4",
+                duration_sec=12.5,
+                extra_info={"Chi tiết": "Giá trị thử nghiệm"}
+            )
+            self.assertTrue(ok)
+            self.assertTrue(mock_send.called)
+            sent_msg = mock_send.call_args[0][0]
+            self.assertIn("NovaCut:", sent_msg)
+            self.assertIn(f"Test_{t_type}", sent_msg)
+            self.assertIn("Hoàn Tất!", sent_msg)
+            mock_send.reset_mock()
+
+    @patch.object(TelegramNotifier, "send_async")
+    def test_notify_task_failure_all_types(self, mock_send):
+        """Kiểm tra notify_task_failure cho tất cả các tiến trình khi có lỗi."""
+        task_types = ['download', 'asr', 'ocr', 'tts', 'subtitle', 'audio', 'capcut', 'social']
+        for t_type in task_types:
+            ok = self.notifier.notify_task_failure(
+                task_type=t_type,
+                video_title=f"Fail_{t_type}",
+                error_message="Lỗi kết nối kiểm thử timeout 500ms"
+            )
+            self.assertTrue(ok)
+            self.assertTrue(mock_send.called)
+            sent_msg = mock_send.call_args[0][0]
+            self.assertIn("Thất Bại", sent_msg)
+            self.assertIn(f"Fail_{t_type}", sent_msg)
+            mock_send.reset_mock()
+
+    @patch("license_manager.check_permission", return_value=(True, "OK", {}))
+    @patch.object(TelegramNotifier, "notify_batch_completed")
+    def test_api_download_queue_finished(self, mock_batch_done, mock_perm):
+        """Kiểm tra endpoint /api/download/queue_finished kích hoạt notify_batch_completed."""
+        mock_batch_done.return_value = True
+        payload = {
+            "total_count": 5,
+            "success_count": 4,
+            "failed_count": 1,
+            "cancelled_count": 0,
+            "elapsed_sec": 45.2,
+            "output_dir": "downloads/test"
+        }
+        resp = self.client.post("/api/download/queue_finished", json=payload)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data.get("success"))
+        mock_batch_done.assert_called_once()
+        kwargs = mock_batch_done.call_args[1]
+        self.assertEqual(kwargs["total_count"], 5)
+        self.assertEqual(kwargs["success_count"], 4)
+        self.assertEqual(kwargs["failed_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

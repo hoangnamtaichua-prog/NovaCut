@@ -148,6 +148,15 @@ class ExportHistoryService:
             except Exception:
                 params_str = str(params)
 
+        norm_save_path = os.path.normpath(output_path)
+        try:
+            if os.path.exists(norm_save_path):
+                norm_save_path = os.path.realpath(norm_save_path)
+        except Exception:
+            pass
+        if os.name == 'nt' and len(norm_save_path) >= 2 and norm_save_path[1] == ':':
+            norm_save_path = norm_save_path[0].upper() + norm_save_path[1:]
+
         with self._lock:
             try:
                 with self._get_connection() as conn:
@@ -167,7 +176,7 @@ class ExportHistoryService:
                     """, (
                         rec_id,
                         final_event_key,
-                        os.path.normpath(output_path),
+                        norm_save_path,
                         norm_path,
                         filename,
                         source,
@@ -319,6 +328,10 @@ class ExportHistoryService:
         item['source_tool'] = item.get('source_kind', 'editor')
         item['file_status'] = self.check_file_status(item.get('normalized_path'))
         
+        raw_out = str(item.get('output_path') or '').strip()
+        if raw_out and os.name == 'nt' and len(raw_out) >= 2 and raw_out[1] == ':':
+            item['output_path'] = raw_out[0].upper() + raw_out[1:]
+
         raw_params = item.get('params_json')
         if raw_params:
             try:

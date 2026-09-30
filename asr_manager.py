@@ -140,12 +140,23 @@ def get_whisper_model_path(model_key="base"):
 
 def get_python_exec():
     """Tìm trình thực thi Python khả dụng để chạy ASR."""
-    if os.path.exists(PYTHON_EXEC):
+    def usable(candidate):
+        if not candidate or not os.path.exists(candidate):
+            return False
+        try:
+            probe = subprocess.run([candidate, "-c", "print('ASR_PYTHON_OK')"], capture_output=True, text=True,
+                                   timeout=8, creationflags=0x08000000 if os.name == 'nt' else 0)
+            return probe.returncode == 0 and "ASR_PYTHON_OK" in (probe.stdout or "")
+        except Exception:
+            return False
+
+    if usable(PYTHON_EXEC):
         return PYTHON_EXEC
     if not getattr(sys, 'frozen', False):
-        return sys.executable
+        if usable(sys.executable):
+            return sys.executable
     cand = shutil.which("python.exe") or shutil.which("python")
-    if cand:
+    if usable(cand):
         return cand
     return None
 

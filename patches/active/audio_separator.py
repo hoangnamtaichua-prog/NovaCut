@@ -55,42 +55,202 @@ def extract_audio_from_video(input_video_path, output_wav_path, sample_rate=4410
     return output_wav_path
 
 
-def separate_audio_stems(
-    input_media_path,
-    output_dir=None,
-    remove_vocals=True,
-    remove_bgm=False,
-    keep_sfx=True,
-    mode="mdx_net_hq4",
-    device="auto",
-    progress_cb=None,
-    logger_cb=None,
-    cancel_check_cb=None
-):
-    """
-    Hàm giao diện chính để thực hiện Tách Âm Thanh AI & Lọc Giọng Thoại Cũ qua MDX-NET UVR5.
-    Hỗ trợ các mô hình MDX-Net:
-    - 'mdx_net_hq4' (Khuyên dùng): MDX-NET Inst HQ 4 (Chuẩn UVR5, Sạch thoại 99.5%, Giữ 100% SFX).
-    - 'mdx_net_hq5': MDX-NET Inst HQ 5 (Chống vang Reverb & Echo).
-    - 'mdx_net_voc_ft': MDX-NET Vocals FT (Trích xuất Vocal trong trẻo).
-    """
-    if not os.path.exists(input_media_path):
-        raise FileNotFoundError(f"Không tìm thấy file đầu vào: {input_media_path}")
+def _clean_child_env():
+    """Loại bỏ triệt để các biến môi trường PyInstaller để tiến trình con không bị trỏ vào _internal."""
+    env = os.environ.copy()
+    for var in ["PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "_MEIPASS", "_MEIPASS2"]:
+        env.pop(var, None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
 
-def _get_python_exe():
-    """Tìm Python executable an toàn cho cả môi trường source và đóng gói."""
-    if not getattr(sys, 'frozen', False):
-        return sys.executable
-    candidates = [
+
+def _test_python_torch(py_path):
+    """Kiểm tra xem executable có thể nạp torch và torchaudio thành công không."""
+    if not py_path or not os.path.exists(py_path):
+        return False
+    try:
+        res = subprocess.run(
+            [py_path, "-c", "import torch, torchaudio; print('TORCH_OK')"],
+            capture_output=True, text=True, timeout=12, env=_clean_child_env(),
+            creationflags=0x08000000 if os.name == "nt" else 0
+        )
+        return "TORCH_OK" in (res.stdout or "")
+    except Exception:
+        return False
+
+
+def _has_nvidia_gpu():
+    """Kiểm tra máy có GPU NVIDIA khả dụng để tải bản PyTorch CUDA tương ứng."""
+    try:
+        res = subprocess.run(
+            ["nvidia-smi"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000 if os.name == "nt" else 0
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
+    """
+    Tìm hoặc tự động chuẩn bị môi trường Python có sẵn PyTorch (torch + torchaudio).
+    Nếu trên máy chưa có bất kỳ môi trường nào hỗ trợ PyTorch:
+    Tự động tải và cài đặt phiên bản PyTorch phù hợp (NVIDIA CUDA cu124 hoặc CPU) cho người dùng.
+    """
+    # 1. Thu thập tất cả các ứng viên Python trên máy
+    candidates = []
+
+    # Ưu tiên các runtime chuyên dụng / nội bộ
+    runtime_candidates = [
+        os.path.join(ROOT_DIR, "runtimes", "vieneu_gpu", "Scripts", "python.exe"),
+        os.path.join(ROOT_DIR, ".asr_venv", "Scripts", "python.exe"),
+        os.path.join(ROOT_DIR, "runtimes", "mdx_runtime", "Scripts", "python.exe"),
         os.path.join(ROOT_DIR, "runtimes", "python", "python.exe"),
+        os.path.join(ROOT_DIR, "rvc_env", "python.exe"),
+        os.path.join(ROOT_DIR, "python-nuget", "tools", "python.exe"),
         os.path.join(ROOT_DIR, "python-nuget", "python.exe"),
-        shutil.which("python.exe"),
-        shutil.which("python")
     ]
-    for c in candidates:
-        if c and os.path.exists(c):
-            return c
-    return sys.executable
+    for c in runtime_candidates:
+        if os.path.exists(c) and c not in candidates:
+            candidates.append(c)
+
+    # Nếu không phải ứng dụng đóng gói EXE, kiểm tra chính sys.executable
+    if not getattr(sys, 'frozen', False):
+        if sys.executable and sys.executable not in candidates:
+            candidates.append(sys.executable)
+
+    # Các Python chuẩn đã cài đặt trên hệ thống Windows
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    prog_files = os.environ.get("ProgramFiles", "")
+    if local_app_data:
+        for py_ver in ["Python312", "Python311", "Python310"]:
+            p = os.path.join(local_app_data, "Programs", "Python", py_ver, "python.exe")
+            if os.path.exists(p) and p not in candidates:
+                candidates.append(p)
+    if prog_files:
+        for py_ver in ["Python312", "Python311", "Python310"]:
+            p = os.path.join(prog_files, py_ver, "python.exe")
+            if os.path.exists(p) and p not in candidates:
+                candidates.append(p)
+
+    # Thử py launcher hoặc python trong biến môi trường PATH
+    for cmd in ["python.exe", "python"]:
+        found = shutil.which(cmd)
+        if found and os.path.exists(found) and "WindowsApps" not in found and found not in candidates:
+            candidates.append(found)
+
+    # 2. Kiểm tra xem ứng viên nào đã có sẵn torch & torchaudio
+    for py_exe in candidates:
+        if _test_python_torch(py_exe):
+            if logger_cb:
+                logger_cb(f"[MDX-Separator] 🎯 Sử dụng môi trường AI sẵn có: {py_exe}")
+            return py_exe
+
+    # 3. Nếu chưa có môi trường nào có torch: TỰ ĐỘNG TẢI & CÀI ĐẶT CHO NGƯỜI DÙNG
+    if logger_cb:
+        logger_cb("[MDX-Separator] ⚙️ Chưa tìm thấy thư viện AI PyTorch. Đang chuẩn bị môi trường tự động cài đặt...")
+    if progress_cb:
+        progress_cb(5, "Đang chuẩn bị môi trường AI PyTorch...")
+
+    # Tìm Python cơ sở để tạo runtime hoặc cài đặt
+    base_python = None
+    for py_exe in candidates:
+        if os.path.exists(py_exe) and not py_exe.endswith("NovaCut.exe"):
+            base_python = py_exe
+            break
+
+    if not base_python:
+        for cmd in ["python.exe", "python", "py.exe", "py"]:
+            found = shutil.which(cmd)
+            if found and os.path.exists(found) and not found.endswith("NovaCut.exe"):
+                base_python = found
+                break
+
+    if not base_python:
+        raise RuntimeError("Không tìm thấy Python trên hệ thống để cài đặt PyTorch. Vui lòng cài đặt Python (3.10 - 3.12).")
+
+    # Tạo virtualenv riêng biệt tại runtimes/mdx_runtime để tránh xung đột
+    mdx_runtime_dir = os.path.join(ROOT_DIR, "runtimes", "mdx_runtime")
+    target_python = os.path.join(mdx_runtime_dir, "Scripts", "python.exe")
+
+    if not os.path.exists(target_python):
+        if logger_cb:
+            logger_cb("[MDX-Separator] 📦 Đang khởi tạo môi trường AI tách biệt tại runtimes/mdx_runtime...")
+        os.makedirs(os.path.dirname(mdx_runtime_dir), exist_ok=True)
+        try:
+            subprocess.run(
+                [base_python, "-m", "venv", mdx_runtime_dir],
+                capture_output=True, text=True, timeout=60, env=_clean_child_env(),
+                creationflags=0x08000000 if os.name == "nt" else 0
+            )
+        except Exception as venv_err:
+            if logger_cb:
+                logger_cb(f"[MDX-Separator] ⚠️ Không thể tạo venv ({venv_err}). Sử dụng trực tiếp {base_python}")
+            target_python = base_python
+
+    if not os.path.exists(target_python):
+        target_python = base_python
+
+    # Xác định phiên bản CUDA / CPU phù hợp
+    has_gpu = _has_nvidia_gpu()
+    if has_gpu:
+        index_url = "https://download.pytorch.org/whl/cu124"
+        hardware_label = "NVIDIA GPU (CUDA cu124)"
+    else:
+        index_url = "https://download.pytorch.org/whl/cpu"
+        hardware_label = "CPU Fallback"
+
+    if logger_cb:
+        logger_cb(f"[MDX-Separator] 🚀 Bắt đầu tự động tải PyTorch & Torchaudio cho {hardware_label} (Chỉ tải 1 lần duy nhất)...")
+    if progress_cb:
+        progress_cb(6, f"Đang tải PyTorch ({hardware_label})...")
+
+    pip_cmd = [
+        target_python, "-m", "pip", "install",
+        "--no-warn-script-location",
+        "torch", "torchaudio", "onnxruntime-directml", "numpy", "soundfile",
+        "--index-url", index_url
+    ]
+
+    install_proc = subprocess.Popen(
+        pip_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_clean_child_env(),
+        creationflags=0x08000000 if os.name == "nt" else 0
+    )
+
+    while True:
+        line = install_proc.stdout.readline()
+        if not line:
+            if install_proc.poll() is not None:
+                break
+            time.sleep(0.1)
+            continue
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        if any(keyword in line_clean.lower() for keyword in ["downloading", "collecting", "installing", "successfully installed"]):
+            if logger_cb:
+                logger_cb(f"[PyTorch-Installer] {line_clean}")
+            if "downloading" in line_clean.lower() and progress_cb:
+                progress_cb(7, "Đang tải gói dữ liệu AI...")
+
+    ret = install_proc.wait()
+    if ret != 0:
+        raise RuntimeError(f"Tự động cài đặt PyTorch thất bại (Mã lỗi: {ret}). Vui lòng kiểm tra kết nối mạng.")
+
+    if _test_python_torch(target_python):
+        if logger_cb:
+            logger_cb("[MDX-Separator] 🎉 Đã cài đặt hoàn tất PyTorch AI thành công! Bắt đầu xử lý âm thanh...")
+        return target_python
+    else:
+        raise RuntimeError("Cài đặt PyTorch hoàn tất nhưng không thể nạp module torch/torchaudio.")
 
 
 def _run_mdx_in_isolated_process(
@@ -114,7 +274,7 @@ def _run_mdx_in_isolated_process(
     """
     import json
 
-    python_exe = _get_python_exe()
+    python_exe = _find_or_prepare_mdx_python(progress_cb=progress_cb, logger_cb=logger_cb)
     mdx_script = os.path.join(ROOT_DIR, "mdx_separator.py")
 
     cmd = [
@@ -132,9 +292,7 @@ def _run_mdx_in_isolated_process(
     if keep_sfx:
         cmd.append("--keep-sfx")
 
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"
+    env = _clean_child_env()
 
     creation_flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
 
@@ -294,21 +452,26 @@ def separate_audio_stems(
                 cancel_check_cb=cancel_check_cb
             )
         except Exception as proc_err:
-            # Nếu subprocess không thể chạy được do môi trường, fallback về in-process với bảo vệ CPU
+            if getattr(sys, 'frozen', False):
+                raise proc_err
+            # Nếu chạy từ source/dev mà subprocess gặp sự cố, thử in-process fallback
             if logger_cb:
-                logger_cb(f"[MDX-Separator] ⚠️ Subprocess worker không khả dụng ({proc_err}). Chuyển sang in-process runner...")
-            from mdx_separator import separate_stems_mdx
-            res_mdx = separate_stems_mdx(
-                source_audio, output_dir,
-                model_name=mdx_model_file,
-                device=device,
-                remove_vocals=remove_vocals,
-                remove_bgm=remove_bgm,
-                keep_sfx=keep_sfx,
-                progress_cb=progress_cb,
-                logger_cb=logger_cb,
-                cancel_check_cb=cancel_check_cb
-            )
+                logger_cb(f"[MDX-Separator] ⚠️ Subprocess worker gặp sự cố ({proc_err}). Thử chạy in-process...")
+            try:
+                from mdx_separator import separate_stems_mdx
+                res_mdx = separate_stems_mdx(
+                    source_audio, output_dir,
+                    model_name=mdx_model_file,
+                    device=device,
+                    remove_vocals=remove_vocals,
+                    remove_bgm=remove_bgm,
+                    keep_sfx=keep_sfx,
+                    progress_cb=progress_cb,
+                    logger_cb=logger_cb,
+                    cancel_check_cb=cancel_check_cb
+                )
+            except Exception as in_proc_err:
+                raise RuntimeError(f"Tách âm thanh thất bại: {proc_err}")
 
         res = {
             "success": True,

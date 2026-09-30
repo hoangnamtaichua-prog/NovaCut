@@ -7,7 +7,9 @@ from urllib.parse import urlparse
 
 download_bp = Blueprint('download', __name__)
 _download_lock = threading.RLock()
-_download_active = False
+_active_downloads = {}  # task_id -> {'cancel_event': threading.Event(), 'url': str, 'start_time': float}
+MAX_CONCURRENT_DOWNLOADS = 5
+_download_active = False  # Legacy compatibility flag
 _douyin_scan_active = False
 _douyin_batch_active = False
 
@@ -116,9 +118,11 @@ def api_download_start():
     permission_error = _require_editor()
     if permission_error:
         return permission_error
-    import downloader, queue, threading, urllib.parse, json
+    import downloader, queue, threading, urllib.parse, json, uuid
     data = request.get_json(silent=True) or {}
     url = str(data.get('url', '')).strip()
+    raw_task_id = str(data.get('task_id', '')).strip()
+    task_id = raw_task_id if raw_task_id and re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', raw_task_id) else str(uuid.uuid4())
     format_id = str(data.get('format_id', 'best'))[:100]
     info_payload = data.get('info')
     video_urls_payload = data.get('video_urls')
@@ -144,19 +148,34 @@ def api_download_start():
         return jsonify({'error': 'URL không hợp lệ hoặc tên miền chưa được cho phép'}), 400
     if not re.fullmatch(r'[a-zA-Z0-9_+.,:/-]{1,100}', format_id):
         return jsonify({'error': 'Format ID không hợp lệ'}), 400
+
+    cancel_event = threading.Event()
+    dl_start_time = time.time()
     with _download_lock:
-        if _download_active:
-            return jsonify({'error': 'Một tác vụ tải video khác đang chạy'}), 409
+        if len(_active_downloads) >= MAX_CONCURRENT_DOWNLOADS:
+            return jsonify({'error': f'Đã đạt giới hạn tối đa số tác vụ tải đồng thời ({MAX_CONCURRENT_DOWNLOADS}). Vui lòng chờ các tác vụ trước hoàn tất.'}), 429
+        _active_downloads[task_id] = {
+            'cancel_event': cancel_event,
+            'url': url,
+            'start_time': dl_start_time
+        }
         _download_active = True
 
     q = queue.Queue()
 
     def progress_callback(prog_data):
-        q.put(prog_data)
+        if cancel_event.is_set():
+            raise Exception('Tác vụ tải đã bị hủy bởi người dùng.')
+        prog_with_id = dict(prog_data) if isinstance(prog_data, dict) else {'message': str(prog_data)}
+        prog_with_id['task_id'] = task_id
+        q.put(prog_with_id)
 
     def worker():
         global _download_active
         try:
+            if cancel_event.is_set():
+                raise Exception('Tác vụ tải đã bị hủy bởi người dùng.')
+
             final_path, info = downloader.download_media(
                 url=url,
                 format_id=format_id,
@@ -166,20 +185,26 @@ def api_download_start():
                 info=info_payload if isinstance(info_payload, dict) else None,
                 video_urls=video_urls_payload
             )
+
+            if cancel_event.is_set():
+                raise Exception('Tác vụ tải đã bị hủy bởi người dùng.')
+
             file_size = os.path.getsize(final_path) if os.path.exists(final_path) else 0
             size_mb = f"{file_size / (1024*1024):.1f} MB"
 
             # Phân tích độ phân giải và thông số kỹ thuật thực tế của video vừa tải
             specs = downloader.probe_video_specs(final_path) or {}
-            duration_val = specs.get('duration') or info.get('duration', 0)
+            duration_val = specs.get('duration') or (info.get('duration', 0) if isinstance(info, dict) else 0)
 
+            v_title = (info.get('title') if isinstance(info, dict) else '') or os.path.basename(final_path)
             q.put({
                 'status': 'completed',
+                'task_id': task_id,
                 'file_path': final_path,
                 'file_name': os.path.basename(final_path),
                 'file_size': size_mb,
-                'title': info.get('title', os.path.basename(final_path)),
-                'thumbnail': info.get('thumbnail', ''),
+                'title': v_title,
+                'thumbnail': info.get('thumbnail', '') if isinstance(info, dict) else '',
                 'duration': duration_val,
                 'audio_url': f"/api/file?path={urllib.parse.quote(final_path)}",
                 'specs': specs,
@@ -193,14 +218,63 @@ def api_download_start():
                 'aspect_ratio': specs.get('aspect_ratio', ''),
                 'specs_summary': specs.get('summary', '')
             })
+
+            # Gửi thông báo Telegram khi tải xong
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_per_video:
+                    res_label = specs.get('resolution_label') or specs.get('resolution') or ''
+                    notifier.notify_task_success(
+                        task_type='download',
+                        task_title='Tải Video Xuống',
+                        video_title=v_title,
+                        output_path=final_path,
+                        duration_sec=time.time() - dl_start_time,
+                        file_size_mb=file_size / (1024 * 1024) if file_size > 0 else None,
+                        extra_info={
+                            'Độ phân giải': res_label,
+                            'Thời lượng': f"{int(duration_val // 60)}p {int(duration_val % 60)}s" if duration_val else "",
+                            'Định dạng': specs.get('vcodec') or ''
+                        },
+                        task_id=task_id
+                    )
+            except Exception as _te:
+                logging.getLogger(__name__).warning(f"[Telegram] Error sending download notification: {_te}")
+
         except Exception as e:
-            q.put({
-                'status': 'error',
-                'error': str(e)
-            })
+            err_msg = str(e)
+            if cancel_event.is_set() or 'bị hủy bởi người dùng' in err_msg:
+                q.put({
+                    'status': 'cancelled',
+                    'task_id': task_id,
+                    'message': 'Đã hủy tải video'
+                })
+            else:
+                q.put({
+                    'status': 'error',
+                    'task_id': task_id,
+                    'error': err_msg
+                })
+                # Gửi thông báo Telegram khi tải thất bại
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled and notifier.notify_per_video:
+                        notifier.notify_task_failure(
+                            task_type='download',
+                            task_title='Tải Video Xuống',
+                            video_title=url,
+                            error_message=err_msg,
+                            duration_sec=time.time() - dl_start_time,
+                            task_id=task_id
+                        )
+                except Exception as _te:
+                    logging.getLogger(__name__).warning(f"[Telegram] Error sending download failure notification: {_te}")
         finally:
             with _download_lock:
-                _download_active = False
+                _active_downloads.pop(task_id, None)
+                _download_active = len(_active_downloads) > 0
 
     t = threading.Thread(target=worker, daemon=True)
     t.start()
@@ -210,12 +284,91 @@ def api_download_start():
             try:
                 item = q.get(timeout=60)
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-                if item.get('status') in ['completed', 'error']:
+                if item.get('status') in ['completed', 'error', 'cancelled']:
                     break
             except queue.Empty:
                 yield "data: {\"status\": \"heartbeat\"}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@download_bp.route('/api/download/cancel', methods=['POST'])
+def api_download_cancel():
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
+    task_id = str(data.get('task_id', '')).strip()
+    cancel_all = parse_bool(data.get('all', False), False)
+
+    with _download_lock:
+        if cancel_all:
+            cancelled_count = 0
+            for tid, entry in list(_active_downloads.items()):
+                entry['cancel_event'].set()
+                cancelled_count += 1
+            return jsonify({'success': True, 'cancelled_count': cancelled_count})
+        elif task_id and task_id in _active_downloads:
+            _active_downloads[task_id]['cancel_event'].set()
+            return jsonify({'success': True, 'task_id': task_id})
+        else:
+            return jsonify({'success': False, 'message': 'Không tìm thấy tác vụ tải với ID này hoặc tác vụ đã kết thúc'}), 200
+
+
+@download_bp.route('/api/download/active_tasks', methods=['GET'])
+def api_download_active_tasks():
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+    with _download_lock:
+        tasks = []
+        for tid, entry in _active_downloads.items():
+            tasks.append({
+                'task_id': tid,
+                'url': entry.get('url', ''),
+                'elapsed': round(time.time() - entry.get('start_time', time.time()), 1)
+            })
+        return jsonify({
+            'success': True,
+            'active_count': len(tasks),
+            'tasks': tasks
+        })
+
+
+@download_bp.route('/api/download/queue_finished', methods=['POST'])
+def api_download_queue_finished():
+    """Nhận tín hiệu kết thúc toàn bộ hàng chờ tải xuống và gửi thông báo tổng kết Telegram."""
+    permission_error = _require_editor()
+    if permission_error:
+        return permission_error
+    data = request.get_json(silent=True) or {}
+    total_count = int(data.get('total_count', 0))
+    success_count = int(data.get('success_count', 0))
+    failed_count = int(data.get('failed_count', 0))
+    cancelled_count = int(data.get('cancelled_count', 0))
+    elapsed_sec = float(data.get('elapsed_sec', 0))
+    output_dir = str(data.get('output_dir', '')).strip()
+
+    try:
+        from telegram_notifier import get_telegram_notifier
+        notifier = get_telegram_notifier()
+        if notifier.enabled and notifier.notify_batch_done:
+            start_ts = time.time() - elapsed_sec if elapsed_sec > 0 else time.time()
+            notifier.notify_batch_completed(
+                total_count=total_count,
+                success_count=success_count,
+                failed_count=failed_count,
+                cancelled_count=cancelled_count,
+                start_time=start_ts,
+                end_time=time.time(),
+                output_dir=output_dir or "downloads",
+                batch_id=f"dl_queue_{int(time.time())}"
+            )
+            return jsonify({'success': True, 'notified': True})
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[Telegram] Error sending download queue summary: {e}")
+
+    return jsonify({'success': True, 'notified': False})
 
 
 @download_bp.route('/api/download/probe', methods=['POST'])
@@ -264,19 +417,37 @@ def api_download_open_folder():
     
     target_path = folder_path or file_path
     if target_path and is_path_allowed(target_path, must_exist=True):
-        if os.path.isdir(target_path):
-            args = ['explorer', os.path.normpath(target_path)] if os.name == 'nt' else ['xdg-open', os.path.normpath(target_path)]
+        norm_target = os.path.normpath(target_path)
+        if os.path.isdir(norm_target):
+            if os.name == 'nt':
+                try:
+                    os.startfile(norm_target)
+                except Exception:
+                    subprocess.Popen(f'explorer "{norm_target}"', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen(['xdg-open', norm_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            args = ['explorer', f'/select,{os.path.normpath(target_path)}'] if os.name == 'nt' else ['xdg-open', os.path.dirname(os.path.normpath(target_path))]
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.name == 'nt':
+                try:
+                    subprocess.Popen(f'explorer /select,"{norm_target}"', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    os.startfile(os.path.dirname(norm_target))
+            else:
+                subprocess.Popen(['xdg-open', os.path.dirname(norm_target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return jsonify({'success': True})
     if target_path:
         return jsonify({'success': False, 'error': 'Đường dẫn không hợp lệ hoặc chưa được cho phép'}), 403
     
     default_folder = os.path.join(USER_DATA_DIR, 'downloads')
     os.makedirs(default_folder, exist_ok=True)
-    args = ['explorer', os.path.normpath(default_folder)] if os.name == 'nt' else ['xdg-open', os.path.normpath(default_folder)]
-    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    norm_default = os.path.normpath(default_folder)
+    if os.name == 'nt':
+        try:
+            os.startfile(norm_default)
+        except Exception:
+            subprocess.Popen(f'explorer "{norm_default}"', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.Popen(['xdg-open', norm_default], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return jsonify({'success': True})
 
 
@@ -430,9 +601,13 @@ def api_download_douyin_batch_download():
     prefix_index = parse_bool(data.get('prefix_index', True), True)
     auto_merge = parse_bool(data.get('auto_merge', False), False)
     merge_mode = str(data.get('merge_mode', 'auto')).strip()
+    sort_order = str(data.get('sort_order', 'as_is')).strip()
 
     if not videos or not isinstance(videos, list):
         return jsonify({'error': 'Danh sách video tải xuống rỗng'}), 400
+
+    if sort_order in ('oldest_first', 'newest_first'):
+        videos = douyin_browser_downloader.sort_videos_chronological(videos, order=sort_order)
 
     if not output_dir:
         output_dir = os.path.join(ROOT_DIR, 'downloads')
@@ -476,6 +651,23 @@ def api_download_douyin_batch_download():
                 'merged_file': merged_file,
                 'manifest_path': manifest_path
             })
+            # Gửi thông báo tổng kết Telegram khi tải batch Douyin hoàn tất
+            try:
+                from telegram_notifier import get_telegram_notifier
+                notifier = get_telegram_notifier()
+                if notifier.enabled and notifier.notify_batch_done:
+                    tot = len(videos)
+                    succ = len(downloaded_files)
+                    fail = max(0, tot - succ)
+                    notifier.notify_batch_completed(
+                        total_count=tot,
+                        success_count=succ,
+                        failed_count=fail,
+                        output_dir=output_dir,
+                        batch_id=f"douyin_batch_{int(time.time())}"
+                    )
+            except Exception as _te:
+                logging.getLogger(__name__).warning(f"[Telegram] Error sending Douyin batch notification: {_te}")
         except Exception as e:
             q.put({
                 'status': 'error',
@@ -597,6 +789,19 @@ def api_download_douyin_merge():
 
     try:
         merged_file = downloader.merge_collection_episodes(files, output_path, merge_mode=merge_mode)
+        try:
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if notifier.enabled and notifier.notify_per_video:
+                notifier.notify_task_success(
+                    task_type='download',
+                    task_title='Ghép Video Douyin',
+                    video_title=os.path.basename(merged_file),
+                    output_path=merged_file,
+                    extra_info={'Số tập ghép': len(files), 'Chế độ': merge_mode}
+                )
+        except Exception as _te:
+            logging.getLogger(__name__).warning(f"[Telegram] Error sending merge notification: {_te}")
         return jsonify({'success': True, 'merged_file': merged_file})
     except Exception as e:
         return jsonify({'error': f"Lỗi ghép video: {str(e)}"}), 500
@@ -616,13 +821,91 @@ def api_download_douyin_cancel_batch():
         return jsonify({'error': f"Lỗi dừng tải: {str(e)}"}), 500
 
 
+# =========================================================================
+# DOUYIN ACCOUNT & COOKIE API ROUTES
+# =========================================================================
+@download_bp.route('/api/download/douyin/status', methods=['GET'])
+def api_download_douyin_status():
+    """Kiểm tra trạng thái đăng nhập Douyin (xác minh cookie với server Douyin)"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import douyin_cookie_manager
+        has_file = douyin_cookie_manager.is_douyin_logged_in()
+        verify = {'valid': False, 'uname': None, 'user_id': None, 'sec_uid': None, 'avatar_url': None, 'description': None}
+        if has_file:
+            try:
+                verify = douyin_cookie_manager.verify_douyin_cookie()
+            except Exception as _e:
+                verify['description'] = str(_e)
+
+        return jsonify({
+            'success': True,
+            'logged_in': has_file,
+            'cookie_valid': verify['valid'],
+            'uname': verify.get('uname'),
+            'user_id': verify.get('user_id'),
+            'sec_uid': verify.get('sec_uid'),
+            'avatar_url': verify.get('avatar_url'),
+            'description': verify.get('description')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@download_bp.route('/api/download/douyin/save_cookie', methods=['POST'])
+def api_download_douyin_save_cookie():
+    """Lưu Cookie Douyin thủ công và xác thực ngay"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import douyin_cookie_manager
+        data = request.get_json(silent=True) or {}
+        cookie_text = str(data.get('cookie', '')).strip()
+        if not cookie_text:
+            return jsonify({'error': 'Vui lòng nhập Cookie hoặc sessionid Douyin'}), 400
+        ok = douyin_cookie_manager.save_douyin_cookie(cookie_text)
+        if not ok:
+            return jsonify({'error': 'Không thể định dạng hoặc lưu Cookie'}), 400
+
+        verify = douyin_cookie_manager.verify_douyin_cookie()
+        return jsonify({
+            'success': True,
+            'cookie_valid': verify['valid'],
+            'uname': verify.get('uname'),
+            'avatar_url': verify.get('avatar_url'),
+            'message': 'Đã lưu và xác thực Cookie Douyin thành công!' if verify['valid'] else f"Đã lưu Cookie nhưng: {verify.get('description', 'Chưa thể xác minh')}"
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@download_bp.route('/api/download/douyin/logout', methods=['POST'])
+def api_download_douyin_logout():
+    """Đăng xuất và xóa Cookie Douyin"""
+    try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import douyin_cookie_manager
+        douyin_cookie_manager.clear_douyin_cookie()
+        return jsonify({'success': True, 'message': 'Đã đăng xuất tài khoản Douyin thành công.'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @download_bp.route('/api/download/douyin/open_login', methods=['POST'])
 def api_download_douyin_open_login():
     """
     API mở trình duyệt để người dùng đăng nhập Douyin 1 lần duy nhất (vượt giới hạn 18 video của khách).
     """
-    import douyin_browser_downloader, threading
     try:
+        permission_error = _require_editor()
+        if permission_error:
+            return permission_error
+        import douyin_browser_downloader, threading
         crawler = douyin_browser_downloader.DouyinBrowserDownloader(headless=False)
         t = threading.Thread(target=crawler.open_login_window, daemon=True)
         t.start()

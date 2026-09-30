@@ -49,6 +49,7 @@ def main():
     model_name = sys.argv[2]
     output_srt = sys.argv[3]
     language = sys.argv[4] if len(sys.argv) > 4 else "auto"
+    device = (sys.argv[5] if len(sys.argv) > 5 else "cpu").lower()
     
     if language == "auto" or language == "":
         language = None
@@ -58,12 +59,24 @@ def main():
     try:
         extract_audio(video_path, audio_path)
 
-        if model_name == "whisper":
+        if model_name in {"whisper", "base", "small", "medium"}:
             print("[STEP] Đang nạp mô hình Faster-Whisper (Hỗ trợ 99 ngôn ngữ)...", flush=True)
             from faster_whisper import WhisperModel
             
-            print("[STEP] Đang nạp Model 'large-v3-turbo' lên GPU (sẽ tự tải xuống nếu là lần đầu)...", flush=True)
-            model = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
+            model_size = {"whisper": "large-v3-turbo", "base": "base", "small": "small", "medium": "medium"}.get(model_name, "base")
+            use_cuda = device == "cuda"
+            actual_device = "cuda" if use_cuda else "cpu"
+            compute_type = "float16" if use_cuda else "int8"
+            print(f"[STEP] Đang nạp Model '{model_size}' trên {actual_device.upper()} (sẽ tự tải xuống nếu là lần đầu)...", flush=True)
+            try:
+                model = WhisperModel(model_size, device=actual_device, compute_type=compute_type)
+            except Exception as gpu_error:
+                if actual_device != "cuda":
+                    raise
+                print(f"[HARDWARE] GPU CUDA lỗi ({gpu_error}); chuyển sang CPU", flush=True)
+                actual_device = "cpu"
+                model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            print(f"[HARDWARE] ASR sử dụng: {actual_device.upper()} (Faster-Whisper)", flush=True)
             
             print(f"[STEP] Bắt đầu nhận diện. Ngôn ngữ: {language or 'Tự động'}. Vui lòng chờ...", flush=True)
             segments, info = model.transcribe(audio_path, language=language, beam_size=5, vad_filter=True)

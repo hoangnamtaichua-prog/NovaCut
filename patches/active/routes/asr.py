@@ -94,8 +94,19 @@ def asr_scan():
         if video_path:
             video_path = video_path.strip(' "\'')
 
-        if not video_path or not is_path_allowed(video_path, must_exist=True, extensions=_VIDEO_EXTENSIONS):
-            return jsonify({"success": False, "error": f"Video đầu vào không hợp lệ. Đường dẫn nhận được: '{video_path}'"})
+        if not video_path:
+            return jsonify({"success": False, "error": "Chưa cung cấp đường dẫn video đầu vào"}), 400
+
+        if not is_path_allowed(video_path, must_exist=True, extensions=_VIDEO_EXTENSIONS):
+            from routes.core import find_media_on_system
+            resolved = find_media_on_system(video_path)
+            if resolved and is_path_allowed(resolved, must_exist=True, extensions=_VIDEO_EXTENSIONS):
+                video_path = resolved
+            elif os.path.exists(video_path) and os.path.splitext(video_path)[1].lower() in _VIDEO_EXTENSIONS:
+                from routes.security import register_user_path
+                register_user_path(video_path)
+            else:
+                return jsonify({"success": False, "error": f"Video đầu vào không hợp lệ hoặc chưa được cấp quyền. Đường dẫn: '{video_path}'"}), 400
 
         if not os.path.isabs(output_dir):
             output_dir = os.path.abspath(os.path.join(ROOT_DIR, output_dir))
@@ -114,6 +125,7 @@ def asr_scan():
             _asr_cancel_requested = False
 
         # Chuẩn bị lệnh chạy
+        asr_start_time = time.time()
         temp_audio = os.path.join(output_dir, f"temp_asr_{int(time.time()*1000)}.wav")
         base_out_no_ext = os.path.splitext(output_srt_path)[0]
 
@@ -222,17 +234,76 @@ def asr_scan():
                         shutil.move(generated_srt, output_srt_path)
                     import json
                     yield f"\n[RESULT] {json.dumps({'success': True, 'srt_path': output_srt_path})}\n"
+                    # Gửi thông báo Telegram khi ASR thành công
+                    try:
+                        from telegram_notifier import get_telegram_notifier
+                        notifier = get_telegram_notifier()
+                        if notifier.enabled and notifier.notify_per_video:
+                            notifier.notify_task_success(
+                                task_type='asr',
+                                task_title='Trích Xuất Phụ Đề ASR',
+                                video_title=os.path.basename(video_path),
+                                output_path=output_srt_path,
+                                duration_sec=time.time() - asr_start_time,
+                                extra_info={
+                                    'Model': model_name,
+                                    'Ngôn ngữ': language.upper()
+                                }
+                            )
+                    except Exception as _te:
+                        logging.getLogger(__name__).warning(f"[Telegram] Error sending ASR notification: {_te}")
                 elif process.returncode != 0:
+                    err_msg = f'Tiến trình AI kết thúc với mã {process.returncode}'
                     import json
-                    yield f"\n[RESULT] {json.dumps({'success': False, 'error': f'Tiến trình AI kết thúc với mã {process.returncode}'})}\n"
+                    yield f"\n[RESULT] {json.dumps({'success': False, 'error': err_msg})}\n"
+                    try:
+                        from telegram_notifier import get_telegram_notifier
+                        notifier = get_telegram_notifier()
+                        if notifier.enabled and notifier.notify_per_video and not _asr_cancel_requested:
+                            notifier.notify_task_failure(
+                                task_type='asr',
+                                task_title='Trích Xuất Phụ Đề ASR',
+                                video_title=os.path.basename(video_path),
+                                error_message=err_msg,
+                                duration_sec=time.time() - asr_start_time
+                            )
+                    except Exception as _te:
+                        logging.getLogger(__name__).warning(f"[Telegram] Error sending ASR failure notification: {_te}")
                 else:
+                    err_msg = 'Không tạo được tệp phụ đề SRT.'
                     import json
-                    yield f"\n[RESULT] {json.dumps({'success': False, 'error': 'Không tạo được tệp phụ đề SRT.'})}\n"
+                    yield f"\n[RESULT] {json.dumps({'success': False, 'error': err_msg})}\n"
+                    try:
+                        from telegram_notifier import get_telegram_notifier
+                        notifier = get_telegram_notifier()
+                        if notifier.enabled and notifier.notify_per_video and not _asr_cancel_requested:
+                            notifier.notify_task_failure(
+                                task_type='asr',
+                                task_title='Trích Xuất Phụ Đề ASR',
+                                video_title=os.path.basename(video_path),
+                                error_message=err_msg,
+                                duration_sec=time.time() - asr_start_time
+                            )
+                    except Exception as _te:
+                        logging.getLogger(__name__).warning(f"[Telegram] Error sending ASR failure notification: {_te}")
 
             except GeneratorExit:
                 _terminate_process_tree(process)
             except Exception as exc:
                 yield f"\n[RESULT] {json.dumps({'success': False, 'error': str(exc)})}\n"
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled and notifier.notify_per_video and not _asr_cancel_requested:
+                        notifier.notify_task_failure(
+                            task_type='asr',
+                            task_title='Trích Xuất Phụ Đề ASR',
+                            video_title=os.path.basename(video_path),
+                            error_message=str(exc),
+                            duration_sec=time.time() - asr_start_time
+                        )
+                except Exception as _te:
+                    logging.getLogger(__name__).warning(f"[Telegram] Error sending ASR failure notification: {_te}")
             finally:
                 with _asr_lock:
                     if current_asr_process is process:

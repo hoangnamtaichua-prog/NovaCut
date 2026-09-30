@@ -156,20 +156,42 @@ const COLOR_MAP = {
  */
 export function showConfirmModal(opts = {}) {
     let title = 'XÁC NHẬN THAO TÁC', message = '', icon = '❓', confirmText = 'Xác Nhận', cancelText = 'Hủy', confirmType = 'primary';
+    let onConfirmCb = null;
+    let onCancelCb = null;
+
     if (typeof opts === 'string') {
         title = arguments[0] || title;
         message = arguments[1] || '';
-        icon = arguments[2] || icon;
-        confirmText = arguments[3] || confirmText;
-        cancelText = arguments[4] || cancelText;
-        confirmType = arguments[5] || confirmType;
+        // Hỗ trợ cả 2 phong cách gọi:
+        // Phong cách Callback: showConfirmModal(title, message, onConfirm, onCancel)
+        // Phong cách Promise: showConfirmModal(title, message, icon, confirmText, cancelText, confirmType)
+        if (typeof arguments[2] === 'function') {
+            onConfirmCb = arguments[2];
+            if (typeof arguments[3] === 'function') {
+                onCancelCb = arguments[3];
+            } else if (typeof arguments[3] === 'string') {
+                icon = arguments[3];
+            }
+        } else {
+            icon = (typeof arguments[2] === 'string') ? arguments[2] : icon;
+            confirmText = (typeof arguments[3] === 'string') ? arguments[3] : confirmText;
+            cancelText = (typeof arguments[4] === 'string') ? arguments[4] : cancelText;
+            confirmType = (typeof arguments[5] === 'string') ? arguments[5] : confirmType;
+        }
     } else if (typeof opts === 'object' && opts !== null) {
         title = opts.title || title;
         message = opts.message || '';
-        icon = opts.icon || icon;
+        icon = (typeof opts.icon === 'string') ? opts.icon : icon;
         confirmText = opts.confirmText || confirmText;
         cancelText = opts.cancelText || cancelText;
         confirmType = opts.confirmType || confirmType;
+        onConfirmCb = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
+        onCancelCb = typeof opts.onCancel === 'function' ? opts.onCancel : null;
+    }
+
+    // Bảo vệ an toàn: Tuyệt đối không cho phép object hoặc function lọt vào biến icon
+    if (typeof icon !== 'string' || !icon.trim()) {
+        icon = '❓';
     }
 
     return new Promise((resolve) => {
@@ -223,6 +245,11 @@ export function showConfirmModal(opts = {}) {
         const cleanup = (result) => {
             document.removeEventListener('keydown', onKey);
             overlay.remove();
+            if (result && typeof onConfirmCb === 'function') {
+                try { onConfirmCb(); } catch (err) { console.error('Lỗi onConfirm callback:', err); }
+            } else if (!result && typeof onCancelCb === 'function') {
+                try { onCancelCb(); } catch (err) { console.error('Lỗi onCancel callback:', err); }
+            }
             resolve(result);
         };
 

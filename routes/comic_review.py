@@ -894,6 +894,20 @@ def render_comic_video_stream():
             except Exception:
                 pass
             yield f"data: [RENDER_FINISHED] {final_output_path}\n\n"
+        else:
+            if not check_stop():
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled and notifier.notify_per_video:
+                        notifier.notify_task_failure(
+                            task_type='comic',
+                            task_title='Review Truyện Tranh AI',
+                            video_title=proj_folder_name or f"Truyện Tranh ({session_id})",
+                            error_message="Không tạo được tệp video kết quả (file không tồn tại hoặc rỗng)"
+                        )
+                except Exception:
+                    pass
 
     return Response(generate(), mimetype='text/event-stream')
 
