@@ -26,6 +26,40 @@
    - Thay vì nhét 40.000 ký tự phụ đề gốc vào tất cả các mẻ, cắt gọt theo cửa sổ trượt (sliding window) chỉ chứa các đoạn thoại khớp ngữ cảnh để mỗi mẻ AI trả về trong 2-3 giây thay vì 30-40 giây.
 3. **Kiểm tra xuất xưởng video thành phẩm:**
    - Đảm bảo video xuất ra tại `output/video_review.mp4` khớp tiếng, khớp hình và phụ đề rõ đẹp.
+- **Khắc Phục Lỗi NameError 'bgm_final_path' & Lệch Chỉ Số Input FFmpeg Khi Mix Nhạc Nền BGM (03/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
+  - **Hiện tượng:** Khi xuất video Auto-Edit có bật nhạc nền BGM, hệ thống báo lỗi đỏ: `Lỗi không xác định trong Auto-Edit: name 'bgm_final_path' is not defined | File "auto_edit_pipeline.py", line 2855, in run_auto_edit_workflow: if arg == '-i' and i + 1 < len(overlay_inputs) and overlay_inputs[i+1] == bgm_final_path:`.
+  - **Nguyên nhân cốt lõi:**
+    1. *Sai tên biến BGM:* Đường dẫn file BGM trong `run_auto_edit_workflow` được đặt tên là `bgm_file`, nhưng trong đoạn mã fallback loại bỏ BGM lại tham chiếu nhầm sang `bgm_final_path` chưa khai báo, gây lỗi `NameError`.
+    2. *Tính sai chỉ số input FFmpeg (`len(...) // 2`):* Các input lặp vô hạn chèn thêm cờ `['-stream_loop', '-1']`, khiến việc chia đôi độ dài mảng `len(overlay_inputs) // 2` sinh ra chỉ số stream lớn hơn thực tế trong FFmpeg (`bgm_input_idx`, `logo_idx`). Khi có cả BGM và Logo, `logo_idx` bị tính thành 4 thay vì 3, khiến FFmpeg báo lỗi không tìm thấy `[4:v]` và văng vào luồng fallback.
+    3. *Thiếu re-mapping filter trong nhánh fallback:* Khi loại bỏ BGM khỏi danh sách input trong fallback, chỉ số stream của Logo và SFX bị dịch chuyển nhưng bộ lọc filtergraph `vf_complex` vẫn giữ nguyên chỉ số cũ.
+  - **Giải pháp xử lý triệt để:**
+    1. Sửa `bgm_final_path` thành `bgm_file` và hoàn thiện thuật toán bỏ BGM an toàn.
+    2. Thay thế toàn bộ công thức `len(...) // 2` bằng `overlay_inputs.count('-i')` (và `inputs_list.count('-i')`) để ánh xạ chính xác 100% chỉ số stream trong FFmpeg.
+    3. Nâng cấp nhánh fallback: Tự động re-map lại chỉ số logo `[new_logo_idx:v]` và tái cấu trúc `fallback_af` chuẩn xác cho SFX và Voice.
+    4. Hiển thị thông báo lỗi chi tiết từ `stderr` để người dùng theo dõi rõ ràng.
+
+- **Khắc Phục Lỗi Xuất Video Thất Bại Do Thiếu Module uuid & Quá Tải Filter Graph Làm Mờ Động (03/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `release/NovaCut/auto_edit_pipeline.py`, `routes/video_edit.py`, `patches/active/routes/video_edit.py`):**
+  - **Hiện tượng:** Khi xuất video ở phân hệ Biên tập phim với video dài (>2 tiếng, ~3.600 câu phụ đề) có bật chức năng "Làm mờ phụ đề gốc", hệ thống báo lỗi đỏ: `Quá trình xuất video thất bại: FFmpeg export failed`. Màn hình log hiển thị chuỗi dài hàng trăm node overlay: `[v_dynblur_248]...[v_dynblur_257]...`.
+  - **Nguyên nhân cốt lõi:**
+    1. *Lỗi `NameError` ngầm do thiếu import `uuid`:* Trong `auto_edit_pipeline.py`, hàm `build_dynamic_blur_filter_chain` sinh `tag_id = f"{int(time.time()*1000)%100000}_{uuid.uuid4().hex[:4]}"` nhưng chưa `import uuid` ở đầu file. Khi gặp lỗi `NameError`, khối `try...except` đã âm thầm bắt ngoại lệ và đẩy toàn bộ sang fallback cũ `precision_groups`.
+    2. *Bùng nổ số lượng filter nodes gây crash FFmpeg:* Do phụ đề có tọa độ pixel biến thiên nhỏ theo từng khung hình, fallback `precision_groups` chia thành 258+ nhóm riêng rẽ, mỗi nhóm tạo 1 cụm `split + crop + avgblur + overlay` nối tiếp nhau (tổng cộng hơn 1.000 filter nodes). Chuỗi overlay tuần tự quá dài khiến FFmpeg tràn bộ nhớ hàng đợi khung hình (buffer queue exhaustion) hoặc đứng hình, dẫn đến crash tiến trình xuất video.
+    3. *Nguy cơ xóa nhầm filter mask khi tắt burn-in:* Cơ chế `sanitize_filter_complex_graph` và kiểm tra `subtitles_enabled=False` lọc theo chuỗi con `'subtitles='`, vô tình có thể xóa mất filter mask `subtitles=filename='dynamic_blur_mask.ass'` khiến `maskedmerge` thiếu luồng input.
+  - **Giải pháp xử lý triệt để:**
+    1. Bổ sung `import uuid` đầy đủ và có fallback `random.randint` phòng ngừa trong `auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `release/NovaCut/auto_edit_pipeline.py`.
+    2. Tối ưu hóa điều kiện `engine == 'mask' or (engine == 'auto' and (len(sorted_raw) > 30 or has_any_per_entry_box))` để luôn ưu tiên công nghệ Timeline Masking ASS tiên tiến (chỉ dùng đúng 5 filter nodes bất kể video có 10 câu hay 10.000 câu, tốc độ 6x - 8x, RAM chỉ ~80MB).
+    3. Thiết lập chốt chặn an toàn (Circuit Breaker): Nếu `precision_groups` có trên 25 nhóm, tự động phân phối vào 6 BUCKETS độ rộng tiêu chuẩn để triệt tiêu hoàn toàn nguy cơ quá tải filtergraph.
+    4. Trong `routes/video_edit.py`, bảo vệ tuyệt đối các filter chứa `dynamic_blur_mask` / `v_b_mask` không bị loại trừ khi tắt tính năng chèn phụ đề.
+
+- **Khắc Phục Lỗi Quét OCR Thay Vì ASR Trong Biên Tập Hàng Loạt & Đồng Bộ Phương Thức Trích Xuất (01/10/2026) (`web/js/features/batch_editor.js`, `patches/active/web/js/features/batch_editor.js`):**
+  - **Hiện tượng:** Người dùng đã chọn dropdown `Chức năng: Quét ASR (Giọng nói)` trên thanh công cụ Biên tập hàng loạt và nút hiển thị `Quét ASR Hàng Loạt`, nhưng khi bấm "⚡ Tự Động Toàn Trình (Treo Máy Qua Đêm)", hệ thống lại chạy quét OCR khung hình (mất ~10 phút cho mỗi video) và thông báo `🔍 [Bước 1/6] Bắt đầu quét OCR khung hình tự động...`.
+  - **Nguyên nhân cốt lõi:**
+    1. Khi các video được nạp vào danh sách hàng loạt, mỗi item được khởi tạo mặc định với `item.extractMethod = 'ocr'` (hiển thị huy hiệu `[OCR]` xanh cạnh tên video).
+    2. Khi người dùng bấm dropdown `#batchExtractMethodSelect` chuyển sang `Quét ASR (Giọng nói)`, sự kiện `change` chỉ lưu cấu hình vào `localStorage` và đổi nhãn nút bấm, nhưng **không cập nhật thuộc tính `extractMethod` cho các video đã nằm sẵn trong danh sách** và không render lại bảng.
+    3. Trong quy trình `startBatchAllInOnePipeline` và `startBatchSubtitleScan`, code kiểm tra `const method = item.extractMethod || getBatchExtractMethod();`. Do mỗi item vẫn giữ giá trị cũ `extractMethod: 'ocr'`, hệ thống ưu tiên giá trị của item và thực sự khởi chạy quét OCR khung hình.
+    4. Hộp thoại xác nhận của Tự Động Toàn Trình (`promptAiExecutionMode`) bị hardcode chuỗi text tĩnh `Quét OCR` thay vì hiển thị linh hoạt theo phương thức đã chọn.
+  - **Giải pháp xử lý triệt để:**
+    1. Trong sự kiện `change` của `#batchExtractMethodSelect`, tự động đồng bộ ngay lập tức `item.extractMethod = val` (và cấu hình ASR) cho toàn bộ video trong `batchEditorItems`, lưu vào `localStorage` và gọi `renderBatchTable()`. Huy hiệu cạnh tên video lập tức chuyển sang tím `🎙️ ASR` để người dùng kiểm chứng trực quan.
+    2. Cập nhật nhãn động `${extractMethodLabel}` (`Quét ASR Whisper` hoặc `Quét OCR Khung hình`) trong hộp thoại xác nhận của quy trình Tự Động Toàn Trình.
 
 - **Tối Ưu Hóa Tăng Tốc Phần Cứng GPU NVENC Cho FFmpeg & Khắc Phục Lỗi Ngốn CPU (01/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `review_phim.py`, `patches/active/review_phim.py`, `web/app.js`, `patches/active/web/app.js`):**
   - **Hiện tượng:** Khi render video Review Phim hoặc Kể lại Video (Narration), tiến trình `ffmpeg.exe` chiếm tới 56% - 80% CPU và tốn nhiều RAM, trong khi GPU NVIDIA rời (như GeForce RTX 5060) không hoạt động (0% Video Encode).

@@ -1278,8 +1278,10 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     curr_v = "v_sub"
         else:
             emit("ℹ️ [Phụ đề] Tùy chọn chèn phụ đề đang TẮT -> Video xuất ra hoàn toàn KHÔNG có phụ đề (không burn-in, không gắn filter subtitles/ass).")
-            emit("ℹ️ Lưu ý: Nếu video gốc đã có sẵn phụ đề cứng (hardcoded), tắt phụ đề sẽ không che phụ đề gốc; hãy bật tính năng 'Làm mờ phụ đề gốc' nếu muốn che.")
-            v_filters = [f for f in v_filters if 'subtitles=' not in f and not f.startswith('[v_sub')]
+            v_filters = [
+                f for f in v_filters
+                if ('dynamic_blur_mask' in f or 'v_b_mask' in f) or ('subtitles=' not in f and not f.startswith('[v_sub'))
+            ]
 
         # Inputs initialization
         inputs = ['-i', input_video]
@@ -2936,11 +2938,17 @@ def sanitize_filter_complex_graph(v_filters, subtitles_enabled=True):
     if subtitles_enabled:
         return v_filters
     if isinstance(v_filters, list):
-        return [f for f in v_filters if 'subtitles=' not in f and 'ass=' not in f and not f.startswith('[v_sub')]
+        return [
+            f for f in v_filters
+            if ('dynamic_blur_mask' in f or 'v_b_mask' in f) or ('subtitles=' not in f and 'ass=' not in f and not f.startswith('[v_sub'))
+        ]
     if isinstance(v_filters, str):
         # Tách từng filter block
-        blocks = [b.strip() for b in v_filters.split(',') if b.strip()]
-        cleaned = [b for b in blocks if 'subtitles=' not in b and 'ass=' not in b]
-        return ','.join(cleaned)
+        blocks = [b.strip() for b in v_filters.split(';') if b.strip()]
+        cleaned = [
+            b for b in blocks
+            if ('dynamic_blur_mask' in b or 'v_b_mask' in b) or ('subtitles=' not in b and 'ass=' not in b and not b.startswith('[v_sub'))
+        ]
+        return ';'.join(cleaned)
     return v_filters
 

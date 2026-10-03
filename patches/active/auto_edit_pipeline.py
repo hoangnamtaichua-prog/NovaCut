@@ -7,6 +7,7 @@ import subprocess
 import re
 import shutil
 import random
+import uuid
 import traceback
 import ffmpeg_installer
 import ai_dubbing
@@ -685,12 +686,13 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
     # KỊCH BẢN B: VÙNG BLUR ĐỘNG THEO TỪNG CÂU (has_any_per_entry_box == True)
     # Dùng Timeline Masking ASS nâng cao nhưng loại bỏ triệt để bottleneck format=gbrp và geq.
     # Chạy trực tiếp trên YUV420p với lut O(1) per pixel và avgblur SIMD.
-    if engine == 'mask' or (engine == 'auto' and len(sorted_raw) > 30):
+    if engine == 'mask' or (engine == 'auto' and (len(sorted_raw) > 30 or has_any_per_entry_box)):
         try:
             if not temp_dir:
                 temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'editor_temp')
             os.makedirs(temp_dir, exist_ok=True)
-            tag_id = f"{int(time.time()*1000)%100000}_{uuid.uuid4().hex[:4]}"
+            u_hex = uuid.uuid4().hex[:4] if 'uuid' in globals() else f"{random.randint(1000, 9999)}"
+            tag_id = f"{int(time.time()*1000)%100000}_{u_hex}"
             mask_ass_path = os.path.join(temp_dir, f"dynamic_blur_mask_{tag_id}.ass")
             play_res_x = frame_w or 1280
             play_res_y = frame_h or 720
@@ -711,7 +713,10 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
             ]
             return filter_chain, next_v
         except Exception as e_mask:
-            print(f"[Dynamic Blur] Cảnh báo tạo timeline mask: {e_mask}. Fallback về precision groups crop/overlay.")
+            try:
+                print(f"[Dynamic Blur] Warning creating timeline mask: {e_mask}. Fallback to buckets/groups.")
+            except Exception:
+                pass
 
     groups = []
     for it in sorted_raw:
@@ -726,27 +731,29 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
             else:
                 groups.append([it[0], it[1], it[2], it[3]])
 
-    # aiBox fallback: gom nhóm theo precision groups
+    # aiBox fallback: chỉ gom nhóm theo precision groups nếu số lượng nhóm nhỏ (<= 25 nhóm)
+    # để tránh tràn bộ lọc FFmpeg làm đơ hoặc sập tiến trình xuất video.
     if has_any_per_entry_box:
-        filter_chain = []
-        curr = curr_v
-        step = 0
         precision_groups = {}
         for s, e, w, center, item_y, item_h in sorted_raw:
-            key = (round(w, 3), round(center, 3), round(item_y, 3), round(item_h, 3))
+            key = (round(w, 2), round(center, 2), round(item_y, 2), round(item_h, 2))
             precision_groups.setdefault(key, []).append((s, e))
-        for (b, center, item_y, item_h), intervals in sorted(precision_groups.items()):
-            x_ratio = max(0.0, min(1.0 - b, center - (b / 2.0)))
-            for pos in range(0, len(intervals), 25):
-                chunk = intervals[pos:pos + 25]
-                enable_expr = "+".join(f"between(t,{s:.2f},{e:.2f})" for s, e in chunk)
-                next_v = f"v_dynblur_{step}"
-                filter_chain.append(f"[{curr}]split[v_bbase_{step}][v_bcrop_{step}]")
-                filter_chain.append(f"[v_bcrop_{step}]crop=iw*{b:.3f}:ih*{item_h:.3f}:iw*{x_ratio:.3f}:ih*{item_y:.3f},avgblur=sizeX={blur_sz}:sizeY={blur_sz}[v_bblur_{step}]")
-                filter_chain.append(f"[v_bbase_{step}][v_bblur_{step}]overlay=main_w*{x_ratio:.3f}:main_h*{item_y:.3f}:enable='{enable_expr}'[{next_v}]")
-                curr = next_v
-                step += 1
-        return filter_chain, curr
+        if len(precision_groups) <= 25:
+            filter_chain = []
+            curr = curr_v
+            step = 0
+            for (b, center, item_y, item_h), intervals in sorted(precision_groups.items()):
+                x_ratio = max(0.0, min(1.0 - b, center - (b / 2.0)))
+                for pos in range(0, len(intervals), 25):
+                    chunk = intervals[pos:pos + 25]
+                    enable_expr = "+".join(f"between(t,{s:.2f},{e:.2f})" for s, e in chunk)
+                    next_v = f"v_dynblur_{step}"
+                    filter_chain.append(f"[{curr}]split[v_bbase_{step}][v_bcrop_{step}]")
+                    filter_chain.append(f"[v_bcrop_{step}]crop=iw*{b:.3f}:ih*{item_h:.3f}:iw*{x_ratio:.3f}:ih*{item_y:.3f},avgblur=sizeX={blur_sz}:sizeY={blur_sz}[v_bblur_{step}]")
+                    filter_chain.append(f"[v_bbase_{step}][v_bblur_{step}]overlay=main_w*{x_ratio:.3f}:main_h*{item_y:.3f}:enable='{enable_expr}'[{next_v}]")
+                    curr = next_v
+                    step += 1
+            return filter_chain, curr
 
     # 2. Phân phối vào các bucket độ rộng tối ưu
     if manual_mode and manual_w is not None and float(manual_w) > 0:
@@ -2729,13 +2736,13 @@ def run_auto_edit_workflow(payload, check_stop_func):
         sfx_input_idx = None
         if cleaned_sfx_path and os.path.exists(cleaned_sfx_path) and orig_vol > 0.01:
             yield log(f"🔊 Đang mix âm thanh hiệu ứng SFX gốc (Âm lượng: {int(orig_vol*100)}%)...")
-            sfx_input_idx = len(overlay_inputs) // 2
+            sfx_input_idx = overlay_inputs.count('-i')
             overlay_inputs.extend(['-stream_loop', '-1', '-i', cleaned_sfx_path])
 
         bgm_input_idx = None
         if bgm_file and os.path.exists(bgm_file):
             yield log(f"🎵 Đang mix nhạc nền: {os.path.basename(bgm_file)} (Âm lượng: {int(bgm_vol*100)}%)...")
-            bgm_input_idx = len(overlay_inputs) // 2
+            bgm_input_idx = overlay_inputs.count('-i')
             overlay_inputs.extend(['-stream_loop', '-1', '-i', bgm_file])
 
         v_filters = []
@@ -2768,7 +2775,7 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 curr_v = "v_sub"
 
         if logo_enabled and logo_path and os.path.exists(logo_path):
-            logo_idx = len(overlay_inputs) // 2
+            logo_idx = overlay_inputs.count('-i')
             overlay_inputs.extend(['-i', logo_path])
             x_pct = max(0.0, min(100.0, float(logo_data.get('x_pct', 5.0))))
             y_pct = max(0.0, min(100.0, float(logo_data.get('y_pct', 5.0))))
@@ -2834,27 +2841,43 @@ def run_auto_edit_workflow(payload, check_stop_func):
         
         proc_overlay = subprocess.run(cmd_overlay, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_stealth_subprocess_kwargs())
         if proc_overlay.returncode != 0:
-            if bgm_input_idx is not None:
-                yield log("⚠️ Lỗi mix BGM nâng cao, đang thử mix chuẩn fallback (giữ nguyên logo & phụ đề)...")
+            err_msg = (proc_overlay.stderr or '').strip()
+            if bgm_input_idx is not None and bgm_file:
+                yield log(f"⚠️ Lỗi mix BGM nâng cao ({err_msg[:120] if err_msg else 'FFmpeg'}), đang thử xuất không nhạc nền (giữ nguyên logo & phụ đề)...")
                 fallback_inputs = []
-                skip_next = False
+                skip_count = 0
                 for i, arg in enumerate(overlay_inputs):
-                    if skip_next:
-                        skip_next = False
+                    if skip_count > 0:
+                        skip_count -= 1
                         continue
-                    if arg == '-stream_loop':
-                        skip_next = True
+                    if arg == '-stream_loop' and i + 3 < len(overlay_inputs) and overlay_inputs[i+3] == bgm_file:
+                        skip_count = 3
                         continue
-                    if arg == '-i' and i + 1 < len(overlay_inputs) and overlay_inputs[i+1] == bgm_final_path:
-                        skip_next = True
+                    if arg == '-i' and i + 1 < len(overlay_inputs) and overlay_inputs[i+1] == bgm_file:
+                        skip_count = 1
                         continue
                     fallback_inputs.append(arg)
+
+                fallback_vf = vf_complex
+                if logo_enabled and logo_path and os.path.exists(logo_path) and (logo_path in fallback_inputs):
+                    new_logo_idx = fallback_inputs[:fallback_inputs.index(logo_path)].count('-i')
+                    fallback_vf = re.sub(rf'\[{logo_idx}:v\]', f'[{new_logo_idx}:v]', fallback_vf)
+
+                has_sfx_fallback = (sfx_input_idx is not None and cleaned_sfx_path and os.path.exists(cleaned_sfx_path) and (cleaned_sfx_path in fallback_inputs))
+                if has_sfx_fallback:
+                    new_sfx_idx = fallback_inputs[:fallback_inputs.index(cleaned_sfx_path)].count('-i')
+                    fallback_af = f"[1:a]volume=1.0[v_aud];[{new_sfx_idx}:a]volume={orig_vol:.2f}[sfx_raw];[v_aud][sfx_raw]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
+                    fallback_filter = f"{fallback_vf};{fallback_af}"
+                    fallback_map = ['-map', '[v_out]', '-map', '[a_out]']
+                else:
+                    fallback_filter = fallback_vf
+                    fallback_map = ['-map', '[v_out]', '-map', '1:a']
 
                 cmd_fallback = [
                     ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'error',
                     *fallback_inputs,
-                    '-filter_complex', vf_complex,
-                    '-map', '[v_out]', '-map', '1:a',
+                    '-filter_complex', fallback_filter,
+                    *fallback_map,
                     *final_enc_cmd,
                     '-c:a', 'aac', '-b:a', '192k',
                     '-shortest',
@@ -3371,7 +3394,7 @@ def run_narration_workflow(payload, check_stop_func):
         logo_enabled = bool(logo_data.get('enabled', False))
         logo_path = logo_data.get('path', '').strip()
         if logo_enabled and logo_path and os.path.exists(logo_path):
-            logo_idx = len(inputs_list) // 2
+            logo_idx = inputs_list.count('-i')
             inputs_list.extend(['-i', logo_path])
             x_pct = max(0.0, min(100.0, float(logo_data.get('x_pct', 5.0))))
             y_pct = max(0.0, min(100.0, float(logo_data.get('y_pct', 5.0))))
@@ -3424,7 +3447,7 @@ def run_narration_workflow(payload, check_stop_func):
                     check_stop_func=check_stop_func
                 )
                 if sep_res and sep_res.get('cleaned_path') and os.path.exists(sep_res.get('cleaned_path')):
-                    sfx_idx = len(inputs_list) // 2
+                    sfx_idx = inputs_list.count('-i')
                     inputs_list.extend(['-i', sep_res.get('cleaned_path')])
                     yield log("✅ Đã tách và bảo lưu âm thanh nền SFX thành công!")
             except Exception as e:

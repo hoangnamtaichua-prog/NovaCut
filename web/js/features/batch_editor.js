@@ -344,7 +344,19 @@ function setupBatchToolbarEvents() {
             const val = e.target.value;
             localStorage.setItem(BATCH_EXTRACT_METHOD_KEY, val);
             syncBatchToolbarMethod(val);
-            showToast(`Đã chọn phương thức trích xuất: ${val === 'asr' ? '🎙️ ASR Whisper' : '🔍 OCR Khung Hình'}`, 'info');
+
+            // Đồng bộ ngay lập tức phương thức trích xuất cho toàn bộ video trong danh sách
+            const asrCfg = (val === 'asr') ? getBatchAsrConfig() : null;
+            batchEditorItems.forEach(item => {
+                item.extractMethod = val;
+                if (val === 'asr' && !item.asrConfig) {
+                    item.asrConfig = JSON.parse(JSON.stringify(asrCfg));
+                }
+            });
+            saveBatchItemsToStorage();
+            renderBatchTable();
+
+            showToast(`Đã chuyển sang [${val === 'asr' ? '🎙️ Quét ASR Whisper' : '🔍 Quét OCR Khung Hình'}] và áp dụng cho toàn bộ video trong danh sách!`, 'info');
         });
     }
 
@@ -4252,10 +4264,13 @@ export async function startBatchAllInOnePipeline() {
     const isTranslateOnly = (chosenCleanAction === 'translate' || chosenCleanAction === 'translate_only');
     const modeLabel = isTranslateOnly ? '⚡ Nguyên Dịch Thôi (Bỏ qua làm sạch)' : '✨ Cả Dịch & Làm Sạch (Chuẩn)';
 
+    const globalExtractMethod = getBatchExtractMethod();
+    const extractMethodLabel = (globalExtractMethod === 'asr') ? 'Quét ASR Whisper' : 'Quét OCR Khung hình';
+
     const promptAiFn = window.promptAiExecutionMode;
     const aiChoice = promptAiFn ? await promptAiFn(
         '⚡ Tự Động Toàn Trình (Treo Máy Qua Đêm)',
-        `Quy trình: Quét OCR -> Bot Soát Bù Sub AI -> [${modeLabel}] -> Thẩm định -> Lồng tiếng & Xuất video.`,
+        `Quy trình: ${extractMethodLabel} -> Bot Soát Bù Sub AI -> [${modeLabel}] -> Thẩm định -> Lồng tiếng & Xuất video.`,
         { showLanguageOptions: true }
     ) : { engine: 'online' };
     if (!aiChoice) return;
