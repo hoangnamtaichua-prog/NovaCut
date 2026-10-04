@@ -916,7 +916,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     emit("🛑 [LỖI LỒNG TIẾNG] Danh sách phụ đề trống! Vui lòng nạp hoặc dịch phụ đề trước khi xuất video có lồng tiếng.")
                     job.set_failed("Danh sách phụ đề trống, không thể tạo lồng tiếng AI", {})
                     return
-                elif not fresh_run and use_cache and (is_manifest_match or (os.path.exists(cached_dub_file) and os.path.getsize(cached_dub_file) > 1000)):
+                elif not fresh_run and use_cache and is_manifest_match:
                     dub_track = cached_dub_file
                     emit(f"💚 [AI Dubbing] Đã tìm thấy track lồng tiếng AI hoàn chỉnh từ lần chạy trước ({os.path.basename(dub_track)}) khớp kịch bản, tái sử dụng ngay lập tức (0s)!")
                     job.set_stage(JobStage.TTS_GENERATING, 100, "Đã tái sử dụng track lồng tiếng AI")

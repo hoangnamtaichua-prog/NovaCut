@@ -172,13 +172,27 @@ def increment_version(ver_str):
     return f"{ver_str}.1"
 
 
-def build_patch_zip(target_version):
+def build_patch_zip(target_version, target_files=None):
     os.makedirs(RELEASE_DIR, exist_ok=True)
     if os.path.exists(PATCH_ZIP):
         try:
             os.remove(PATCH_ZIP)
         except Exception:
             pass
+
+    if target_files:
+        log(f"Đang đóng gói bản vá HOTFIX targeted patch.zip (chỉ gồm {len(target_files)} tệp) cho phiên bản v{target_version}...")
+        with zipfile.ZipFile(PATCH_ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+            added_files = set()
+            for f in target_files:
+                src = os.path.join(ROOT_DIR, f)
+                if os.path.exists(src) and f not in PATCH_EXCLUDES and f not in added_files:
+                    zipf.write(src, arcname=f)
+                    added_files.add(f)
+                    log(f"   + [HOTFIX FILE] Đã thêm: {f}")
+        zip_size_kb = os.path.getsize(PATCH_ZIP) / 1024
+        log(f"✅ Đã tạo file patch.zip Hotfix thành công! Dung lượng siêu nhẹ: {zip_size_kb:.2f} KB ({os.path.getsize(PATCH_ZIP)} bytes)")
+        return PATCH_ZIP
 
     log(f"Đang đóng gói bản vá patch.zip sạch cho phiên bản v{target_version}...")
 
@@ -354,11 +368,17 @@ def upload_github_release(version, changelog, patch_path, sha256_hash="", token=
     return True
 
 
-def git_push_changes(version):
+def git_push_changes(version, target_files=None):
     """Tự động commit và push thay đổi lên GitHub qua git."""
     try:
         log("Đang commit và đẩy code lên GitHub...")
-        subprocess.run(["git", "add", "."], cwd=ROOT_DIR, check=True)
+        if target_files:
+            for f in target_files:
+                subprocess.run(["git", "add", f], cwd=ROOT_DIR, check=False)
+            subprocess.run(["git", "add", "version.json"], cwd=ROOT_DIR, check=False)
+            subprocess.run(["git", "add", "scripts/publish_patch.py"], cwd=ROOT_DIR, check=False)
+        else:
+            subprocess.run(["git", "add", "."], cwd=ROOT_DIR, check=True)
         subprocess.run(["git", "commit", "-m", f"Release patch v{version}"], cwd=ROOT_DIR, check=False)
         try:
             res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, capture_output=True, text=True, timeout=15)
@@ -377,6 +397,7 @@ def main():
     parser.add_argument("--version", type=str, help="Số phiên bản mới (vd: 1.0.1 hoặc 1.2.2)")
     parser.add_argument("--changelog", type=str, help="Nội dung thay đổi / tính năng mới")
     parser.add_argument("--token", type=str, help="GitHub Personal Access Token (PAT)")
+    parser.add_argument("--files", nargs="+", help="Chỉ đóng gói các tệp cụ thể (Hotfix targeted patch)")
     args = parser.parse_args()
 
     token = get_github_token(args.token)
@@ -387,7 +408,7 @@ def main():
     print(f"🔒 Kho GitHub        : {GITHUB_REPO}")
     print(f"📌 Phiên bản hiện tại: v{cur_ver}")
 
-    new_ver = args.version or cur_ver
+    new_ver = args.version or increment_version(cur_ver)
     existing_changelog = ""
     if os.path.exists(VERSION_FILE):
         try:
@@ -396,22 +417,34 @@ def main():
         except Exception:
             pass
 
-    changelog = args.changelog or existing_changelog or f"✨ Bản cập nhật v{new_ver}:\n- Tối ưu hóa hiệu năng và cải tiến giao diện.\n- Tích hợp Offline Clone Voice và Live Dubbing."
+    changelog = args.changelog or f"✨ Bản cập nhật v{new_ver} (Hotfix Sửa Lỗi Âm Thanh Xuất Video):\n- Sửa triệt để lỗi khi nghe thử có tiếng nhưng khi xuất video bị mất tiếng lồng tiếng trên máy user.\n- Tự động chuẩn hóa mọi file bitstream fallback về PCM WAV 48kHz chuẩn trước khi trộn timeline.\n- Bổ sung cơ chế tự cứu hộ _transcode_to_pcm_wav chống văng lỗi wave.Error file does not start with RIFF id."
 
+    target_files = args.files
     print(f"🎯 Phiên bản phát hành : v{new_ver}")
+    if target_files:
+        print(f"📦 Chế độ Targeted Hotfix : {len(target_files)} tệp")
+        for tf in target_files:
+            print(f"   • {tf}")
     print(f"📝 Nội dung Changelog  :\n{changelog}")
     print("-" * 65)
 
     # 1. Đóng gói patch.zip
-    patch_path = build_patch_zip(new_ver)
+    patch_path = build_patch_zip(new_ver, target_files=target_files)
     patch_sha256 = compute_file_sha256(patch_path)
     log(f"🔑 SHA-256 Checksum: {patch_sha256}")
 
     # 2. Cập nhật version.json với SHA-256 và download_url
     update_version_manifest(new_ver, changelog, patch_sha256)
 
+    # Nếu là hotfix patch, cập nhật lại version.json mới vào trong patch.zip
+    if target_files:
+        with zipfile.ZipFile(PATCH_ZIP, "a") as zipf:
+            zipf.write(VERSION_FILE, arcname="version.json")
+        patch_sha256 = compute_file_sha256(patch_path)
+        update_version_manifest(new_ver, changelog, patch_sha256)
+
     # 3. Đẩy code lên GitHub
-    git_push_changes(new_ver)
+    git_push_changes(new_ver, target_files=target_files)
 
     # 4. Tự động tạo Release và Upload patch.zip lên GitHub
     upload_github_release(new_ver, changelog, patch_path, patch_sha256, token=token)

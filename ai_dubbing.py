@@ -27,7 +27,123 @@ def get_app_root_dir():
 
 ROOT_DIR = get_app_root_dir()
 
+def get_sentence_cache_info(text, voice_id, speed=1.0, target_sample_rate=44100, target_channels=2):
+    """
+    Trả về (cache_key, cache_file_path, is_local) bảo đảm 100% Cache Hash Parity
+    giữa các endpoint preview và pipeline xuất video lồng tiếng.
+    """
+    import custom_voices
+    import local_voice_engine
+
+    clean_text = str(text or '').strip()
+    clean_voice = str(voice_id or 'local_ngoc_huyen').strip()
+    safe_speed = float(speed or 1.0)
+
+    voice_profile = custom_voices.resolve_voice_profile(clean_voice) or {}
+    is_local = (
+        clean_voice.startswith('local_') or
+        voice_profile.get('provider') == 'local_voice' or
+        any(w in clean_voice.lower() for w in ['adam', 'local_adam'])
+    )
+
+    cache_dir = os.path.join(ROOT_DIR, '.cache', 'tts_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+
+    if is_local:
+        cache_key = local_voice_engine.get_versioned_audio_cache_key(
+            clean_text, clean_voice, safe_speed, target_sample_rate, target_channels, version="v3"
+        )
+    else:
+        cache_key = hashlib.md5(f"{clean_voice}_{safe_speed:.2f}_{clean_text}".encode('utf-8')).hexdigest()
+
+    cache_file = os.path.join(cache_dir, f"{cache_key}.wav")
+    return cache_key, cache_file, is_local
+
+
+def get_sentence_cache_path(text, voice_id, speed=1.0, sample_rate=44100, channels=2):
+    """Helper alias returning (cache_key, cache_file_path)."""
+    cache_key, cache_file, _ = get_sentence_cache_info(text, voice_id, speed, sample_rate, channels)
+    return cache_key, cache_file
+
+
+def is_valid_pcm_wav(file_path, target_sample_rate=None, target_channels=None):
+    """Kiểm tra tệp có phải là RIFF 16-bit PCM WAV hợp lệ hay không."""
+    if not file_path or not os.path.exists(file_path) or os.path.getsize(file_path) < 44:
+        return False
+    try:
+        with wave.open(file_path, 'rb') as wf:
+            if wf.getsampwidth() != 2:
+                return False
+            if target_sample_rate is not None and wf.getframerate() != int(target_sample_rate):
+                return False
+            if target_channels is not None and wf.getnchannels() != int(target_channels):
+                return False
+            return True
+    except Exception:
+        return False
+
+
+def ensure_pcm_wav(file_path, target_sample_rate=44100, target_channels=2):
+    """
+    Đảm bảo file âm thanh tại file_path chắc chắn là 16-bit PCM WAV hợp lệ
+    với đúng target_sample_rate và target_channels.
+    Nếu file là MP3, AAC hoặc WAV giả định dạng (do Edge-TTS hay OpenSpeaker ghi thẳng MP3 stream),
+    hệ thống tự động transcode siêu tốc qua FFmpeg sang PCM s16le để Python wave và Mixer đọc trơn tru 100%.
+    """
+    if not file_path or not os.path.exists(file_path) or os.path.getsize(file_path) < 44:
+        return False
+
+    if is_valid_pcm_wav(file_path, target_sample_rate, target_channels):
+        return True
+
+    try:
+        ffmpeg_exe = ffmpeg_installer.get_ffmpeg_path() if hasattr(ffmpeg_installer, 'get_ffmpeg_path') else 'ffmpeg'
+        dir_name = os.path.dirname(os.path.abspath(file_path))
+        base_name = os.path.basename(file_path)
+        tmp_wav = os.path.join(dir_name, f"tmp_trans_{int(time.time()*1000)}_{base_name}.wav")
+        cmd = [
+            ffmpeg_exe, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", file_path,
+            "-ar", str(target_sample_rate),
+            "-ac", str(target_channels),
+            "-c:a", "pcm_s16le",
+            tmp_wav
+        ]
+        res = subprocess.run(cmd, capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
+        if res.returncode == 0 and os.path.exists(tmp_wav) and os.path.getsize(tmp_wav) > 100:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+            os.replace(tmp_wav, file_path)
+            return True
+        else:
+            if os.path.exists(tmp_wav):
+                try:
+                    os.remove(tmp_wav)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[AI Dubbing] Transcode note for {file_path}: {e}")
+    return False
+
+
 def synthesize_sentence(text, voice_id, speed, output_path, open_speaker_key=None, **kwargs):
+    """
+    Synthesizes speech for a single text sentence and guarantees that the resulting
+    file is a valid 16-bit PCM WAV if output_path ends with .wav or target_sample_rate is requested.
+    """
+    result_path = _synthesize_sentence_impl(text, voice_id, speed, output_path, open_speaker_key=open_speaker_key, **kwargs)
+    if result_path and os.path.exists(result_path) and os.path.getsize(result_path) > 100:
+        if str(result_path).lower().endswith('.wav') or kwargs.get('target_sample_rate'):
+            tgt_sr = kwargs.get('target_sample_rate', 44100)
+            tgt_ch = kwargs.get('target_channels', 2)
+            ensure_pcm_wav(result_path, target_sample_rate=tgt_sr, target_channels=tgt_ch)
+    return result_path
+
+
+def _synthesize_sentence_impl(text, voice_id, speed, output_path, open_speaker_key=None, **kwargs):
     """
     Synthesizes speech for a single text sentence using RVC (Custom Clone), Kokoro (offline), Edge AI or OpenSpeaker (online).
     """
@@ -599,20 +715,21 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                 start_sec = sub['startSeconds']
                 part_resampled = os.path.join(temp_dir, f"resampled_sub_{i}.wav")
 
-                # Cache key SHA-256 có version v3
-                cache_key = local_voice_engine.get_versioned_audio_cache_key(
-                    text, voice_id, speed, sample_rate, channels, version="v3"
+                # Cache key đồng nhất qua get_sentence_cache_info
+                cache_key, cached_file, _ = get_sentence_cache_info(
+                    text, voice_id, speed, sample_rate, channels
                 )
-                cached_file = os.path.join(cache_dir, f"{cache_key}.wav")
 
                 if os.path.exists(cached_file) and os.path.getsize(cached_file) > 100:
                     try:
                         shutil.copyfile(cached_file, part_resampled)
-                        sentence_audios.append((part_resampled, start_sec))
-                        completed_count += 1
-                        pct = int((completed_count / total) * 100)
-                        yield ("progress", f"⚡ [Cache Hit {completed_count}/{total}] ({pct}%) Câu #{i+1}: \"{text[:26]}...\" ({start_sec:.1f}s)")
-                        continue
+                        ensure_pcm_wav(part_resampled, target_sample_rate=sample_rate, target_channels=channels)
+                        if is_valid_pcm_wav(part_resampled, sample_rate, channels):
+                            sentence_audios.append((part_resampled, start_sec))
+                            completed_count += 1
+                            pct = int((completed_count / total) * 100)
+                            yield ("progress", f"⚡ [Cache Hit {completed_count}/{total}] ({pct}%) Câu #{i+1}: \"{text[:26]}...\" ({start_sec:.1f}s)")
+                            continue
                     except Exception:
                         pass
 
@@ -684,6 +801,7 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                             pass
 
                         if fb_success:
+                            ensure_pcm_wav(item["target_out"], target_sample_rate=sample_rate, target_channels=channels)
                             try:
                                 shutil.copyfile(item["target_out"], item["cached_file"])
                             except Exception:
@@ -712,12 +830,15 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
             part_resampled = os.path.join(temp_dir, f"resampled_sub_{idx}.wav")
             
             # 1. Kiểm tra Cache âm thanh trước (Instant 0ms)
-            cache_key = hashlib.md5(f"{voice_id}_{speed:.2f}_{text.strip()}".encode('utf-8')).hexdigest()
-            cached_file = os.path.join(cache_dir, f"{cache_key}.wav")
+            cache_key, cached_file, _ = get_sentence_cache_info(
+                text, voice_id, speed, sample_rate, channels
+            )
             if os.path.exists(cached_file) and os.path.getsize(cached_file) > 100:
                 try:
                     shutil.copyfile(cached_file, part_resampled)
-                    return (idx, part_resampled, start_sec, text, None)
+                    ensure_pcm_wav(part_resampled, target_sample_rate=sample_rate, target_channels=channels)
+                    if is_valid_pcm_wav(part_resampled, sample_rate, channels):
+                        return (idx, part_resampled, start_sec, text, None)
                 except Exception:
                     pass
 
@@ -771,11 +892,11 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                 return (idx, None, start_sec, text, "Đã dừng theo yêu cầu khẩn cấp")
 
             try:
-                # Nếu không phải Local Voice, resample sang 44100Hz 16-bit Stereo WAV qua ffmpeg
-                if not is_local:
+                # Chuyển đổi an toàn sang 44100Hz 16-bit Stereo PCM WAV
+                if target_out != part_resampled:
                     cmd_resample = [
                         ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-                        "-i", part_raw,
+                        "-i", target_out,
                         "-ar", str(sample_rate),
                         "-ac", str(channels),
                         "-c:a", "pcm_s16le",
@@ -783,19 +904,23 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                     ]
                     subprocess.run(cmd_resample, capture_output=True, **ffmpeg_installer.get_stealth_subprocess_kwargs())
                     
-                    if os.path.exists(part_raw):
+                    if os.path.exists(target_out):
                         try:
-                            os.remove(part_raw)
+                            os.remove(target_out)
                         except:
                             pass
+                else:
+                    # target_out IS part_resampled (is_local path)
+                    # Bắt buộc đảm bảo là PCM WAV chuẩn 16-bit (phòng ngừa Edge-TTS fallback sinh MP3)
+                    ensure_pcm_wav(part_resampled, target_sample_rate=sample_rate, target_channels=channels)
                             
-                if os.path.exists(part_resampled) and os.path.getsize(part_resampled) > 100:
+                if os.path.exists(part_resampled) and os.path.getsize(part_resampled) > 100 and is_valid_pcm_wav(part_resampled, sample_rate, channels):
                     try:
                         shutil.copyfile(part_resampled, cached_file)
                     except:
                         pass
                     return (idx, part_resampled, start_sec, text, None)
-                return (idx, None, start_sec, text, "File âm thanh bị rỗng sau khi xử lý")
+                return (idx, None, start_sec, text, "File âm thanh không đúng định dạng PCM WAV sau khi xử lý")
             except Exception as e:
                 return (idx, None, start_sec, text, str(e))
 
@@ -851,8 +976,12 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
         print(f"[Mixer] NumPy block mixer error ({mix_err}), falling back to standard array mixer...")
         max_time = 0.0
         for wav_file, start_s in sentence_audios:
-            with wave.open(wav_file, 'rb') as wf:
-                max_time = max(max_time, start_s + wf.getnframes() / wf.getframerate())
+            ensure_pcm_wav(wav_file, target_sample_rate=sample_rate, target_channels=channels)
+            try:
+                with wave.open(wav_file, 'rb') as wf:
+                    max_time = max(max_time, start_s + wf.getnframes() / wf.getframerate())
+            except Exception:
+                pass
         if min_total_duration and min_total_duration > max_time:
             max_time = float(min_total_duration) + 1.0
 
@@ -861,6 +990,7 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
 
         for wav_file, start_s in sentence_audios:
             try:
+                ensure_pcm_wav(wav_file, target_sample_rate=sample_rate, target_channels=channels)
                 with wave.open(wav_file, 'rb') as wf:
                     n_frames = wf.getnframes()
                     raw_bytes = wf.readframes(n_frames)

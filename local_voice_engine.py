@@ -191,6 +191,39 @@ def _get_vieneu_onnx_dir():
                 chosen_dir = sub
                 break
 
+    if not chosen_dir:
+        # Kiểm tra HuggingFace Cache để tự động đồng bộ sang models/vieneu/onnx_int8
+        target_onnx_dir = os.path.join(ROOT_DIR, "models", "vieneu", "onnx_int8")
+        try:
+            import glob
+            hf_cache_pattern = os.path.expanduser("~/.cache/huggingface/hub/models--pnnbao-ump--VieNeu-TTS-v3-Turbo/snapshots/*")
+            snapshots = glob.glob(hf_cache_pattern)
+            if snapshots:
+                snap_dir = snapshots[0]
+                os.makedirs(target_onnx_dir, exist_ok=True)
+                sub_onnx = os.path.join(snap_dir, "onnx_int8")
+                if os.path.exists(sub_onnx):
+                    for fn in os.listdir(sub_onnx):
+                        src_f = os.path.join(sub_onnx, fn)
+                        dst_f = os.path.join(target_onnx_dir, fn)
+                        if os.path.isfile(src_f) and not os.path.exists(dst_f):
+                            try:
+                                shutil.copy2(src_f, dst_f)
+                            except Exception:
+                                pass
+                for fn in ["denoiser.onnx", "speaker_encoder.onnx", "config.json", "tokenizer.json"]:
+                    src_f = os.path.join(snap_dir, fn)
+                    dst_f = os.path.join(target_onnx_dir, fn)
+                    if os.path.isfile(src_f) and not os.path.exists(dst_f):
+                        try:
+                            shutil.copy2(src_f, dst_f)
+                        except Exception:
+                            pass
+                if os.path.exists(os.path.join(target_onnx_dir, "vieneu_v3_heads.npz")):
+                    chosen_dir = target_onnx_dir
+        except Exception as e:
+            print(f"[Local Voice] HF Cache lookup note for ONNX: {e}")
+
     if chosen_dir:
         # Tự động đồng bộ speaker_encoder.onnx, denoiser.onnx, tokenizer.json, config.json vào thư mục onnx_int8 nếu thiếu
         parent_dir = os.path.dirname(chosen_dir)
@@ -645,13 +678,22 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None,
     if not text or not str(text).strip():
         raise ValueError("Văn bản đọc không được để trống")
 
+    # 0. Tự động tương thích thứ tự tham số nếu caller truyền:
+    # synthesize(text, voice_id, speed, output_path, ...)
+    if isinstance(ref_audio, (int, float)) and not isinstance(ref_audio, bool):
+        actual_speed = float(ref_audio)
+        actual_output_path = speed if isinstance(speed, (str, os.PathLike)) else output_path
+        speed = actual_speed
+        output_path = actual_output_path
+        ref_audio = None
+
     if not output_path:
         output_path = os.path.join(ROOT_DIR, "output", f"local_voice_{int(time.time()*1000)}.wav")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     # 1. Xác định Voice Preset hoặc Ref Audio
     target_preset = None
-    target_ref_audio = ref_audio
+    target_ref_audio = ref_audio if isinstance(ref_audio, (str, os.PathLike)) else None
 
     import custom_voices
     resolved_profile = custom_voices.resolve_voice_profile(voice_id) if voice_id else {
@@ -670,11 +712,11 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None,
         # Nếu là cloned voice trong custom_voices.json
         if not target_preset and not target_ref_audio:
             target_ref_audio = resolved_profile.get("reference_audio")
-            if target_ref_audio and not os.path.isabs(target_ref_audio):
+            if target_ref_audio and isinstance(target_ref_audio, (str, os.PathLike)) and not os.path.isabs(target_ref_audio):
                 target_ref_audio = os.path.join(ROOT_DIR, target_ref_audio)
 
     # Nếu không có ref_audio và chưa có target_preset, bảo toàn giới tính & ngôn ngữ tuyệt đối
-    if not target_preset and not (target_ref_audio and os.path.exists(target_ref_audio)):
+    if not target_preset and not (target_ref_audio and isinstance(target_ref_audio, (str, os.PathLike)) and os.path.exists(target_ref_audio)):
         target_preset = select_preset_for_voice(voice_id, gender=resolved_profile.get("gender"), lang=resolved_profile.get("lang"))
 
     # 2. Xử lý chuẩn hóa text
@@ -711,7 +753,7 @@ def synthesize(text, voice_id=None, ref_audio=None, speed=1.0, output_path=None,
     pool = get_engine_pool()
     tts = pool.get()
     try:
-        if target_ref_audio and os.path.exists(target_ref_audio):
+        if target_ref_audio and isinstance(target_ref_audio, (str, os.PathLike)) and os.path.exists(target_ref_audio):
             audio_data = tts.infer(text=norm_text, ref_audio=target_ref_audio, apply_watermark=False)
         elif target_preset:
             audio_data = tts.infer(text=norm_text, voice=target_preset, apply_watermark=False)

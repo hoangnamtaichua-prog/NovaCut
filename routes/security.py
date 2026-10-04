@@ -10,7 +10,8 @@ _selection_lock = threading.RLock()
 _selected_roots = set()
 _BUILTIN_WRITABLE_DIRS = (
     'output', 'projects', 'temp', 'uploads', 'downloads', 'tiktok_output',
-    'clips', 'scratch', 'voices', 'backgroundmusic', 'movies', 'movies_retired'
+    'clips', 'scratch', 'voices', 'backgroundmusic', 'movies', 'movies_retired',
+    '.cache'
 )
 
 
