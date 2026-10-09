@@ -548,6 +548,18 @@ def quick_translate_to_vi(text):
     except Exception:
         pass
 
+    # 3. Thử qua MyMemoryTranslator
+    try:
+        from deep_translator import MyMemoryTranslator
+        mm = MyMemoryTranslator(source='zh-CN', target='vi-VN')
+        out = mm.translate(text)
+        if out and not any(0x4E00 <= ord(c) <= 0x9FFF for c in out):
+            res_clean = out.strip()
+            _QUICK_TRANSLATE_CACHE[text] = res_clean
+            return res_clean
+    except Exception:
+        pass
+
     return ""
 
 def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp_dir, open_speaker_key=None, min_total_duration=0.0, max_workers=None, check_stop=None):
@@ -569,8 +581,14 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
         try:
             from auto_edit_pipeline import parse_srt_entries
             p_entries = parse_srt_entries(parent_editor_sub)
-            if p_entries and len(p_entries) == len(subtitles) and not any(0x4E00 <= ord(c) <= 0x9FFF for c in p_entries[0][2]):
-                subtitles = [{"text": txt, "translation": txt, "startSeconds": s, "endSeconds": e} for s, e, txt in p_entries]
+            if p_entries and len(p_entries) > 0 and not any(0x4E00 <= ord(c) <= 0x9FFF for c in p_entries[0][2]):
+                # Nếu subtitles gửi vào bị dính chữ Hán hoặc rỗng, ưu tiên dùng trọn vẹn editor_subtitles.srt đã dịch
+                curr_has_chinese = (not subtitles) or any(
+                    any(0x4E00 <= ord(c) <= 0x9FFF for c in str(s.get('translation') or s.get('text') or ''))
+                    for s in subtitles[:min(10, len(subtitles))]
+                )
+                if curr_has_chinese or abs(len(p_entries) - len(subtitles)) <= 10:
+                    subtitles = [{"text": txt, "translation": txt, "startSeconds": s, "endSeconds": e} for s, e, txt in p_entries]
         except Exception:
             pass
 
@@ -871,12 +889,35 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                     time.sleep(0.3 * (attempt + 1))
                     
             if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
-                # Cứu hộ tự động bằng Edge-TTS bảo toàn giới tính và ngôn ngữ
+                # Cứu hộ 1: Thử giọng Edge-TTS tương đương
                 try:
                     fb_voice = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
                     synthesize_sentence(text, fb_voice, speed, target_out, open_speaker_key, target_sample_rate=sample_rate, target_channels=channels)
                 except Exception:
                     pass
+
+            if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
+                # Cứu hộ 2: Nếu câu còn dính chữ Hán làm giọng Việt không đọc được, dịch nhanh khẩn cấp
+                if any(0x4E00 <= ord(c) <= 0x9FFF for c in text):
+                    cand_trans = quick_translate_to_vi(text)
+                    if cand_trans and not any(0x4E00 <= ord(c) <= 0x9FFF for c in cand_trans):
+                        text = cand_trans.strip()
+                        try:
+                            synthesize_sentence(text, voice_id, speed, target_out, open_speaker_key, target_sample_rate=sample_rate, target_channels=channels)
+                        except Exception:
+                            try:
+                                fb_voice = custom_voices.get_fallback_voice(voice_id, target_provider='edge')
+                                synthesize_sentence(text, fb_voice, speed, target_out, open_speaker_key, target_sample_rate=sample_rate, target_channels=channels)
+                            except Exception:
+                                pass
+
+            if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
+                # Cứu hộ 3: Nếu vẫn còn chữ Hán và không dịch được, dùng giọng đọc tiếng Trung để bảo toàn âm thanh (không để bị mất tiếng)
+                if any(0x4E00 <= ord(c) <= 0x9FFF for c in text):
+                    try:
+                        synthesize_sentence(text, 'edge_zh-CN-XiaoxiaoNeural', speed, target_out, open_speaker_key, target_sample_rate=sample_rate, target_channels=channels)
+                    except Exception:
+                        pass
 
             if not os.path.exists(target_out) or os.path.getsize(target_out) <= 100:
                 if not last_err:
@@ -885,7 +926,7 @@ def build_dubbing_track_for_subtitles_generator(subtitles, voice_id, speed, temp
                     elif not any(c.isalnum() for c in text):
                         last_err = f"Câu chỉ chứa dấu câu hoặc ký tự đặc biệt ('{text}')"
                     else:
-                        last_err = "Không tạo được file âm thanh sau 3 lần thử"
+                        last_err = "Không tạo được file âm thanh sau các lần thử"
                 return (idx, None, start_sec, text, last_err)
 
             if check_stop and check_stop():

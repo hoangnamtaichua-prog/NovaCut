@@ -816,7 +816,10 @@ class BatchQueueManager:
             stem_config = {
                 'enabled': bool(stem_config),
                 'remove_vocals': bool(config.get('stem_remove_vocals', True)),
-                'keep_sfx': bool(config.get('stem_keep_sfx', True))
+                'keep_sfx': bool(config.get('stem_keep_sfx', True)),
+                'separate_bgm': bool(config.get('stem_separate_bgm', True)),
+                'keep_bgm': bool(config.get('stem_keep_bgm', True)),
+                'remove_bgm': bool(config.get('stem_remove_bgm', False))
             }
 
         blur_config = config.get('dynamic_blur')

@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, shutil
 from routes.state import *
-from routes.security import is_path_allowed, safe_join
+from routes.security import is_path_allowed, safe_join, sanitize_unicode_filename
 from werkzeug.utils import secure_filename
 import asr_manager
 
@@ -118,7 +118,7 @@ def asr_scan():
         if not is_path_allowed(output_dir):
             return jsonify({'success': False, 'error': 'Thư mục đầu ra chưa được người dùng cho phép'}), 403
         os.makedirs(output_dir, exist_ok=True)
-        output_filename = secure_filename(output_filename)
+        output_filename = sanitize_unicode_filename(output_filename, default='subtitles.srt', default_ext='.srt')
         if not output_filename:
             return jsonify({'success': False, 'error': 'Tên file đầu ra không hợp lệ'}), 400
         output_srt_path = safe_join(output_dir, output_filename, extensions={'.srt'})

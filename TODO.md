@@ -7,6 +7,12 @@
 
 ---
 
+## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
+
+*(Hiện tại toàn bộ tính năng và bản vá mới nhất đã được đóng gói và phát hành thành công trong phiên bản v1.3.5)*
+
+---
+
 ## 📌 BÀN GIAO TIẾN ĐỘ & KẾ HOẠCH TIẾP TỤC (HANDOVER - NGÀY MAI 31/08/2026)
 
 ### 🎯 Tiến độ thực tế đã đạt được hôm nay:
@@ -3113,6 +3119,62 @@ e.sub(r'[^a-zA-Z0-9_-]', '_', stem). Mọi video tiếng Trung/tiếng Việt c�
 ---
 
 ## 🚀 LỊCH SỬ CÁC PHIÊN BẢN ĐÃ PHÁT HÀNH
+
+### ✅ Phiên bản v1.3.5 (Đã phát hành ngày 09/10/2026):
+1. **Tối Ưu Hóa Tính Năng Gộp SRT: Chỉ Gộp Mốc Thời Gian & Giữ Nguyên Phụ Đề Câu Đầu Tiên (`web/app.js`, `web/index.html`, `patches/active/`):**
+   - **Chỉ gộp khoảng thời gian (Timeline merging)**: Lấy mốc bắt đầu `startSeconds` từ dòng đầu tiên và mốc kết thúc `endSeconds` từ dòng cuối cùng được chọn (`startTimeStr - endTimeStr`).
+   - **Bảo toàn nội dung phụ đề câu đầu tiên**: Giữ nguyên 100% `text`, `original_text`, và `translation` của dòng phụ đề đầu tiên (`selectedSubs[0]`), không nối chuỗi văn bản của các câu sau. Nếu câu đầu chưa có bản dịch mà các câu sau có sẵn, tự động tận dụng bản dịch có sẵn hợp lệ.
+   - **Bảo toàn Bounding Box**: Giữ nguyên tọa độ nhận diện `aiBox` của dòng đầu tiên.
+   - Tự động gọi `triggerAutoSaveEditorCache()` để lưu tức thì vào cache và cập nhật mượt mà trên giao diện bảng phụ đề.
+
+2. **Sửa Lỗi Cú Pháp Bộ Lọc Âm Thanh FFmpeg (`apad`) Khi Xuất Video Kèm BGM & Ducking Ở Biên Tập Phim (`routes/video_edit.py`, `patches/active/routes/video_edit.py`, `tests/test_editor_bgm_pipeline.py`):**
+   - Khắc phục lỗi gán sai cú pháp ngăn cách: `v_dur_arg = f":whole_dur=..."` thành `v_dur_arg = f"=whole_dur=..."`.
+   - Chuỗi filter sau khi tạo chuẩn xác 100%: `apad=whole_dur=575.971`, loại bỏ triệt để lỗi `Invalid argument` và crash FFmpeg khi xuất video kèm BGM & Ducking.
+
+3. **Tính Năng Thêm Nhạc Nền (Background Music - BGM) Cho Video Ở Biên Tập Phim (`web/index.html`, `web/app.js`, `routes/video_edit.py`, `patches/active/`):**
+   - **Giao diện BGM Hiện đại Chuẩn Dark Mode**: Bổ sung khối giao diện "Nhạc nền video (BGM)" tích hợp trực quan trong thẻ thiết lập âm thanh (`voiceover-card`), hỗ trợ nhạc có sẵn và tải lên riêng (.mp3, .wav, .m4a), thanh trượt âm lượng, nút nghe thử và tùy chọn "Né tiếng thoại (Ducking)", "Tự động lặp lại (Loop)".
+   - **Hệ Thống Hòa Trộn Âm Thanh 3 Luồng & Tự Động Ducking Đa Kênh Backend**: Xây dựng filtergraph FFmpeg hòa trộn 3 luồng đồng thời: `Âm thanh video gốc` + `Giọng đọc lồng tiếng AI` + `Nhạc nền BGM`.
+   - Tự động kích hoạt hiệu ứng sidechain ducking kép: Giọng đọc cất lên sẽ tự động ép nhỏ cả âm thanh gốc lẫn nhạc nền BGM, trả lại âm lượng mượt mà khi ngắt câu thoại.
+
+4. **Khắc Phục Lỗi Dừng Log Trình Duyệt & Chống Crash Bộ Nhớ GPU NVENC Khi Xuất Phim Dài (`routes/video_edit.py`, `export_job_manager.py`, `web/js/features/batch_editor.js`):**
+   - Triệt tiêu lỗi tràn bộ nhớ NVENC `0xC0000005` khi kết hợp `-hwaccel cuda` với bộ lọc phần mềm (làm mờ phụ đề, chữ động overlay) bằng cách tự động giải mã CPU Native an toàn và giữ nguyên mã hóa GPU NVENC 10x - 15x.
+   - Bổ sung bộ header chuẩn streaming SSE (`Cache-Control: no-cache`, `X-Accel-Buffering: no`, `Connection: keep-alive`) chống nghẽn buffer WebView2.
+   - Xây dựng bộ đệm `lineBuffer` chuẩn xác trong Batch Editor, hiển thị tiến độ và log mượt mà theo thời gian thực.
+
+5. **Tích Hợp Dịch Vụ Tải Phim Hồng Quả (Hongguo Downloader) Đầy Đủ 4 Tầng (`services/hongguo_service.py`, `routes/hongguo.py`, `web/js/features/hongguo.js`, `web/index.html`):**
+   - **Quản lý dịch vụ nền an toàn**: Win32 Job Object tự động dọn dẹp toàn bộ tiến trình con khi tắt app, khởi chạy ẩn cửa sổ hoàn toàn, chuyển đổi cổng động thông minh.
+   - **Giao diện độc lập Dark Mode**: Card thông tin phim, chọn tập thông minh (`parseEpisodeRange`), theo dõi tiến độ tải realtime, quản lý thư viện tập phim đã tải và modal xem trước video.
+   - **Cầu nối luồng dựng phim**: 1-click đưa phim đã tải sang Tab Biên tập phim hoặc Studio Review Phim.
+   - **Bảo mật & Bản quyền 2 tầng**: Tự động nhận diện thư mục lưu trữ (`dlconfig.json`), sandbox chống path traversal và chặn đứng tên thiết bị bảo lưu Windows DOS.
+   - **Bảo vệ bản quyền**: Phân quyền gói cước và chặn 403 ở cả giao diện lẫn API backend.
+
+6. **Khắc Phục Lỗi Whitelist Khi Xử Lý Hàng Loạt Video Khác Thư Mục (`routes/video_edit.py`, `routes/subtitles.py`, `routes/core.py`, `web/js/features/batch_editor.js`):**
+   - Bổ sung cơ chế auto-registration kiểm tra `os.path.exists` và tự động cấp quyền `register_user_path` tại backend.
+   - API `/api/register_paths` và frontend tự động đăng ký toàn bộ danh sách đường dẫn video vào whitelist trước khi quét OCR hoặc treo máy qua đêm.
+
+7. **Động Cơ Lọc Âm Siêu Tốc (DSP Turbo & AI Neural Fast) & Tách Nhạc Nền BGM Cho Video Dài (`audio_separator.py`, `mdx_separator.py`, `routes/audio.py`):**
+   - Động cơ siêu tốc `DSP Turbo`: Đạt tốc độ **160x - 180x Realtime** (tách video 2 - 4 tiếng chỉ trong ~40 - 90 giây).
+   - Động cơ `AI Neural Fast`: Đạt tốc độ **80x - 100x Realtime**, giữ lại âm sắc tự nhiên.
+   - Tùy chọn Tách Nhạc Nền AI (`BGM Isolation`): Tách riêng SFX, BGM và Giọng thoại, tích hợp Track Switcher Pills trên giao diện.
+   - Cơ chế tự phục hồi chống nghẽn buffer anonymous pipe của FFmpeg trên Windows và chống lỗi `[Errno 22] Invalid argument`.
+
+8. **Tự Động Đồng Bộ Bản Quyền Offline & Tự Động Giải Phóng Cổng 5000 Khi Khởi Động (`license_manager.py`, `web_app.py`):**
+   - Tự động cập nhật tính năng mới vào `.license.dat` offline.
+   - Tự động quét và giải phóng các tiến trình cũ còn kẹt ở cổng 5000 khi app khởi động.
+
+9. **Khắc Phục Lỗi Hiển Thị Phụ Đề Đè Lên Vùng Làm Mờ (`web/app.js`, `web/style.css`):**
+   - Chỉ hiển thị bản dịch mới khi bật làm mờ phụ đề gốc, triệt tiêu viền đứt nét xanh khi phát video và nâng cấp mặt nạ kính mờ 55% tint che phủ sạch sẽ chữ gốc.
+
+### ✅ Phiên bản v1.3.4 (Đã phát hành ngày 05/10/2026 - Targeted Hotfix):
+1. **Sửa Triệt Để Lỗi Mất Tiếng Lồng Tiếng Khi Xuất Video Trên Máy Khách (Targeted Hotfix Patch):**
+   - **Hiện tượng**: Trên máy Dev (có GPU RTX/PyTorch) xuất video bình thường; trên máy user nghe thử có tiếng nhưng khi xuất video ra thì video bị câm tiếng lồng tiếng.
+   - **Nguyên nhân cốt lõi**: Engine giọng local trên máy user khi thiếu model ONNX/GPU runtime tự động fallback sang Edge-TTS (`edge_vi-VN-HoaiMyNeural`). Edge-TTS ghi dữ liệu MP3 bitstream vào file cache `.wav`. Trong `ai_dubbing.py`, biến cờ `is_local = True` khiến hệ thống bỏ qua lệnh FFmpeg transcode (`if not is_local:`). Khi `numpy_timeline_mixer.py` đọc file bằng `wave.open`, thư viện Python văng lỗi `wave.Error: file does not start with RIFF id`.
+   - **Khắc phục**:
+     - `ai_dubbing.py`: Chuẩn hóa bắt buộc mọi phân đoạn âm thanh phải qua FFmpeg transcode thành PCM WAV 48kHz chuẩn trước khi trộn timeline.
+     - `numpy_timeline_mixer.py`: Tích hợp cơ chế tự cứu hộ `_transcode_to_pcm_wav` tự động phát hiện và chuyển đổi sang PCM WAV nếu gặp file bất thường.
+     - `local_voice_engine.py`: Đảm bảo đồng bộ định dạng âm thanh.
+     - `routes/tts.py` & `routes/video_edit.py`: Đồng bộ cache hash và đường dẫn file giữa nghe thử và xuất video.
+   - **Đặc điểm bản vá**: Đóng gói dạng Targeted Hotfix siêu nhẹ (76.59 KB), chỉ ghi đè 6 file backend, bảo lưu 100% giao diện và các tính năng timeline đang phát triển trên máy khách.
 
 ### ✅ Phiên bản v1.2.0 (Đã phát hành ngày 25/08/2026):
 1. **Chế Độ Xử Lý Hàng Loạt Hàng Đợi (Batch Processing Queue Studio & Overnight Engine - Phân quyền Admin độc quyền):**

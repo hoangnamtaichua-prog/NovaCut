@@ -169,6 +169,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span>
                     <span class="nav-tab-label">Tải Video</span>
                 </button>
+                <button class="nav-tab" data-target="viewHongguo" title="Tải Phim Hồng Quả (Hongguo Downloader)">
+                    <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M7 4v16M17 4v16"></path><polyline points="9 11 12 14 15 11"></polyline><line x1="12" y1="8" x2="12" y2="14"></line></svg></span>
+                    <span class="nav-tab-label">Tải Phim Hồng Quả</span>
+                </button>
                 <button class="nav-tab" data-target="viewCapCut" title="Xuất timeline đồng bộ dự án CapCut Draft">
                     <span class="nav-tab-icon"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
                     <span class="nav-tab-label">Đồng bộ CapCut</span>
@@ -611,7 +615,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
                                     <span>Dừng dịch</span>
                                 </button>
-                                <button class="btn secondary outline-border flex-btn btn-action-pill" id="btnMergeSelectedSrt" title="Gộp các dòng phụ đề được chọn (yêu cầu các dòng phải liên tiếp nhau)" style="color: #0ea5e9; border-color: rgba(14, 165, 233, 0.4); background: rgba(14, 165, 233, 0.08);">
+                                <button class="btn secondary outline-border flex-btn btn-action-pill" id="btnMergeSelectedSrt" title="Gộp mốc thời gian các dòng phụ đề được chọn (giữ nguyên phụ đề của câu đầu tiên, yêu cầu các dòng phải liên tiếp nhau)" style="color: #0ea5e9; border-color: rgba(14, 165, 233, 0.4); background: rgba(14, 165, 233, 0.08);">
                                     <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path><path d="M6 9l3 3-3 3"></path></svg>
                                     <span>Gộp SRT</span>
                                 </button>
@@ -646,7 +650,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                 <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <svg viewBox="0 0 24 24" width="16" height="16" stroke="#38bdf8" stroke-width="2" fill="none"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                        <span style="font-weight: 600;">LỒNG TIẾNG AI</span>
+                        <span style="font-weight: 600;">LỒNG TIẾNG &amp; ÂM THANH</span>
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <span style="font-size: 11px; color: #94a3b8;" id="dubbingToggleLabel">Bật</span>
@@ -752,11 +756,17 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <span>💥 Giữ lại tiếng động môi trường & hiệu ứng (Keep SFX)</span>
                                     <input type="checkbox" id="editorKeepSfx" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
                                 </label>
+                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                                    <span>🎵 Tách nhạc nền (BGM)</span>
+                                    <input type="checkbox" id="editorSeparateBgm" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
+                                </label>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
                                     <div>
                                         <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Chế độ tách:</div>
                                         <select id="editorStemMode" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px; outline: none;">
-                                            <option value="mdx_net_hq4" selected>⭐ MDX-NET Inst HQ4 (Khuyên dùng - UVR5)</option>
+                                            <option value="dsp_turbo" selected>⚡ Siêu Tốc (DSP Turbo - Phim 2h chỉ ~40s) [Khuyên dùng]</option>
+                                            <option value="ai_neural">🤖 AI Neural Fast (Lọc phổ thông minh - Phim 2h ~2p)</option>
+                                            <option value="mdx_net_hq4">⭐ MDX-NET Inst HQ4 (AI Studio - Rất chậm, clip &lt; 10p)</option>
                                             <option value="mdx_net_hq5">🛡️ MDX-NET Inst HQ5 (Chống vang Reverb/Echo)</option>
                                             <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal)</option>
                                         </select>
@@ -806,9 +816,14 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <div id="editorStemResultAudio" style="display: none; margin-top: 6px; padding: 8px 10px; background: rgba(15, 23, 42, 0.95); border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.3); box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
                                     <div style="font-size: 11px; color: #34d399; font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
                                         <span style="display: inline-flex; align-items: center; gap: 5px;">
-                                            <span>🎧 Audio SFX đã lọc sạch lời thoại:</span>
+                                            <span>🎧 Kết quả âm thanh đã tách:</span>
                                         </span>
                                         <span id="editorStemResultStatus" style="font-size: 10px; background: rgba(52, 211, 153, 0.15); color: #34d399; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(52, 211, 153, 0.3);">Sẵn sàng</span>
+                                    </div>
+                                    <div id="editorStemTrackSwitcher" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px;">
+                                        <button type="button" id="btnStemTrackClean" class="btn small" style="padding: 3px 4px; font-size: 10.5px; border-radius: 4px; border: 1px solid #38bdf8; color: #38bdf8; background: rgba(56, 189, 248, 0.2); cursor: pointer;" title="Nghe thử âm thanh SFX và nhạc nền đã lọc sạch lời thoại">💥 Đã lọc (SFX)</button>
+                                        <button type="button" id="btnStemTrackBgm" class="btn small" style="padding: 3px 4px; font-size: 10.5px; border-radius: 4px; border: 1px solid #334155; color: #94a3b8; background: #1e293b; cursor: pointer;" title="Nghe thử tệp nhạc nền đã trích xuất">🎵 Nhạc nền (BGM)</button>
+                                        <button type="button" id="btnStemTrackVocal" class="btn small" style="padding: 3px 4px; font-size: 10.5px; border-radius: 4px; border: 1px solid #334155; color: #94a3b8; background: #1e293b; cursor: pointer;" title="Nghe thử tệp giọng thoại đã trích xuất">🎙️ Vocal thoại</button>
                                     </div>
                                     <audio id="editorStemAudioPlayer" controls style="width: 100%; height: 28px; outline: none; margin-bottom: 6px;"></audio>
                                     <div style="display: flex; gap: 6px;">
@@ -848,6 +863,107 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <span id="dubbingManualOrigVolVal" style="color: #38bdf8; font-weight: 600;">30%</span>
                                 </div>
                                 <input type="range" id="dubbingManualOrigVol" class="cyan-slider" value="30" min="0" max="100" step="5">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Background Music (BGM) Suite in Editor -->
+                <div class="editor-bgm-box" style="margin: 0 16px 16px 16px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="font-size: 13px;">🎵</span>
+                            <span style="font-size: 12px; font-weight: 600; color: #cbd5e1;">Nhạc nền video (BGM)</span>
+                        </div>
+                        <label class="switch" style="margin-bottom: 0;">
+                            <input type="checkbox" id="editorBgmEnabled">
+                            <span class="slider-toggle round"></span>
+                        </label>
+                    </div>
+                    
+                    <div id="editorBgmConfig" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px; opacity: 0.4; pointer-events: none; transition: opacity 0.2s ease;">
+                        <!-- BGM Source Switcher: Preset vs Custom Upload -->
+                        <div style="display: flex; gap: 6px; background: rgba(15, 23, 42, 0.6); padding: 3px; border-radius: 6px; border: 1px solid #334155;">
+                            <button type="button" id="btnEditorBgmSourcePreset" class="btn secondary small bgm-source-tab active" style="flex: 1; padding: 5px 8px; font-size: 11px; font-weight: 600; border-color: #38bdf8; color: #38bdf8; background: rgba(56, 189, 248, 0.1);">
+                                🎵 Nhạc có sẵn
+                            </button>
+                            <button type="button" id="btnEditorBgmSourceCustom" class="btn secondary small bgm-source-tab" style="flex: 1; padding: 5px 8px; font-size: 11px; font-weight: 600; color: #94a3b8;">
+                                📁 Tải lên riêng
+                            </button>
+                        </div>
+
+                        <!-- Mode 1: Preset Selection -->
+                        <div id="panelEditorBgmPreset" style="display: flex; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <select id="editorBgmPresetSelect" class="text-input" style="flex: 1; padding: 7px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 11.5px;">
+                                    <option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>
+                                    <optgroup label="🛡️ AN TOÀN YOUTUBE (NO-COPYRIGHT)">
+                                        <option value="Kevin MacLeod - Sneaky Snitch.mp3">🛡️ Sneaky Snitch (Hài hước / Hóm hỉnh)</option>
+                                        <option value="Kevin MacLeod - Monkeys Spinning Monkeys.mp3">🛡️ Monkeys Spinning Monkeys (Vui nhộn / TikTok)</option>
+                                        <option value="Kevin MacLeod - Scheming Weasel.mp3">🛡️ Scheming Weasel (Mưu mô / Cà khịa / Hồi hộp)</option>
+                                        <option value="Kevin MacLeod - The Complex.mp3">🛡️ The Complex (Kịch tính / Hồi hộp / Trinh thám)</option>
+                                        <option value="Kevin MacLeod - Hitman.mp3">🛡️ Hitman (Hành động / Điệp viên / Đấu trí)</option>
+                                        <option value="Kevin MacLeod - Volatile Reaction.mp3">🛡️ Volatile Reaction (Gay cấn / Dồn dập)</option>
+                                        <option value="Kevin MacLeod - Heartbreaking.mp3">🛡️ Heartbreaking (Tình cảm / Lắng đọng)</option>
+                                        <option value="Kevin MacLeod - Carefree.mp3">🛡️ Carefree (Tươi sáng / Nhẹ nhàng)</option>
+                                    </optgroup>
+                                    <optgroup label="🎬 NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC">
+                                        <option value="Blade Runner 2049.mp3">Blade Runner 2049 (Sci-Fi / Bí Ẩn)</option>
+                                        <option value="Alan Walker Style - Inner Peace (New Song 2020).mp3">Inner Peace (Alan Walker Style)</option>
+                                        <option value="La Lecon Particuliere(1968) - Theme De La Lecon Particuliere.mp3">La Leçon Particulière (Hoài Niệm / Sâu Lắng)</option>
+                                        <option value="Late Night Melancholy.mp3">Late Night Melancholy (Trầm Buồn)</option>
+                                        <option value="Paris.mp3">Paris (Lãng Mạn / Êm Dịu)</option>
+                                        <option value="Reality.mp3">Reality (Cảm Xúc / Kịch Tính)</option>
+                                        <option value="Relaxing music Alec Koff - run to earth  The Miracle Music.mp3">Run To Earth (Khám Phá / Kì Ảo)</option>
+                                        <option value="SLANDER - Love Is Gone (Lyrics) Im sorry  dont leave me I want you here with me.mp3">Love Is Gone (Buồn Da Diết)</option>
+                                        <option value="Stay With Me (Piano Version).mp3">Stay With Me (Piano Nhẹ Nhàng)</option>
+                                        <option value="Xiao Ling (TikTok Roblox Song).mp3">Xiao Ling (Nhịp Điệu / Hồi Hộp)</option>
+                                    </optgroup>
+                                </select>
+                                <button type="button" id="btnEditorPreviewBgm" class="btn secondary small" style="width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 6px; flex-shrink: 0;" title="Nghe thử bài này">
+                                    ▶️
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Mode 2: Custom Upload -->
+                        <div id="panelEditorBgmCustom" style="display: none; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <input type="file" id="editorBgmFileInput" accept=".mp3,.m4a,.wav,.aac" style="display: none;">
+                                <button type="button" id="btnEditorUploadBgm" class="btn primary-cyan small" style="padding: 6px 12px; font-size: 11px; white-space: nowrap; display: flex; align-items: center; gap: 4px;">
+                                    <span>📤 Chọn file nhạc</span>
+                                </button>
+                                <div id="editorBgmCustomFileName" style="flex: 1; font-size: 11px; color: #94a3b8; background: #0f172a; padding: 6px 8px; border-radius: 6px; border: 1px solid #334155; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    Chưa chọn file (.mp3, .wav, .m4a)
+                                </div>
+                                <button type="button" id="btnEditorPreviewCustomBgm" class="btn secondary small" style="display: none; width: 32px; height: 32px; padding: 0; align-items: center; justify-content: center; border-radius: 6px; flex-shrink: 0;" title="Nghe thử file đã tải">
+                                    ▶️
+                                </button>
+                                <button type="button" id="btnEditorRemoveCustomBgm" class="btn secondary small" style="display: none; width: 32px; height: 32px; padding: 0; align-items: center; justify-content: center; border-radius: 6px; color: #ef4444; flex-shrink: 0;" title="Xóa file nhạc này">
+                                    🗑️
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Hidden preview audio -->
+                        <audio id="editorBgmPreviewAudio" style="display: none;"></audio>
+
+                        <!-- Volume & Ducking & Loop controls -->
+                        <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 2px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1;">
+                                <span>Âm lượng BGM</span>
+                                <span id="editorBgmVolVal" style="color: #38bdf8; font-weight: 600;">20%</span>
+                            </div>
+                            <input type="range" id="editorBgmVol" class="cyan-slider" value="20" min="0" max="100" step="5">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
+                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-size: 11px; color: #cbd5e1;" title="Tự động giảm âm lượng nhạc nền khi có lời thoại">
+                                    <span>Né tiếng thoại (Ducking)</span>
+                                    <input type="checkbox" id="editorBgmDucking" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #0ea5e9;">
+                                </label>
+                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-size: 11px; color: #cbd5e1;" title="Tự động lặp lại bài nhạc nếu video dài hơn bản nhạc">
+                                    <span>Lặp lại nhạc (Loop)</span>
+                                    <input type="checkbox" id="editorBgmLoop" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #0ea5e9;">
+                                </label>
                             </div>
                         </div>
                     </div>
@@ -1721,9 +1837,11 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             <div id="batch_stemModeGroup" style="display: none; margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(56, 189, 248, 0.2);">
                                 <label style="font-size: 11px; color: #cbd5e1;">Mô hình tách giọng (Stem Model)</label>
                                 <select id="batch_editorStemMode" class="select-input outline-select" style="padding: 4px 8px; font-size: 11px; margin-top: 3px;">
-                                    <option value="mdx_net_hq4" selected>MDX-Net HQ4 (Chất lượng cao nhất)</option>
-                                    <option value="mdx_net_fast">MDX-Net Fast (Nhanh)</option>
-                                    <option value="demucs">Demucs v4</option>
+                                    <option value="dsp_turbo" selected>⚡ Siêu Tốc (DSP Turbo - Phim 2h chỉ ~40s) [Khuyên dùng]</option>
+                                    <option value="ai_neural">🤖 AI Neural Fast (Lọc phổ thông minh - Phim 2h ~2p)</option>
+                                    <option value="mdx_net_hq4">⭐ MDX-NET Inst HQ4 (AI Studio - Rất chậm, clip &lt; 10p)</option>
+                                    <option value="mdx_net_hq5">🛡️ MDX-NET Inst HQ5 (Chống vang Reverb/Echo)</option>
+                                    <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal)</option>
                                 </select>
                             </div>
                         </div>
@@ -2006,16 +2124,16 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; background: #0b1329; border: 1px solid #334155; border-radius: 8px; padding: 6px 12px; min-width: 280px; max-width: 380px;">
                             <span style="font-size: 11.5px; color: #94a3b8; margin-right: 6px; white-space: nowrap;">📂 Xuất ra:</span>
-                            <input type="text" id="batch_outputDir" value="output/batch_export" readonly style="background: transparent; border: none; color: #38bdf8; font-size: 12px; width: 100%; outline: none; cursor: default; font-family: monospace;" title="Thư mục lưu video thành phẩm">
+                            <input type="text" id="batch_outputDir" value="[Tự động] Cùng thư mục chứa từng video gốc" data-prev-dir="output/batch_export" readonly style="background: transparent; border: none; color: #38bdf8; font-size: 12px; width: 100%; outline: none; cursor: default; font-family: monospace;" title="Thư mục lưu video thành phẩm">
                         </div>
-                        <button type="button" id="btnBatchSelectOutputDir" class="btn secondary" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 9px 14px;" title="Chọn thư mục xuất tùy chỉnh">
+                        <button type="button" id="btnBatchSelectOutputDir" class="btn secondary" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 9px 14px; opacity: 0.5; pointer-events: none;" title="Chọn thư mục xuất tùy chỉnh">
                             <span>📁 Chọn thư mục</span>
                         </button>
                         <button type="button" id="btnBatchOpenOutputDir" class="btn secondary" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 9px 14px;" title="Mở thư mục xuất trên máy tính">
                             <span>Mở</span>
                         </button>
                         <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #38bdf8; cursor: pointer; user-select: none; padding: 7px 12px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-weight: 600;" title="Khi chọn, mỗi video sẽ được xuất lưu trực tiếp vào chính thư mục chứa file video gốc đó (kể cả khi các video nằm ở các thư mục, ổ đĩa khác nhau)">
-                            <input type="checkbox" id="batch_saveToSourceDir" style="accent-color: #38bdf8; width: 15px; height: 15px; cursor: pointer;">
+                            <input type="checkbox" id="batch_saveToSourceDir" checked style="accent-color: #38bdf8; width: 15px; height: 15px; cursor: pointer;">
                             <span>📍 Lưu vào cùng thư mục video gốc</span>
                         </label>
                         <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #f59e0b; cursor: pointer; user-select: none; padding: 7px 12px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; font-weight: 600;" title="Bắt buộc làm mới 100% từ đầu: quét lại OCR, dịch mới, tạo giọng đọc mới, không tái sử dụng bất kỳ file tạm, cache TTS hay artifact cũ nào">
@@ -3355,11 +3473,17 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                         <span>💥 Giữ lại tiếng động môi trường & hiệu ứng (Keep SFX)</span>
                                         <input type="checkbox" id="reviewKeepSfx" checked style="accent-color: #38bdf8;">
                                     </label>
+                                    <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                                        <span>🎵 Tách nhạc nền (BGM)</span>
+                                        <input type="checkbox" id="reviewSeparateBgm" checked style="accent-color: #38bdf8;">
+                                    </label>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px;">
                                         <div>
                                             <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Chế độ tách:</div>
                                             <select id="reviewStemMode" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px;">
-                                                <option value="mdx_net_hq4" selected>⭐ MDX-NET Inst HQ4 (Khuyên dùng - UVR5)</option>
+                                                <option value="dsp_turbo" selected>⚡ Siêu Tốc (DSP Turbo - Phim 2h chỉ ~40s) [Khuyên dùng]</option>
+                                                <option value="ai_neural">🤖 AI Neural Fast (Lọc phổ thông minh - Phim 2h ~2p)</option>
+                                                <option value="mdx_net_hq4">⭐ MDX-NET Inst HQ4 (AI Studio - Rất chậm, clip &lt; 10p)</option>
                                                 <option value="mdx_net_hq5">🛡️ MDX-NET Inst HQ5 (Chống vang Reverb/Echo)</option>
                                                 <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal)</option>
                                             </select>
@@ -4828,6 +4952,348 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
         </div>
     </div>
 
+    <!-- ======================================================== -->
+    <!-- TRÌNH TẢI PHIM HỒNG QUẢ (HONGGUO DOWNLOADER VIEW)        -->
+    <!-- ======================================================== -->
+    <div id="viewHongguo" class="main-view" style="display: none;">
+        <div class="hongguo-container" style="width: 100%; max-width: 100%; padding: 0 16px 40px 16px; box-sizing: border-box; overflow-y: auto;">
+            
+            <!-- 1. TOP HEADER / TITLE BAR & SERVICE STATUS PILL -->
+            <div class="hongguo-top-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 14px 20px; background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); flex-wrap: wrap; gap: 14px;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style="width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, rgba(225, 29, 72, 0.2), rgba(244, 63, 94, 0.1)); display: flex; align-items: center; justify-content: center; border: 1px solid #f43f5e; box-shadow: 0 0 12px rgba(244, 63, 94, 0.25);">
+                        <svg viewBox="0 0 24 24" width="22" height="22" stroke="#f43f5e" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                            <path d="M7 4v16M17 4v16"></path>
+                            <polyline points="9 11 12 14 15 11"></polyline>
+                            <line x1="12" y1="8" x2="12" y2="14"></line>
+                        </svg>
+                    </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <h2 style="margin: 0; font-size: 16px; font-weight: 700; color: #f8fafc; letter-spacing: 0.5px;">TRÌNH TẢI PHIM HỒNG QUẢ (HONGGUO DOWNLOADER)</h2>
+                            <span style="font-size: 10px; font-weight: 800; background: linear-gradient(135deg, #e11d48, #f43f5e); color: #fff; padding: 2px 8px; border-radius: 10px; letter-spacing: 0.5px; box-shadow: 0 2px 6px rgba(225, 29, 72, 0.4);">HD NATIVE</span>
+                        </div>
+                        <p style="margin: 0; font-size: 12px; color: #94a3b8;">Tải trọn bộ phim ngắn không logo, tự động bẻ khóa chữ ký Unidbg và nạp video sang Biên tập / Review phim</p>
+                    </div>
+                </div>
+
+                <!-- Service Status & Controls -->
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <div id="hongguoServiceStatusPill" class="hongguo-status-pill" style="display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; background: rgba(15, 23, 42, 0.85); border: 1px solid #334155; border-radius: 20px; font-size: 12px;">
+                        <span id="hongguoStatusDot" style="width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; display: inline-block; box-shadow: 0 0 6px rgba(148, 163, 184, 0.6);"></span>
+                        <span id="hongguoStatusText" style="color: #cbd5e1; font-weight: 600;">Đang kiểm tra dịch vụ...</span>
+                        <span id="hongguoPortBadges" style="display: none; gap: 6px; margin-left: 4px;">
+                            <span id="hongguoSignerBadge" class="badge" style="font-size: 10px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 1px 6px; border-radius: 4px; font-family: monospace;">Signer: 9099</span>
+                            <span id="hongguoServerBadge" class="badge" style="font-size: 10px; background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); padding: 1px 6px; border-radius: 4px; font-family: monospace;">API: 8000</span>
+                        </span>
+                    </div>
+
+                    <button type="button" id="btnHongguoRestartService" class="btn secondary" style="padding: 6px 12px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid #334155;" title="Khởi động lại Java Unidbg Signer và Python Server">
+                        <span>🔄</span><span>Khởi động lại</span>
+                    </button>
+                    <button type="button" id="btnHongguoStopService" class="btn secondary" style="padding: 6px 12px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; background: rgba(239, 68, 68, 0.08);" title="Dừng toàn bộ tiến trình con của Hồng Quả">
+                        <span>⏹️</span><span>Dừng dịch vụ</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. INPUT HERO CARD: URL/ID & OUTPUT DIRECTORY -->
+            <div class="download-hero-card" style="margin-bottom: 20px; background: rgba(17, 24, 39, 0.75); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 12px; padding: 18px 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);">
+                <label style="font-size: 13.5px; font-weight: 700; color: #f8fafc; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                    <span style="color: #f43f5e;">🔗</span>
+                    <span>Nhập liên kết chia sẻ hoặc Drama ID phim Hồng Quả:</span>
+                </label>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px;">
+                    <div style="flex: 1; min-width: 280px; position: relative;">
+                        <input type="text" id="hongguoInputUrl" placeholder="Ví dụ: https://fqnovel.com/drama/... hoặc dán link chia sẻ / series_id (VD: 74123456789)" class="download-input-styled" style="width: 100%; box-sizing: border-box; padding: 12px 40px 12px 14px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 13px;">
+                        <button type="button" id="btnHongguoClearUrl" title="Xóa nội dung" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #64748b; font-size: 14px; cursor: pointer; padding: 4px; display: none;">✕</button>
+                    </div>
+                    <button type="button" id="btnHongguoPasteUrl" class="btn secondary" style="padding: 12px 18px; font-weight: 600; white-space: nowrap; border-radius: 10px; border: 1px solid #334155;">
+                        📋 Dán Link
+                    </button>
+                    <button type="button" id="btnHongguoAnalyze" class="btn primary-rose" style="padding: 12px 24px; font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; border-radius: 10px; background: linear-gradient(135deg, #e11d48, #f43f5e); color: #fff; border: none; cursor: pointer; box-shadow: 0 4px 14px rgba(225, 29, 72, 0.4); transition: all 0.2s;">
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <span id="hongguoAnalyzeBtnText">Phân Tích Phim</span>
+                    </button>
+                </div>
+
+                <!-- Output Directory Row -->
+                <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 8px; flex-wrap: wrap;">
+                    <span style="font-size: 12px; font-weight: 600; color: #94a3b8; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+                        <span>📁</span> Thư mục lưu video:
+                    </span>
+                    <input type="text" id="hongguoOutputDirDisplay" readonly placeholder="Đang đọc thư mục lưu trữ mặc định..." class="text-input" style="flex: 1; min-width: 200px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(51, 65, 85, 0.7); padding: 6px 12px; border-radius: 6px; color: #cbd5e1; font-size: 12px; font-family: monospace;">
+                    <button type="button" id="btnHongguoChangeFolder" class="btn secondary small" style="padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; white-space: nowrap; border: 1px solid #334155;">
+                        📂 Đổi thư mục
+                    </button>
+                    <button type="button" id="btnHongguoOpenFolder" class="btn secondary small" style="padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; white-space: nowrap; border: 1px solid #334155;">
+                        ↗️ Mở thư mục
+                    </button>
+                </div>
+            </div>
+
+            <!-- 3. 2-COLUMN GRID: METADATA CARD (LEFT) & EPISODE SELECTOR (RIGHT) -->
+            <div class="hongguo-main-grid" style="display: grid; grid-template-columns: 380px 1fr; gap: 20px; margin-bottom: 24px;">
+                
+                <!-- LEFT: DRAMA METADATA CARD -->
+                <div class="card hongguo-metadata-card" style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(51, 65, 85, 0.7); border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">
+                    <div class="card-header" style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(51, 65, 85, 0.7); padding: 12px 18px; background: rgba(15, 23, 42, 0.8); border-radius: 12px 12px 0 0;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="#f43f5e" stroke-width="2" fill="none"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg>
+                            <span style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">THÔNG TIN PHIM</span>
+                        </div>
+                        <span id="hongguoSeriesIdBadge" style="font-size: 11px; color: #94a3b8; font-family: monospace; display: none;">ID: -</span>
+                    </div>
+                    <div class="card-body" style="padding: 18px; flex: 1; display: flex; flex-direction: column;">
+                        
+                        <!-- Empty Placeholder -->
+                        <div id="hongguoMetadataEmptyPlaceholder" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px; text-align: center; color: #64748b;">
+                            <div style="font-size: 42px; margin-bottom: 12px; opacity: 0.5;">🎬</div>
+                            <div style="font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 6px;">Chưa Có Dữ Liệu Phim</div>
+                            <div style="font-size: 12px; color: #64748b; max-width: 260px;">Hãy dán liên kết hoặc ID phim Hồng Quả ở trên và bấm "Phân Tích Phim" để tải thông tin</div>
+                        </div>
+
+                        <!-- Loaded Content -->
+                        <div id="hongguoMetadataContent" style="display: none; flex-direction: column; gap: 14px;">
+                            <div style="display: flex; gap: 14px;">
+                                <div style="position: relative; width: 110px; height: 155px; border-radius: 8px; overflow: hidden; background: #0f172a; border: 1px solid #334155; flex-shrink: 0; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+                                    <img id="hongguoDramaPoster" src="" alt="Poster Phim" style="width: 100%; height: 100%; object-fit: cover; display: block;" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'110\' height=\'155\' fill=\'%231e293b\'><rect width=\'100%\' height=\'100%\'/><text x=\'50%\' y=\'50%\' fill=\'%2364748b\' font-size=\'12\' text-anchor=\'middle\' dominant-baseline=\'middle\'>No Cover</text></svg>'">
+                                    <div id="hongguoPosterEpisodeOverlay" style="position: absolute; bottom: 0; left: 0; right: 0; padding: 3px 6px; background: rgba(0,0,0,0.75); font-size: 10.5px; color: #f8fafc; text-align: center; font-weight: 600;">- Tập</div>
+                                </div>
+                                <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-start;">
+                                    <h3 id="hongguoDramaTitle" style="margin: 0 0 8px 0; font-size: 15px; font-weight: 700; color: #f8fafc; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;" title="">-</h3>
+                                    
+                                    <div style="display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <span style="color: #94a3b8;">Tổng số tập:</span>
+                                            <span id="hongguoDramaTotalEpisodes" style="font-weight: 700; color: #38bdf8;">0 tập</span>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <span style="color: #94a3b8;">Đánh giá:</span>
+                                            <span id="hongguoDramaRating" style="font-weight: 700; color: #fbbf24;">⭐ -</span>
+                                        </div>
+                                        <div id="hongguoDramaTagsContainer" style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <label style="font-size: 12px; font-weight: 600; color: #94a3b8; display: flex; align-items: center; gap: 6px;">
+                                    <span>📖</span> Tóm tắt nội dung phim:
+                                </label>
+                                <div id="hongguoDramaSynopsis" style="max-height: 140px; overflow-y: auto; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 8px; font-size: 12px; color: #cbd5e1; line-height: 1.5; white-space: pre-wrap;">
+                                    Chưa có phần giới thiệu phim.
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- RIGHT: EPISODE SELECTOR & DOWNLOAD ACTION CARD -->
+                <div class="card hongguo-episodes-card" style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(51, 65, 85, 0.7); border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">
+                    <div class="card-header" style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(51, 65, 85, 0.7); padding: 12px 18px; background: rgba(15, 23, 42, 0.8); border-radius: 12px 12px 0 0; flex-wrap: wrap; gap: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="#38bdf8" stroke-width="2" fill="none"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                            <span style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">DANH SÁCH TẬP PHIM</span>
+                            <span id="hongguoSelectedEpisodesBadge" style="font-size: 11px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 2px 8px; border-radius: 12px; font-weight: 600;">Đã chọn: 0 tập</span>
+                        </div>
+
+                        <!-- Selection Controls -->
+                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                            <button type="button" id="btnHongguoSelectAll" class="btn secondary small" style="padding: 5px 10px; font-size: 11.5px; border-radius: 6px; border: 1px solid #334155;">
+                                ✓ Chọn tất cả
+                            </button>
+                            <button type="button" id="btnHongguoDeselectAll" class="btn secondary small" style="padding: 5px 10px; font-size: 11.5px; border-radius: 6px; border: 1px solid #334155;">
+                                ✕ Bỏ chọn
+                            </button>
+                            <button type="button" id="btnHongguoInvertSelection" class="btn secondary small" style="padding: 5px 10px; font-size: 11.5px; border-radius: 6px; border: 1px solid #334155;">
+                                🔄 Đảo chọn
+                            </button>
+                            <div style="display: flex; align-items: center; gap: 4px; margin-left: 4px;">
+                                <input type="text" id="hongguoRangeInput" placeholder="VD: 1-10, 15, 20-30" class="text-input" style="width: 145px; padding: 5px 8px; font-size: 11.5px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff;">
+                                <button type="button" id="btnHongguoApplyRange" class="btn secondary small" style="padding: 5px 10px; font-size: 11.5px; border-radius: 6px; border: 1px solid #334155;" title="Chọn các tập theo dải nhập">
+                                    🎯 Chọn dải
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-body" style="padding: 16px 18px; flex: 1; display: flex; flex-direction: column;">
+                        <!-- Empty Placeholder -->
+                        <div id="hongguoEpisodeGridPlaceholder" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; color: #64748b; text-align: center;">
+                            <div style="font-size: 36px; margin-bottom: 10px; opacity: 0.5;">📋</div>
+                            <div style="font-size: 13.5px; font-weight: 600; color: #94a3b8;">Chưa có danh sách tập</div>
+                            <div style="font-size: 12px; color: #64748b;">Nhập liên kết phim và bấm "Phân Tích Phim" để tải danh sách các tập phim</div>
+                        </div>
+
+                        <!-- Episode Grid Container -->
+                        <div id="hongguoEpisodeGridContainer" style="display: none; flex-direction: column; flex: 1;">
+                            <div id="hongguoEpisodeGrid" class="hongguo-episode-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(75px, 1fr)); gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px; margin-bottom: 14px;"></div>
+
+                            <!-- Download Trigger Row & Quality / Concurrency -->
+                            <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid rgba(51, 65, 85, 0.5); gap: 14px; flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: #94a3b8; flex-wrap: wrap;">
+                                    <span id="hongguoDownloadSummaryText">Chưa chọn tập nào để tải</span>
+                                    <div style="display: flex; align-items: center; gap: 6px;">
+                                        <span>Độ phân giải:</span>
+                                        <select id="hongguoDownloadQuality" class="select-input outline-select" style="padding: 4px 8px; font-size: 11.5px; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 6px;">
+                                            <option value="1080p" selected>1080p FHD (Khuyên dùng)</option>
+                                            <option value="720p">720p HD</option>
+                                        </select>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px;">
+                                        <span>Số luồng tải:</span>
+                                        <select id="hongguoDownloadConcurrency" class="select-input outline-select" style="padding: 4px 8px; font-size: 11.5px; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 6px;">
+                                            <option value="2">2 luồng</option>
+                                            <option value="4" selected>4 luồng</option>
+                                            <option value="6">6 luồng</option>
+                                            <option value="8">8 luồng</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <button type="button" id="btnHongguoStartDownload" class="btn primary-rose" style="padding: 11px 28px; font-size: 13.5px; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: linear-gradient(135deg, #e11d48, #f43f5e); color: #fff; border: none; cursor: pointer; box-shadow: 0 4px 14px rgba(225, 29, 72, 0.4); transition: all 0.2s;">
+                                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                    <span>Bắt Đầu Tải (<span id="hongguoDownloadButtonCount">0</span> Tập)</span>
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 4. REAL-TIME DOWNLOAD PROGRESS MONITOR CARD -->
+            <div id="hongguoProgressCard" class="card hongguo-progress-card" style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(51, 65, 85, 0.7); border-radius: 12px; margin-bottom: 24px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">
+                <div class="card-header" style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(51, 65, 85, 0.7); padding: 12px 18px; background: rgba(15, 23, 42, 0.8); border-radius: 12px 12px 0 0;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 8px #38bdf8;"></div>
+                        <span style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">TIẾN TRÌNH TẢI THEO THỜI GIAN THỰC</span>
+                        <span id="hongguoActiveTaskCountBadge" class="badge" style="font-size: 11px; background: rgba(15, 23, 42, 0.8); color: #94a3b8; border: 1px solid #334155; padding: 2px 8px; border-radius: 10px;">0 tác vụ đang chạy</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <button type="button" id="btnHongguoCancelDownload" class="btn secondary small" style="padding: 5px 12px; font-size: 11.5px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; background: rgba(239, 68, 68, 0.08); display: none;" title="Hủy tiến trình tải đang chạy">
+                            🛑 Hủy tải
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body" style="padding: 16px 18px;">
+                    
+                    <!-- Live Task Active Box -->
+                    <div id="hongguoLiveTaskBox" style="display: none; flex-direction: column; gap: 12px; padding: 14px 16px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; margin-bottom: 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 16px;">⚡</span>
+                                <div>
+                                    <div id="hongguoProgressDramaTitle" style="font-size: 13.5px; font-weight: 700; color: #f8fafc;">Tên bộ phim đang tải...</div>
+                                    <div style="font-size: 11.5px; color: #94a3b8;">
+                                        Đang tải tập: <span id="hongguoCurrentDownloadingEp" style="color: #38bdf8; font-weight: 600;">Tập 1</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px; font-size: 12px;">
+                                <div style="display: flex; align-items: center; gap: 6px; color: #94a3b8;">
+                                    <span>Tốc độ:</span>
+                                    <span id="hongguoProgressSpeed" style="font-weight: 700; color: #4ade80; font-family: monospace;">0.0 MB/s</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px; color: #94a3b8;">
+                                    <span>Tiến độ:</span>
+                                    <span id="hongguoProgressCounter" style="font-weight: 700; color: #38bdf8; font-family: monospace;">0/0 tập</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Progress Bar Fill -->
+                        <div style="width: 100%; height: 8px; background: rgba(30, 41, 59, 0.8); border-radius: 4px; overflow: hidden; border: 1px solid rgba(51, 65, 85, 0.5);">
+                            <div id="hongguoOverallProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #e11d48, #f43f5e, #38bdf8); transition: width 0.3s ease; border-radius: 4px;"></div>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #64748b;">
+                            <span id="hongguoProgressStatusText">Đang chuẩn bị tải...</span>
+                            <span id="hongguoProgressPercentText" style="font-weight: 700; color: #f8fafc;">0%</span>
+                        </div>
+                    </div>
+
+                    <!-- Tasks Table -->
+                    <div style="overflow-x: auto;">
+                        <table class="hongguo-tasks-table" style="width: 100%; border-collapse: collapse; font-size: 12px; color: #cbd5e1;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid rgba(51, 65, 85, 0.6); text-align: left; color: #94a3b8;">
+                                    <th style="padding: 8px 12px; font-weight: 600;">Bộ Phim</th>
+                                    <th style="padding: 8px 12px; font-weight: 600;">Dải Tập</th>
+                                    <th style="padding: 8px 12px; font-weight: 600;">Tập Đang Tải</th>
+                                    <th style="padding: 8px 12px; font-weight: 600;">Tiến Độ</th>
+                                    <th style="padding: 8px 12px; font-weight: 600;">Tốc Độ</th>
+                                    <th style="padding: 8px 12px; font-weight: 600;">Trạng Thái</th>
+                                    <th style="padding: 8px 12px; font-weight: 600; text-align: right;">Thao Tác</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hongguoTasksTableBody">
+                                <tr id="hongguoTasksEmptyRow">
+                                    <td colspan="7" style="padding: 24px; text-align: center; color: #64748b;">
+                                        Hiện không có tác vụ tải nào đang hoạt động
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Live Log Terminal (Collapsible) -->
+                    <div style="margin-top: 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <button type="button" id="btnHongguoToggleLog" class="btn-text" style="background: none; border: none; font-size: 11.5px; color: #94a3b8; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 0;">
+                                <span id="hongguoLogToggleIcon">▶</span>
+                                <span>Xem nhật ký tải thời gian thực (Live Log)</span>
+                            </button>
+                            <button type="button" id="btnHongguoClearLog" class="btn-text" style="background: none; border: none; font-size: 11px; color: #64748b; cursor: pointer; display: none;">
+                                Xóa log
+                            </button>
+                        </div>
+                        <div id="hongguoLogTerminal" style="display: none; height: 120px; overflow-y: auto; background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; font-family: monospace; font-size: 11px; color: #94a3b8; line-height: 1.4;">
+                            <div style="color: #64748b;">[System] Hongguo downloader engine ready.</div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- 5. DOWNLOADED LIBRARY CARD & WORKFLOW ACTION BRIDGES -->
+            <div class="card hongguo-library-card" style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(51, 65, 85, 0.7); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">
+                <div class="card-header" style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(51, 65, 85, 0.7); padding: 12px 18px; background: rgba(15, 23, 42, 0.8); border-radius: 12px 12px 0 0; flex-wrap: wrap; gap: 10px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="#4ade80" stroke-width="2" fill="none"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                        <span style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">THƯ VIỆN PHIM ĐÃ TẢI VỀ MÁY</span>
+                        <span id="hongguoLibraryCountBadge" class="badge" style="font-size: 11px; background: rgba(74, 222, 128, 0.15); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); padding: 2px 8px; border-radius: 10px; font-weight: 600;">0 bộ phim</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <button type="button" id="btnHongguoRefreshLibrary" class="btn secondary small" style="padding: 5px 12px; font-size: 11.5px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #334155;">
+                            <span>🔄</span><span>Làm mới</span>
+                        </button>
+                        <button type="button" id="btnHongguoOpenLibraryFolder" class="btn secondary small" style="padding: 5px 12px; font-size: 11.5px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #334155;">
+                            <span>📂</span><span>Mở thư mục gốc</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body" style="padding: 18px;">
+                    
+                    <!-- Empty Placeholder -->
+                    <div id="hongguoLibraryEmptyPlaceholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 20px; text-align: center; color: #64748b;">
+                        <div style="font-size: 40px; margin-bottom: 10px; opacity: 0.5;">📁</div>
+                        <div style="font-size: 13.5px; font-weight: 600; color: #94a3b8; margin-bottom: 4px;">Thư viện phim trống</div>
+                        <div style="font-size: 12px; color: #64748b;">Chưa có bộ phim nào được tải về hoàn tất trong thư mục lưu trữ</div>
+                    </div>
+
+                    <!-- Library Items Grid / List Container -->
+                    <div id="hongguoLibraryContainer" style="display: none; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;"></div>
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+
     <!-- ========================================== -->
     <!-- CAPCUT SYNC VIEW -->
     <!-- ========================================== -->
@@ -5368,6 +5834,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
                                     <span>💥 Giữ tiếng động môi trường (Keep SFX)</span>
                                     <input type="checkbox" id="queueStemKeepSfx" checked style="accent-color: #38bdf8;">
+                                </label>
+                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                                    <span>🎵 Tách nhạc nền (BGM)</span>
+                                    <input type="checkbox" id="queueStemSeparateBgm" checked style="accent-color: #38bdf8;">
                                 </label>
                             </div>
                         </div>
@@ -8540,6 +9010,60 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                 <button type="button" id="btnBatchExtractConfigSave" class="btn primary-cyan small" style="padding: 6px 18px; font-weight: 700; display: inline-flex; align-items: center; gap: 6px;">
                     <span>💾 Lưu Cấu Hình &amp; Áp Dụng Cho Tất Cả Video</span>
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- MODAL CHỌN TẬP PHIM HỒNG QUẢ ĐỂ CHUYỂN SANG BIÊN TẬP / REVIEW -->
+    <!-- ======================================================== -->
+    <div id="hongguoLibraryEpisodesModal" class="modal-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 999999; align-items: center; justify-content: center; padding: 20px;">
+        <div class="modal-card" style="width: 100%; max-width: 820px; background: #0f172a; border: 1px solid #334155; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); overflow: hidden; display: flex; flex-direction: column; max-height: 85vh;">
+            <div class="modal-header" style="padding: 14px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 18px;">🎬</span>
+                    <div>
+                        <h3 id="hongguoModalDramaTitle" style="margin: 0; font-size: 15px; font-weight: 700; color: #f8fafc;">Danh Sách Tập Phim Đã Tải</h3>
+                        <div id="hongguoModalDramaPath" style="font-size: 11px; color: #94a3b8; font-family: monospace; max-width: 550px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Thư mục: -</div>
+                    </div>
+                </div>
+                <button type="button" id="btnCloseHongguoEpisodesModal" class="btn-close" style="background: none; border: none; font-size: 20px; color: #94a3b8; cursor: pointer; padding: 4px 8px; line-height: 1;">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 16px 20px; overflow-y: auto; flex: 1;">
+                <div id="hongguoModalEpisodesList" style="display: flex; flex-direction: column; gap: 8px;">
+                    <!-- Danh sách các tập MP4 hiển thị kèm nút 'Chuyển sang Biên tập' và 'Chuyển sang Review phim' -->
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 12px 20px; background: #0f172a; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center;">
+                <span id="hongguoModalEpisodesCount" style="font-size: 12px; color: #94a3b8;">0 tập MP4</span>
+                <button type="button" id="btnHongguoModalClose" class="btn secondary small" style="padding: 6px 16px; border: 1px solid #334155; border-radius: 6px;">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- MODAL XEM TRƯỚC VIDEO TẬP PHIM HỒNG QUẢ                   -->
+    <!-- ======================================================== -->
+    <div id="hongguoVideoPreviewModal" class="modal-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 999999; align-items: center; justify-content: center; padding: 20px;">
+        <div class="modal-card" style="width: 100%; max-width: 720px; background: #0f172a; border: 1px solid #334155; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); overflow: hidden; display: flex; flex-direction: column;">
+            <div class="modal-header" style="padding: 14px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 18px;">▶️</span>
+                    <h3 id="hongguoPreviewTitle" style="margin: 0; font-size: 15px; font-weight: 700; color: #f8fafc;">Xem Trước Video</h3>
+                </div>
+                <button type="button" id="btnCloseHongguoPreviewModal" class="btn-close" style="background: none; border: none; font-size: 20px; color: #94a3b8; cursor: pointer; padding: 4px 8px; line-height: 1;">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 16px 20px; background: #000; display: flex; justify-content: center; align-items: center;">
+                <video id="hongguoVideoPreviewPlayer" controls style="max-width: 100%; max-height: 60vh; border-radius: 6px;"></video>
+            </div>
+            <div class="modal-footer" style="padding: 12px 20px; background: #0f172a; border-top: 1px solid #1e293b; display: flex; justify-content: flex-end; gap: 10px; align-items: center;">
+                <button type="button" id="btnPreviewModalToEditor" class="btn primary small" style="padding: 6px 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+                    <span>✂️</span><span>Nạp Sang Biên Tập</span>
+                </button>
+                <button type="button" id="btnPreviewModalToReview" class="btn primary-cyan small" style="padding: 6px 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+                    <span>🎙️</span><span>Nạp Sang Review Phim</span>
+                </button>
+                <button type="button" id="btnPreviewModalClose" class="btn secondary small" style="padding: 6px 16px; border: 1px solid #334155; border-radius: 6px;">Đóng</button>
             </div>
         </div>
     </div>

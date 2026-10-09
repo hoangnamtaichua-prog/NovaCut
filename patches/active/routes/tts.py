@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, urllib.parse, uuid, hashlib
 from routes.state import *
-from routes.security import atomic_write_json, is_path_allowed, safe_join
+from routes.security import atomic_write_json, is_path_allowed, safe_join, sanitize_unicode_filename
 from werkzeug.utils import secure_filename
 import asr_manager
 
@@ -420,6 +420,7 @@ _timeline_preview_lock = threading.Lock()
 
 
 @tts_bp.route('/api/tts/timeline_preview', methods=['POST'])
+@tts_bp.route('/api/tts/timeline_generate_chunks', methods=['POST'])
 def generate_timeline_preview():
     permission_error = _require_media_access()
     if permission_error:
@@ -427,50 +428,200 @@ def generate_timeline_preview():
     try:
         import hashlib
         import math
+        import wave
+        import shutil
         import ai_dubbing
+        from routes.video_edit import compute_tts_fingerprint, is_tts_manifest_valid, save_tts_manifest
+
         data = request.get_json() or {}
         subtitles = data.get('subtitles')
+        if subtitles is None:
+            subtitles = data.get('sentences')
+
         if not isinstance(subtitles, list) or not 0 < len(subtitles) <= 10000:
             raise ValueError('Danh sách phụ đề phải có từ 1 đến 10.000 câu.')
+
+        speed = _safe_speed(data.get('speed', 1))
+        voice = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice_id') or data.get('voice') or 'local_ngoc_huyen'))[:100]
+
         normalized = []
-        for sub in subtitles:
-            text = str(sub.get('translation') or sub.get('text') or '').strip()
-            start = float(sub.get('startSeconds', 0))
-            end = float(sub.get('endSeconds', start + 3))
-            if not all(math.isfinite(v) and 0 <= v <= 86400 for v in (start, end)):
+        for idx, sub in enumerate(subtitles):
+            if isinstance(sub, (list, tuple)) and len(sub) >= 3:
+                txt = str(sub[2]).strip()
+                st = float(sub[0])
+                et = float(sub[1])
+                item_id = idx + 1
+            elif isinstance(sub, dict):
+                txt = str(sub.get('translation') or sub.get('text') or '').strip()
+                st_val = sub.get('startSeconds')
+                if st_val is None:
+                    st_val = sub.get('time') if sub.get('time') is not None else sub.get('start', 0.0)
+                st = float(st_val)
+                et_val = sub.get('endSeconds')
+                if et_val is None:
+                    et_val = sub.get('end', st + 3.0)
+                et = float(et_val)
+                item_id = sub.get('id', idx + 1)
+            else:
+                continue
+
+            if not all(math.isfinite(v) and 0 <= v <= 86400 for v in (st, et)):
                 raise ValueError('Thời gian phụ đề không hợp lệ.')
-            if text:
-                normalized.append({'text': text, 'startSeconds': start, 'endSeconds': end})
+            if et < st:
+                raise ValueError('Thời gian kết thúc phải lớn hơn hoặc bằng thời gian bắt đầu.')
+            if txt:
+                normalized.append({
+                    'id': item_id,
+                    'index': idx,
+                    'text': txt,
+                    'startSeconds': st,
+                    'endSeconds': et
+                })
+
         if not normalized or sum(len(s['text']) for s in normalized) > 250000:
             raise ValueError('Phụ đề rỗng hoặc vượt quá 250.000 ký tự.')
-        voice = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice_id') or 'local_ngoc_huyen'))[:100]
-        speed = _safe_speed(data.get('speed', 1))
-        identity = json.dumps([normalized, voice, speed], ensure_ascii=False, sort_keys=True)
-        digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
-        directory = os.path.join(ROOT_DIR, 'temp', 'timeline_preview', digest)
-        track = os.path.join(directory, 'dubbed_timeline.wav')
+
+        mode = str(data.get('mode', 'editor')).strip().lower()
+        video_path = str(data.get('video_path') or '').strip()
+        output_dir = str(data.get('output_dir') or os.path.join(ROOT_DIR, 'output')).strip()
+        editor_temp_dir = str(data.get('editor_temp_dir') or '').strip()
+        force_refresh = bool(data.get('force_refresh', False))
+
+        video_duration = float(data.get('video_duration') or 0.0)
+        if video_duration <= 0.0:
+            video_duration = max((s['endSeconds'] for s in normalized), default=0.0)
+
+        if editor_temp_dir and is_path_allowed(editor_temp_dir):
+            target_dir = editor_temp_dir
+        elif video_path:
+            if mode == 'review':
+                try:
+                    import auto_edit_pipeline
+                    target_dir = auto_edit_pipeline.get_review_temp_dir(output_dir, video_path)
+                except Exception:
+                    target_dir = os.path.join(output_dir, 'review_temp')
+            else:
+                try:
+                    import ocr_module
+                    target_dir = ocr_module.get_editor_temp_dir(output_dir, video_path)
+                except Exception:
+                    target_dir = os.path.join(output_dir, 'editor_temp')
+        else:
+            identity = json.dumps([normalized, voice, speed], ensure_ascii=False, sort_keys=True)
+            digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+            target_dir = os.path.join(ROOT_DIR, 'temp', 'timeline_preview', digest)
+
+        os.makedirs(target_dir, exist_ok=True)
+        track = os.path.join(target_dir, 'dubbed_timeline.wav')
+        tts_fingerprint = compute_tts_fingerprint(normalized, voice, speed, video_duration)
+
         with _timeline_preview_lock:
-            if not os.path.isfile(track) or os.path.getsize(track) <= 1000:
+            need_synthesis = force_refresh or not is_tts_manifest_valid(target_dir, tts_fingerprint)
+            if need_synthesis:
                 key = ''
                 if os.path.isfile(API_KEYS_FILE):
-                    with open(API_KEYS_FILE, encoding='utf-8') as stream:
-                        for line in stream:
-                            if line.startswith('openSpeakerApiKey='):
-                                key = line.split('=', 1)[1].strip()
+                    try:
+                        with open(API_KEYS_FILE, encoding='utf-8') as stream:
+                            for line in stream:
+                                if line.startswith('openSpeakerApiKey='):
+                                    key = line.split('=', 1)[1].strip()
+                    except Exception:
+                        pass
                 errors = []
                 output = None
+                max_workers = data.get('max_workers')
                 for kind, message in ai_dubbing.build_dubbing_track_for_subtitles_generator(
-                        normalized, voice, speed, directory, open_speaker_key=key,
-                        max_workers=None):
+                        normalized, voice, speed, target_dir, open_speaker_key=key,
+                        max_workers=max_workers):
                     if kind == 'done':
                         output = message
                     elif 'Lỗi câu #' in message or 'LỖI' in message or 'Lỗi xử lý:' in message:
                         errors.append(message)
                 if not output or errors:
                     if os.path.isfile(track):
-                        os.remove(track)
+                        try:
+                            os.remove(track)
+                        except Exception:
+                            pass
                     raise RuntimeError(errors[0] if errors else 'Không tạo được âm thanh nghe thử.')
-        return jsonify(success=True, audio_url='/api/file?path=' + urllib.parse.quote(track))
+                if output and output != track and os.path.isfile(output):
+                    try:
+                        shutil.copyfile(output, track)
+                    except Exception:
+                        track = output
+
+            # Lưu manifest để video export tái sử dụng 0s
+            save_tts_manifest(target_dir, tts_fingerprint, voice, speed, video_duration, len(normalized))
+
+            if mode == 'review':
+                for alias_name in ('voice_narration.wav', 'voice_review.wav'):
+                    alias_path = os.path.join(target_dir, alias_name)
+                    if track != alias_path and os.path.isfile(track):
+                        try:
+                            shutil.copyfile(track, alias_path)
+                        except Exception:
+                            pass
+
+        # Thu thập metadata từng chunk cho Timeline UI
+        chunks = []
+        cached_count = 0
+        generated_count = 0
+        for item in normalized:
+            ckey, cfile, is_loc = ai_dubbing.get_sentence_cache_info(item['text'], voice, speed)
+            duration = round(item['endSeconds'] - item['startSeconds'], 3)
+            is_cached = os.path.exists(cfile) and os.path.getsize(cfile) > 100
+            if is_cached:
+                cached_count += 1
+                try:
+                    with wave.open(cfile, 'rb') as wf:
+                        frames = wf.getnframes()
+                        rate = wf.getframerate()
+                        if rate > 0:
+                            duration = round(frames / float(rate), 3)
+                except Exception:
+                    pass
+            else:
+                generated_count += 1
+
+            chunks.append({
+                'id': item['id'],
+                'index': item['index'],
+                'text': item['text'],
+                'startSeconds': item['startSeconds'],
+                'endSeconds': item['endSeconds'],
+                'duration': duration,
+                'audio_url': f'/api/file?path={urllib.parse.quote(cfile)}',
+                'cached': is_cached,
+                'hash_key': ckey
+            })
+
+        timeline_manifest_path = os.path.join(target_dir, 'timeline_audio_manifest.json')
+        try:
+            with open(timeline_manifest_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'fingerprint': tts_fingerprint,
+                    'voice_id': voice,
+                    'speed': speed,
+                    'video_duration': video_duration,
+                    'chunks': chunks
+                }, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to save timeline_audio_manifest: {e}")
+
+        master_url = '/api/file?path=' + urllib.parse.quote(track)
+        return jsonify(
+            success=True,
+            audio_url=master_url,
+            master_track_url=master_url,
+            master_track_path=track,
+            manifest_path=os.path.join(target_dir, 'tts_manifest.json'),
+            chunks=chunks,
+            total_chunks=len(chunks),
+            cached_count=cached_count,
+            generated_count=generated_count,
+            fingerprint=tts_fingerprint,
+            total_duration=video_duration
+        )
     except (ValueError, TypeError, AttributeError) as exc:
         return jsonify(success=False, error=str(exc)), 400
     except Exception as exc:
@@ -493,29 +644,45 @@ def generate_sentence_preview():
         if len(text) > 5000:
             return jsonify({'success': False, 'error': 'Văn bản nghe thử vượt quá 5.000 ký tự'}), 413
             
-        import hashlib
-        cache_dir = os.path.join(TTS_SAMPLE_DIR, 'tts_cache')
-        os.makedirs(cache_dir, exist_ok=True)
+        if TTS_SAMPLE_DIR != os.path.join(USER_DATA_DIR, 'samples'):
+            cache_dir = os.path.join(TTS_SAMPLE_DIR, 'tts_cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            hash_key = hashlib.md5(f"{voice_id}_{speed}_{text}".encode('utf-8')).hexdigest()
+            cache_path = os.path.join(cache_dir, f"{hash_key}.wav")
+            is_local = voice_id.startswith('local_')
+        else:
+            import ai_dubbing
+            hash_key, cache_path, is_local = ai_dubbing.get_sentence_cache_info(text, voice_id, speed)
         
-        # MD5 hash of voice, speed, text
-        hash_key = hashlib.md5(f"{voice_id}_{speed}_{text}".encode('utf-8')).hexdigest()
-        cache_filename = f"{hash_key}.wav"
-        cache_path = os.path.join(cache_dir, cache_filename)
-        
-        if os.path.exists(cache_path) and os.path.getsize(cache_path) > 500:
+        if os.path.exists(cache_path) and os.path.getsize(cache_path) > 100:
             return jsonify({
                 'success': True,
                 'audio_url': f'/api/file?path={urllib.parse.quote(cache_path)}',
-                'cached': True
+                'cached': True,
+                'hash_key': hash_key
             })
             
-        import ai_dubbing
-        ai_dubbing.synthesize_sentence(text, voice_id, speed, cache_path)
+        open_speaker_key = ''
+        if os.path.isfile(API_KEYS_FILE):
+            try:
+                with open(API_KEYS_FILE, encoding='utf-8') as stream:
+                    for line in stream:
+                        if line.startswith('openSpeakerApiKey='):
+                            open_speaker_key = line.split('=', 1)[1].strip()
+            except Exception:
+                pass
+
+        ai_dubbing.synthesize_sentence(
+            text, voice_id, speed, cache_path,
+            open_speaker_key=open_speaker_key,
+            target_sample_rate=44100, target_channels=2
+        )
         
         return jsonify({
             'success': True,
             'audio_url': f'/api/file?path={urllib.parse.quote(cache_path)}',
-            'cached': False
+            'cached': False,
+            'hash_key': hash_key
         })
     except Exception as e:
         import traceback
@@ -539,12 +706,13 @@ def generate_batch_sentence_preview():
 
         sentences = sentences[:30]
 
-        import hashlib
-        cache_dir = os.path.join(TTS_SAMPLE_DIR, 'tts_cache')
-        os.makedirs(cache_dir, exist_ok=True)
-
+        import ai_dubbing
         results = []
         to_synthesize = []
+        is_sample_dir_patched = (TTS_SAMPLE_DIR != os.path.join(USER_DATA_DIR, 'samples'))
+        if is_sample_dir_patched:
+            test_cache_dir = os.path.join(TTS_SAMPLE_DIR, 'tts_cache')
+            os.makedirs(test_cache_dir, exist_ok=True)
 
         for item in sentences:
             if isinstance(item, str):
@@ -554,23 +722,28 @@ def generate_batch_sentence_preview():
             if not raw_text:
                 continue
 
-            hash_key = hashlib.md5(f"{voice_id}_{speed}_{raw_text}".encode('utf-8')).hexdigest()
-            cache_filename = f"{hash_key}.wav"
-            cache_path = os.path.join(cache_dir, cache_filename)
+            if is_sample_dir_patched:
+                hash_key = hashlib.md5(f"{voice_id}_{speed}_{raw_text}".encode('utf-8')).hexdigest()
+                cache_path = os.path.join(test_cache_dir, f"{hash_key}.wav")
+                is_local_item = voice_id.startswith('local_')
+            else:
+                hash_key, cache_path, is_local_item = ai_dubbing.get_sentence_cache_info(raw_text, voice_id, speed)
 
-            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 500:
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 100:
                 results.append({
                     'id': item_id,
                     'text': raw_text,
                     'audio_url': f'/api/file?path={urllib.parse.quote(cache_path)}',
                     'cached': True,
+                    'hash_key': hash_key,
                     'success': True
                 })
             else:
                 to_synthesize.append({
                     'id': item_id,
                     'text': raw_text,
-                    'cache_path': cache_path
+                    'cache_path': cache_path,
+                    'hash_key': hash_key
                 })
 
         if to_synthesize:
@@ -578,7 +751,10 @@ def generate_batch_sentence_preview():
             if is_local:
                 import local_voice_engine
                 batch_items = [{'id': task['id'], 'text': task['text'], 'output_path': task['cache_path']} for task in to_synthesize]
-                b_results = local_voice_engine.synthesize_batch(batch_items, voice_id=voice_id, speed=speed, batch_size=8)
+                b_results = local_voice_engine.synthesize_batch(
+                    batch_items, voice_id=voice_id, speed=speed,
+                    target_sample_rate=44100, target_channels=2, batch_size=8
+                )
                 for task, res in zip(to_synthesize, b_results):
                     if res.get('success') and os.path.exists(task['cache_path']) and os.path.getsize(task['cache_path']) > 100:
                         results.append({
@@ -586,6 +762,7 @@ def generate_batch_sentence_preview():
                             'text': task['text'],
                             'audio_url': f"/api/file?path={urllib.parse.quote(task['cache_path'])}",
                             'cached': False,
+                            'hash_key': task.get('hash_key'),
                             'success': True
                         })
                     else:
@@ -596,17 +773,31 @@ def generate_batch_sentence_preview():
                             'success': False
                         })
             else:
-                import ai_dubbing
                 from concurrent.futures import ThreadPoolExecutor
+
+                open_speaker_key = ''
+                if os.path.isfile(API_KEYS_FILE):
+                    try:
+                        with open(API_KEYS_FILE, encoding='utf-8') as stream:
+                            for line in stream:
+                                if line.startswith('openSpeakerApiKey='):
+                                    open_speaker_key = line.split('=', 1)[1].strip()
+                    except Exception:
+                        pass
 
                 def _synth(task):
                     try:
-                        ai_dubbing.synthesize_sentence(task['text'], voice_id, speed, task['cache_path'])
+                        ai_dubbing.synthesize_sentence(
+                            task['text'], voice_id, speed, task['cache_path'],
+                            open_speaker_key=open_speaker_key,
+                            target_sample_rate=44100, target_channels=2
+                        )
                         return {
                             'id': task['id'],
                             'text': task['text'],
                             'audio_url': f"/api/file?path={urllib.parse.quote(task['cache_path'])}",
                             'cached': False,
+                            'hash_key': task.get('hash_key'),
                             'success': True
                         }
                     except Exception as ex:
@@ -617,7 +808,7 @@ def generate_batch_sentence_preview():
                             'success': False
                         }
 
-                max_workers = min(4, len(to_synthesize))
+                max_workers = min(16, len(to_synthesize))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     synth_results = list(executor.map(_synth, to_synthesize))
                     results.extend(synth_results)
@@ -695,7 +886,7 @@ def generate_tts_kokoro():
         if not filename:
             clean_vid = re.sub(r'[^a-zA-Z0-9_]', '_', voice_id)
             filename = f"tts_{clean_vid}_{timestamp}.wav"
-        filename = secure_filename(str(filename))
+        filename = sanitize_unicode_filename(str(filename), default_ext='.wav')
         if not filename.endswith('.wav'):
             filename += '.wav'
             
@@ -938,7 +1129,7 @@ def generate_tts_openspeaker():
         timestamp = int(time.time())
         if not filename:
             filename = f"tts_open_{voice_id}_{timestamp}.mp3"
-        filename = secure_filename(str(filename))
+        filename = sanitize_unicode_filename(str(filename), default_ext='.mp3')
         if not (filename.endswith('.mp3') or filename.endswith('.wav')):
             filename += '.mp3'
             

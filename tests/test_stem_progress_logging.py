@@ -5,7 +5,7 @@ import auto_edit_pipeline
 class TestStemSeparationProgressLogging(unittest.TestCase):
     @patch('audio_separator.separate_audio_stems')
     def test_run_audio_separator_with_progress_emits_logs(self, mock_separate):
-        def fake_separate(input_media_path, output_dir, mode, device, progress_cb, logger_cb, cancel_check_cb):
+        def fake_separate(input_media_path, output_dir, mode, device, progress_cb, logger_cb, cancel_check_cb, **kwargs):
             # Simulate MDX progress calls
             progress_cb(20, "Đang tách âm AI (20%): đoạn 1/10 [còn ~100s]")
             progress_cb(50, "Đang tách âm AI (50%): đoạn 5/10 [còn ~50s]")

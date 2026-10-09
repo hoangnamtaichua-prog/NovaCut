@@ -6,6 +6,7 @@ import { initVideoStudioSuite, videoStudioInstances } from './js/features/video_
 import { initExportHistoryModule, loadExportHistory } from './js/features/export_history.js';
 import { initSocialPublisher, loadSocialProfiles, loadSocialHistory } from './js/features/social_publisher.js';
 import './js/features/comic_review.js';
+import { initHongguoModule, onHongguoTabActivated } from './js/features/hongguo.js';
 import { appendLog, showToast, showConfirmModal, showAlertModal, showPromptModal, formatTimeSec, parseTimeToSeconds, formatSrtTimestamp, formatDurationStr, escapeHtml, safeHttpUrl, timeNow } from './js/utils.js';
 
 export let currentLicenseState = {
@@ -160,6 +161,17 @@ mainNavTabs.forEach(tab => {
             }
         }
 
+        // Kiểm tra phân quyền Tải Phim Hồng Quả (Hongguo Downloader)
+        if (targetId === 'viewHongguo') {
+            if (typeof checkFeaturePermission === 'function') {
+                if (!checkFeaturePermission('hongguo_downloader', 'Tải Phim Hồng Quả')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+            }
+        }
+
         // Remove active from all tabs
         mainNavTabs.forEach(t => t.classList.remove('active'));
         // Add active to clicked tab
@@ -193,7 +205,7 @@ mainNavTabs.forEach(tab => {
         const targetView = document.getElementById(targetId);
         if (targetView) {
             targetView.classList.add('active');
-            targetView.style.display = (targetId === 'viewEditor' || targetId === 'viewBatchEditor' || targetId === 'viewReview' || targetId === 'viewDownload' || targetId === 'viewCapCut' || targetId === 'viewCloneVoice' || targetId === 'viewExportHistory' || targetId === 'viewSocialPublish') ? 'block' : 'flex';
+            targetView.style.display = (targetId === 'viewEditor' || targetId === 'viewBatchEditor' || targetId === 'viewReview' || targetId === 'viewDownload' || targetId === 'viewCapCut' || targetId === 'viewCloneVoice' || targetId === 'viewExportHistory' || targetId === 'viewSocialPublish' || targetId === 'viewHongguo') ? 'block' : 'flex';
             
             // Special case for Editor
             if (targetId === 'viewEditor') {
@@ -233,6 +245,14 @@ mainNavTabs.forEach(tab => {
             if (targetId === 'viewReview') {
                 if (typeof window.renderReviewLogo === 'function') {
                     window.renderReviewLogo();
+                }
+            }
+            // Special case for Hongguo Downloader
+            if (targetId === 'viewHongguo') {
+                if (typeof onHongguoTabActivated === 'function') {
+                    onHongguoTabActivated();
+                } else if (typeof window.onHongguoTabActivated === 'function') {
+                    window.onHongguoTabActivated();
                 }
             }
         }
@@ -432,10 +452,11 @@ if (btnRunStemSeparationEditor) {
         const hasPerm = await checkFeaturePermission('can_access_editor', 'Tách Âm Thanh AI & Lọc Giọng Thoại');
         if (!hasPerm) return;
 
-        const mode = document.getElementById('editorStemMode')?.value || 'mdx_net_hq4';
+        const mode = document.getElementById('editorStemMode')?.value || 'dsp_turbo';
         const device = document.getElementById('editorStemDevice')?.value || 'auto';
         const removeVocals = document.getElementById('editorRemoveVocals')?.checked !== false;
         const keepSfx = document.getElementById('editorKeepSfx')?.checked !== false;
+        const separateBgm = document.getElementById('editorSeparateBgm')?.checked !== false;
 
         const progressBox = document.getElementById('editorStemProgressBox');
         const progressBarFill = document.getElementById('editorStemProgressBarFill');
@@ -472,7 +493,10 @@ if (btnRunStemSeparationEditor) {
                     mode: mode,
                     device: device,
                     remove_vocals: removeVocals,
-                    keep_sfx: keepSfx
+                    keep_sfx: keepSfx,
+                    separate_bgm: separateBgm,
+                    keep_bgm: separateBgm,
+                    remove_bgm: !separateBgm
                 })
             });
 
@@ -523,21 +547,58 @@ if (btnRunStemSeparationEditor) {
                             const player = document.getElementById('editorStemAudioPlayer');
                             const btnApplyStem = document.getElementById('btnApplyStemToEditedPreview');
                             const btnRemoveStem = document.getElementById('btnRemoveStemFromEditedPreview');
-                            if (resultBox && player && pData.result && pData.result.cleaned_url) {
-                                window._appliedStemAudioUrl = pData.result.cleaned_url;
-                                window._appliedStemCleanedPath = pData.result.cleaned_path;
+                            if (resultBox && player && pData.result && (pData.result.cleaned_url || pData.result.instrumental_url || pData.result.bgm_url)) {
+                                window._stemSeparationResult = pData.result;
+                                window._appliedStemAudioUrl = pData.result.cleaned_url || pData.result.instrumental_url;
+                                window._appliedStemCleanedPath = pData.result.cleaned_path || pData.result.instrumental_path;
                                 resultBox.style.display = 'block';
-                                player.src = pData.result.cleaned_url;
-                                if (window._syncedStemAudioPlayer) {
-                                    window._syncedStemAudioPlayer.src = pData.result.cleaned_url;
-                                    window._syncedStemAudioPlayer.load();
+
+                                const btnClean = document.getElementById('btnStemTrackClean');
+                                const btnBgm = document.getElementById('btnStemTrackBgm');
+                                const btnVocal = document.getElementById('btnStemTrackVocal');
+
+                                const setTrackActive = (btnActive, url, path) => {
+                                    [btnClean, btnBgm, btnVocal].forEach(b => {
+                                        if (b) {
+                                            b.style.borderColor = '#334155';
+                                            b.style.color = '#94a3b8';
+                                            b.style.background = '#1e293b';
+                                        }
+                                    });
+                                    if (btnActive) {
+                                        btnActive.style.borderColor = '#38bdf8';
+                                        btnActive.style.color = '#38bdf8';
+                                        btnActive.style.background = 'rgba(56, 189, 248, 0.2)';
+                                    }
+                                    if (player && url) {
+                                        player.src = url;
+                                        player.load();
+                                        player.play().catch(() => {});
+                                    }
+                                    window._appliedStemAudioUrl = url;
+                                    window._appliedStemCleanedPath = path;
+                                    if (window._syncedStemAudioPlayer && url) {
+                                        window._syncedStemAudioPlayer.src = url;
+                                        window._syncedStemAudioPlayer.load();
+                                    }
+                                    if (btnApplyStem) {
+                                        btnApplyStem.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
+                                        btnApplyStem.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+                                    }
+                                    if (btnRemoveStem) btnRemoveStem.style.display = 'none';
+                                };
+
+                                if (btnClean) {
+                                    btnClean.onclick = () => setTrackActive(btnClean, pData.result.cleaned_url || pData.result.instrumental_url, pData.result.cleaned_path || pData.result.instrumental_path);
                                 }
-                                if (btnApplyStem) {
-                                    btnApplyStem.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
-                                    btnApplyStem.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+                                if (btnBgm) {
+                                    btnBgm.onclick = () => setTrackActive(btnBgm, pData.result.bgm_url || pData.result.instrumental_url, pData.result.bgm_path || pData.result.instrumental_path);
                                 }
-                                if (btnRemoveStem) btnRemoveStem.style.display = 'none';
-                                player.play().catch(() => {});
+                                if (btnVocal) {
+                                    btnVocal.onclick = () => setTrackActive(btnVocal, pData.result.vocals_url, pData.result.vocals_path);
+                                }
+
+                                setTrackActive(btnClean, pData.result.cleaned_url || pData.result.instrumental_url, pData.result.cleaned_path || pData.result.instrumental_path);
                             }
                             resolve();
                         } else if (pData.status === 'cancelled') {
@@ -1090,10 +1151,13 @@ window.buildEditorExportConfig = function(overrides = {}) {
         remove_original_vocals: shouldRemoveVocals,
         stem_separation: {
             enabled: stemSepMasterEnabled,
-            mode: overrides.dubbing?.stem_separation?.mode || document.getElementById('editorStemMode')?.value || 'mdx_net_hq4',
+            mode: overrides.dubbing?.stem_separation?.mode || document.getElementById('editorStemMode')?.value || 'dsp_turbo',
             device: overrides.dubbing?.stem_separation?.device || document.getElementById('editorStemDevice')?.value || 'auto',
             remove_vocals: shouldRemoveVocals,
             keep_sfx: overrides.dubbing?.stem_separation?.keep_sfx ?? (document.getElementById('editorKeepSfx')?.checked ?? true),
+            separate_bgm: overrides.dubbing?.stem_separation?.separate_bgm ?? (document.getElementById('editorSeparateBgm')?.checked ?? true),
+            keep_bgm: overrides.dubbing?.stem_separation?.keep_bgm ?? (document.getElementById('editorSeparateBgm')?.checked ?? true),
+            remove_bgm: overrides.dubbing?.stem_separation?.remove_bgm ?? (!(document.getElementById('editorSeparateBgm')?.checked ?? true)),
             precomputed_cleaned_path: overrides.dubbing?.stem_separation?.precomputed_cleaned_path || ((window._isStemAudioAppliedToEdited && window._appliedStemCleanedPath) ? window._appliedStemCleanedPath : '')
         },
         manual_audio: overrides.dubbing?.manual_audio || document.getElementById('manualAudioPath')?.value || '',
@@ -1214,7 +1278,16 @@ window.buildEditorExportConfig = function(overrides = {}) {
             size: overrides.delogo?.size || document.getElementById('delogoSize')?.value || 'medium',
             method: overrides.delogo?.method || document.getElementById('delogoMethod')?.value || 'delogo'
         },
-        custom_overlay_layers: overrides.custom_overlay_layers || (Array.isArray(window.customOverlayLayers) ? window.customOverlayLayers : []).filter(l => l.visible !== false)
+        custom_overlay_layers: overrides.custom_overlay_layers || (Array.isArray(window.customOverlayLayers) ? window.customOverlayLayers : []).filter(l => l.visible !== false),
+        bgm: {
+            enabled: Boolean(overrides.bgm?.enabled ?? document.getElementById('editorBgmEnabled')?.checked),
+            source: overrides.bgm?.source || window._editorBgmSourceMode || 'preset',
+            preset: overrides.bgm?.preset || document.getElementById('editorBgmPresetSelect')?.value || 'random',
+            path: overrides.bgm?.path || (window._editorBgmSourceMode === 'custom' ? window._editorBgmCustomPath : '') || '',
+            volume: parseSafeNum(overrides.bgm?.volume ?? document.getElementById('editorBgmVol')?.value, 20),
+            ducking: Boolean(overrides.bgm?.ducking ?? (document.getElementById('editorBgmDucking')?.checked ?? true)),
+            loop: Boolean(overrides.bgm?.loop ?? (document.getElementById('editorBgmLoop')?.checked ?? true))
+        }
     };
 
     return config;
@@ -9820,52 +9893,38 @@ if (btnMergeSelectedSrt) {
         const lastIdx = selectedIndices[selectedIndices.length - 1];
         const selectedSubs = srtData.slice(firstIdx, lastIdx + 1);
 
-        const startSec = selectedSubs[0].startSeconds;
-        const endSec = selectedSubs[selectedSubs.length - 1].endSeconds;
+        const firstSub = selectedSubs[0];
+        const lastSub = selectedSubs[selectedSubs.length - 1];
+        const startSec = firstSub.startSeconds;
+        const endSec = typeof lastSub.endSeconds === 'number' ? Math.max(firstSub.endSeconds || 0, lastSub.endSeconds) : (firstSub.endSeconds || 0);
 
-        // Nối nội dung text
-        const mergedText = selectedSubs
-            .map(s => (s.text || s.original_text || '').trim())
-            .filter(Boolean)
-            .join(' ');
-
-        // Nối bản dịch (nếu có)
-        const mergedTranslation = selectedSubs
-            .map(s => (s.translation || '').trim())
-            .filter(Boolean)
-            .join(' ');
-
-        // Định dạng thời gian
+        // Định dạng thời gian gộp: lấy từ thời điểm bắt đầu của dòng đầu đến kết thúc của dòng cuối
         const startTimeStr = formatSrtTimestamp(startSec).replace(',', '.');
         const endTimeStr = formatSrtTimestamp(endSec).replace(',', '.');
         const timeStr = `${startTimeStr} - ${endTimeStr}`;
 
-        // Gộp aiBox nếu có
-        let mergedAiBox = null;
-        const subsWithAiBox = selectedSubs.filter(s => s.aiBox && typeof s.aiBox.x_pct === 'number');
-        if (subsWithAiBox.length > 0) {
-            const minX = Math.min(...subsWithAiBox.map(s => s.aiBox.x_pct));
-            const maxXPlusW = Math.max(...subsWithAiBox.map(s => s.aiBox.x_pct + (s.aiBox.w_pct || 0)));
-            const minY = Math.min(...subsWithAiBox.map(s => s.aiBox.y_pct || 81.5));
-            const maxH = Math.max(...subsWithAiBox.map(s => s.aiBox.h_pct || 9.5));
-            mergedAiBox = {
-                x_pct: Math.round(minX * 10) / 10,
-                y_pct: Math.round(minY * 10) / 10,
-                w_pct: Math.round((maxXPlusW - minX) * 10) / 10,
-                h_pct: Math.round(maxH * 10) / 10
-            };
-        }
+        // Phụ đề (text, original_text, translation) giữ nguyên của dòng đầu tiên
+        const primaryText = firstSub.text || firstSub.original_text || '';
+        const primaryOriginalText = firstSub.original_text || firstSub.text || '';
+        // Ưu tiên bản dịch của dòng đầu tiên; nếu dòng đầu chưa có bản dịch thì lấy bản dịch của dòng có sẵn tiếp theo
+        const primaryTranslation = (firstSub.translation && firstSub.translation.trim())
+            ? firstSub.translation
+            : (selectedSubs.find(s => s.translation && s.translation.trim())?.translation || '');
+
+        // aiBox giữ nguyên của dòng đầu tiên (nếu dòng đầu không có thì lấy của dòng có aiBox)
+        const primaryAiBox = firstSub.aiBox || (selectedSubs.find(s => s.aiBox)?.aiBox || null);
 
         const mergedSub = {
+            ...firstSub,
             id: String(firstIdx + 1),
             time: timeStr,
             startSeconds: startSec,
             endSeconds: endSec,
-            text: mergedText,
-            original_text: mergedText,
-            translation: mergedTranslation,
+            text: primaryText,
+            original_text: primaryOriginalText,
+            translation: primaryTranslation,
             selected: true,
-            aiBox: mergedAiBox
+            aiBox: primaryAiBox
         };
 
         // Thay thế các dòng được chọn bằng 1 dòng đã gộp
@@ -9883,7 +9942,11 @@ if (btnMergeSelectedSrt) {
             updateDynamicBlurOverlayVisibility();
         }
 
-        showToast(`🎉 Đã gộp thành công ${selectedIndices.length} dòng phụ đề thành 1 câu!`, 'success');
+        if (typeof triggerAutoSaveEditorCache === 'function') {
+            triggerAutoSaveEditorCache();
+        }
+
+        showToast(`🎉 Đã gộp mốc thời gian ${selectedIndices.length} dòng phụ đề (giữ nguyên phụ đề câu đầu)!`, 'success');
     });
 }
 
@@ -11855,41 +11918,46 @@ if (btnBgmSourcePreset && btnBgmSourceCustom && panelBgmPreset && panelBgmCustom
 
 // Load Preset BGM List from Server
 async function loadBgmPresetList() {
-    if (!reviewBgmPresetSelect) return;
     try {
         const res = await fetch('/api/bgm/list');
         if (!res.ok) return;
         const data = await res.json();
         const trackList = Array.isArray(data.tracks) ? data.tracks : (Array.isArray(data.files) ? data.files : []);
         if (trackList.length > 0) {
-            const currentVal = reviewBgmPresetSelect.value || 'random';
-            reviewBgmPresetSelect.innerHTML = '<option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>';
-            
-            const safeGroup = document.createElement('optgroup');
-            safeGroup.label = '🛡️ AN TOÀN YOUTUBE (NO-COPYRIGHT)';
-            const normalGroup = document.createElement('optgroup');
-            normalGroup.label = '🎬 NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC';
-
-            trackList.forEach(t => {
-                if (t.type === 'custom') return; // Custom uploads handled in custom tab
-                const opt = document.createElement('option');
-                opt.value = t.filename;
-                const cleanName = t.name || t.title || t.filename;
-                opt.textContent = `${cleanName}${t.genre ? ` (${t.genre})` : ''}`;
+            const populateSelect = (selectEl) => {
+                if (!selectEl) return;
+                const currentVal = selectEl.value || 'random';
+                selectEl.innerHTML = '<option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>';
                 
-                if (t.is_safe || (t.filename && t.filename.toLowerCase().includes('kevin macleod'))) {
-                    safeGroup.appendChild(opt);
-                } else {
-                    normalGroup.appendChild(opt);
+                const safeGroup = document.createElement('optgroup');
+                safeGroup.label = '🛡️ AN TOÀN YOUTUBE (NO-COPYRIGHT)';
+                const normalGroup = document.createElement('optgroup');
+                normalGroup.label = '🎬 NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC';
+
+                trackList.forEach(t => {
+                    if (t.type === 'custom') return; // Custom uploads handled in custom tab
+                    const opt = document.createElement('option');
+                    opt.value = t.filename;
+                    const cleanName = t.name || t.title || t.filename;
+                    opt.textContent = `${cleanName}${t.genre ? ` (${t.genre})` : ''}`;
+                    
+                    if (t.is_safe || (t.filename && t.filename.toLowerCase().includes('kevin macleod'))) {
+                        safeGroup.appendChild(opt);
+                    } else {
+                        normalGroup.appendChild(opt);
+                    }
+                });
+
+                if (safeGroup.children.length > 0) selectEl.appendChild(safeGroup);
+                if (normalGroup.children.length > 0) selectEl.appendChild(normalGroup);
+
+                if (trackList.some(t => t.filename === currentVal)) {
+                    selectEl.value = currentVal;
                 }
-            });
+            };
 
-            if (safeGroup.children.length > 0) reviewBgmPresetSelect.appendChild(safeGroup);
-            if (normalGroup.children.length > 0) reviewBgmPresetSelect.appendChild(normalGroup);
-
-            if (trackList.some(t => t.filename === currentVal)) {
-                reviewBgmPresetSelect.value = currentVal;
-            }
+            populateSelect(reviewBgmPresetSelect);
+            populateSelect(document.getElementById('editorBgmPresetSelect'));
         }
     } catch (err) {
         console.error('Failed to load BGM list:', err);
@@ -12022,6 +12090,225 @@ if (btnRemoveCustomBgm) {
             btnPreviewCustomBgm.textContent = '▶️';
         }
         btnRemoveCustomBgm.style.display = 'none';
+        showToast('Đã hủy chọn nhạc nền riêng', 'info');
+    });
+}
+
+// ==========================================
+// EDITOR BGM CONTROLS (BIÊN TẬP PHIM)
+// ==========================================
+const editorBgmEnabled = document.getElementById('editorBgmEnabled');
+const editorBgmConfig = document.getElementById('editorBgmConfig');
+const editorBgmVol = document.getElementById('editorBgmVol');
+const editorBgmVolVal = document.getElementById('editorBgmVolVal');
+const btnEditorBgmSourcePreset = document.getElementById('btnEditorBgmSourcePreset');
+const btnEditorBgmSourceCustom = document.getElementById('btnEditorBgmSourceCustom');
+const panelEditorBgmPreset = document.getElementById('panelEditorBgmPreset');
+const panelEditorBgmCustom = document.getElementById('panelEditorBgmCustom');
+const editorBgmPresetSelect = document.getElementById('editorBgmPresetSelect');
+const btnEditorPreviewBgm = document.getElementById('btnEditorPreviewBgm');
+const btnEditorUploadBgm = document.getElementById('btnEditorUploadBgm');
+const editorBgmFileInput = document.getElementById('editorBgmFileInput');
+const editorBgmCustomFileName = document.getElementById('editorBgmCustomFileName');
+const btnEditorPreviewCustomBgm = document.getElementById('btnEditorPreviewCustomBgm');
+const btnEditorRemoveCustomBgm = document.getElementById('btnEditorRemoveCustomBgm');
+const editorBgmPreviewAudio = document.getElementById('editorBgmPreviewAudio');
+
+window._editorBgmSourceMode = 'preset';
+window._editorBgmCustomPath = '';
+window._editorBgmCustomFilename = '';
+
+if (editorBgmEnabled && editorBgmConfig) {
+    editorBgmEnabled.addEventListener('change', (e) => {
+        editorBgmConfig.style.opacity = e.target.checked ? '1' : '0.4';
+        editorBgmConfig.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+        if (!e.target.checked && editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.pause();
+            if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+            if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+}
+
+if (editorBgmVol && editorBgmVolVal) {
+    editorBgmVol.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        editorBgmVolVal.textContent = val + '%';
+        if (editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.volume = Math.max(0, Math.min(1.0, val / 100));
+        }
+    });
+}
+
+if (btnEditorBgmSourcePreset && btnEditorBgmSourceCustom && panelEditorBgmPreset && panelEditorBgmCustom) {
+    btnEditorBgmSourcePreset.addEventListener('click', () => {
+        window._editorBgmSourceMode = 'preset';
+        btnEditorBgmSourcePreset.classList.add('active');
+        btnEditorBgmSourcePreset.style.borderColor = '#38bdf8';
+        btnEditorBgmSourcePreset.style.color = '#38bdf8';
+        btnEditorBgmSourcePreset.style.background = 'rgba(56, 189, 248, 0.1)';
+        
+        btnEditorBgmSourceCustom.classList.remove('active');
+        btnEditorBgmSourceCustom.style.borderColor = '';
+        btnEditorBgmSourceCustom.style.color = '#94a3b8';
+        btnEditorBgmSourceCustom.style.background = '';
+        
+        panelEditorBgmPreset.style.display = 'flex';
+        panelEditorBgmCustom.style.display = 'none';
+        
+        if (editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.pause();
+            if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+
+    btnEditorBgmSourceCustom.addEventListener('click', () => {
+        window._editorBgmSourceMode = 'custom';
+        btnEditorBgmSourceCustom.classList.add('active');
+        btnEditorBgmSourceCustom.style.borderColor = '#38bdf8';
+        btnEditorBgmSourceCustom.style.color = '#38bdf8';
+        btnEditorBgmSourceCustom.style.background = 'rgba(56, 189, 248, 0.1)';
+        
+        btnEditorBgmSourcePreset.classList.remove('active');
+        btnEditorBgmSourcePreset.style.borderColor = '';
+        btnEditorBgmSourcePreset.style.color = '#94a3b8';
+        btnEditorBgmSourcePreset.style.background = '';
+        
+        panelEditorBgmPreset.style.display = 'none';
+        panelEditorBgmCustom.style.display = 'flex';
+        
+        if (editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.pause();
+            if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+        }
+    });
+}
+
+if (btnEditorPreviewBgm && editorBgmPreviewAudio && editorBgmPresetSelect) {
+    btnEditorPreviewBgm.addEventListener('click', () => {
+        if (!editorBgmPreviewAudio.paused && editorBgmPreviewAudio.dataset.currentType === 'preset') {
+            editorBgmPreviewAudio.pause();
+            btnEditorPreviewBgm.textContent = '▶️';
+            return;
+        }
+
+        let selected = editorBgmPresetSelect.value;
+        if (selected === 'random') {
+            const options = Array.from(editorBgmPresetSelect.options).map(o => o.value).filter(v => v !== 'random');
+            if (options.length > 0) {
+                selected = options[Math.floor(Math.random() * options.length)];
+            } else {
+                showToast('Chưa có file nhạc nền khả dụng để nghe thử', 'warning');
+                return;
+            }
+        }
+
+        editorBgmPreviewAudio.src = `/api/bgm/stream?type=preset&filename=${encodeURIComponent(selected)}&file=${encodeURIComponent(selected)}`;
+        editorBgmPreviewAudio.dataset.currentType = 'preset';
+        editorBgmPreviewAudio.volume = Math.max(0, Math.min(1.0, parseInt(editorBgmVol?.value || 20) / 100));
+        editorBgmPreviewAudio.play().then(() => {
+            btnEditorPreviewBgm.textContent = '⏸️';
+            if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+        }).catch(err => {
+            console.error('Editor Audio play failed:', err);
+            showToast('Không thể phát nhạc nghe thử', 'error');
+        });
+    });
+
+    editorBgmPreviewAudio.addEventListener('ended', () => {
+        if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+        if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+    });
+    editorBgmPreviewAudio.addEventListener('pause', () => {
+        if (editorBgmPreviewAudio.dataset.currentType === 'preset' && btnEditorPreviewBgm) {
+            btnEditorPreviewBgm.textContent = '▶️';
+        } else if (editorBgmPreviewAudio.dataset.currentType === 'custom' && btnEditorPreviewCustomBgm) {
+            btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+}
+
+if (btnEditorUploadBgm && editorBgmFileInput) {
+    btnEditorUploadBgm.addEventListener('click', () => {
+        editorBgmFileInput.click();
+    });
+
+    editorBgmFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('audio_file', file);
+        formData.append('file', file);
+
+        showToast('Đang tải lên nhạc nền cho Biên tập phim...', 'info');
+        try {
+            const res = await fetch('/api/bgm/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (res.ok && (data.status === 'success' || data.success)) {
+                window._editorBgmCustomPath = data.path || data.track?.path;
+                window._editorBgmCustomFilename = data.filename || data.track?.filename;
+                if (editorBgmCustomFileName) {
+                    editorBgmCustomFileName.textContent = `🎵 ${window._editorBgmCustomFilename}`;
+                    editorBgmCustomFileName.style.color = '#38bdf8';
+                }
+                if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.style.display = 'flex';
+                if (btnEditorRemoveCustomBgm) btnEditorRemoveCustomBgm.style.display = 'flex';
+                showToast('Tải lên nhạc nền thành công!', 'success');
+            } else {
+                showToast(data.error || data.message || 'Lỗi khi tải file nhạc lên', 'error');
+            }
+        } catch (err) {
+            console.error('Editor BGM upload failed:', err);
+            showToast('Không thể kết nối máy chủ để tải nhạc', 'error');
+        } finally {
+            editorBgmFileInput.value = '';
+        }
+    });
+}
+
+if (btnEditorPreviewCustomBgm && editorBgmPreviewAudio) {
+    btnEditorPreviewCustomBgm.addEventListener('click', () => {
+        if (!window._editorBgmCustomFilename) return;
+
+        if (!editorBgmPreviewAudio.paused && editorBgmPreviewAudio.dataset.currentType === 'custom') {
+            editorBgmPreviewAudio.pause();
+            btnEditorPreviewCustomBgm.textContent = '▶️';
+            return;
+        }
+
+        editorBgmPreviewAudio.src = `/api/bgm/stream?type=custom&filename=${encodeURIComponent(window._editorBgmCustomFilename)}&file=${encodeURIComponent(window._editorBgmCustomFilename)}`;
+        editorBgmPreviewAudio.dataset.currentType = 'custom';
+        editorBgmPreviewAudio.volume = Math.max(0, Math.min(1.0, parseInt(editorBgmVol?.value || 20) / 100));
+        editorBgmPreviewAudio.play().then(() => {
+            btnEditorPreviewCustomBgm.textContent = '⏸️';
+            if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+        }).catch(err => {
+            console.error('Custom audio play failed:', err);
+            showToast('Không thể phát file nhạc tải lên', 'error');
+        });
+    });
+}
+
+if (btnEditorRemoveCustomBgm) {
+    btnEditorRemoveCustomBgm.addEventListener('click', () => {
+        window._editorBgmCustomPath = '';
+        window._editorBgmCustomFilename = '';
+        if (editorBgmPreviewAudio && editorBgmPreviewAudio.dataset.currentType === 'custom') {
+            editorBgmPreviewAudio.pause();
+        }
+        if (editorBgmCustomFileName) {
+            editorBgmCustomFileName.textContent = 'Chưa chọn file (.mp3, .wav, .m4a)';
+            editorBgmCustomFileName.style.color = '#94a3b8';
+        }
+        if (btnEditorPreviewCustomBgm) {
+            btnEditorPreviewCustomBgm.style.display = 'none';
+            btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+        btnEditorRemoveCustomBgm.style.display = 'none';
         showToast('Đã hủy chọn nhạc nền riêng', 'info');
     });
 }
@@ -13225,7 +13512,10 @@ async function startReviewPipeline({ isScriptOnly = false, continueFromScript = 
             enabled: Boolean(document.getElementById('reviewStemSeparationEnabled')?.checked),
             remove_vocals: document.getElementById('reviewRemoveVocals')?.checked !== false,
             keep_sfx: document.getElementById('reviewKeepSfx')?.checked !== false,
-            mode: document.getElementById('reviewStemMode')?.value || 'mdx_net_hq4',
+            separate_bgm: document.getElementById('reviewSeparateBgm')?.checked !== false,
+            keep_bgm: document.getElementById('reviewSeparateBgm')?.checked !== false,
+            remove_bgm: !(document.getElementById('reviewSeparateBgm')?.checked !== false),
+            mode: document.getElementById('reviewStemMode')?.value || 'dsp_turbo',
             device: document.getElementById('reviewStemDevice')?.value || 'auto'
         },
         output_dir: document.getElementById('reviewOutputFolder')?.value?.trim() || window.currentTtsOutputDir || 'output',
@@ -14924,6 +15214,12 @@ function sendVideoToReview(filePath) {
     }
 
     showToast('Đã nạp video vào Studio Review Phim!', 'success');
+}
+
+if (typeof window !== 'undefined') {
+    window.sendVideoToEditor = sendVideoToEditor;
+    window.sendVideoToReview = sendVideoToReview;
+    window.showToast = showToast;
 }
 
 function openDownloadFileFolder(filePath) {
@@ -19294,7 +19590,439 @@ function setupReviewVideoPlayerController() {
     if (btnReviewPlay) {
         btnReviewPlay.addEventListener('click', () => {
             if (reviewVideoPlayer.paused) {
-    function setupInteractiveReviewLogo() {
+                if (!reviewVideoPlayer.src || reviewVideoPlayer.src === '' || reviewVideoPlayer.src.endsWith('/')) {
+                    const inp = document.getElementById('reviewInputVideoPath');
+                    if (inp && inp.value) {
+                        loadReviewVideoPlayer(inp.value);
+                    } else {
+                        showToast("Vui lòng chọn video phim đầu vào trước!", "warning");
+                        return;
+                    }
+                }
+                reviewVideoPlayer.play().catch(e => console.log('Review play err:', e));
+            } else {
+                reviewVideoPlayer.pause();
+            }
+        });
+    }
+
+    // Time Update & Timeline Seek
+    reviewVideoPlayer.addEventListener('timeupdate', () => {
+        updateReviewTimeDisplay();
+        syncReviewDynamicBlur(reviewVideoPlayer.currentTime);
+        if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(reviewVideoPlayer.currentTime);
+    });
+
+    if (reviewVideoTimeline) {
+        reviewVideoTimeline.addEventListener('mousedown', () => { isSeekingReviewTimeline = true; });
+        reviewVideoTimeline.addEventListener('touchstart', () => { isSeekingReviewTimeline = true; });
+
+        reviewVideoTimeline.addEventListener('input', (e) => {
+            if (reviewVideoPlayer.duration) {
+                const seekTime = (parseFloat(e.target.value) / 100) * reviewVideoPlayer.duration;
+                safeSeekReviewVideo(seekTime, false);
+                if (reviewTimeDisplay) {
+                    reviewTimeDisplay.textContent = `${formatVideoTime(seekTime)} / ${formatVideoTime(reviewVideoPlayer.duration)}`;
+                }
+                if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(seekTime);
+            }
+        });
+
+        const onReviewSeekEnd = (e) => {
+            if (isSeekingReviewTimeline && reviewVideoPlayer.duration) {
+                const seekTime = (parseFloat(e.target.value) / 100) * reviewVideoPlayer.duration;
+                safeSeekReviewVideo(seekTime, false);
+                isSeekingReviewTimeline = false;
+                if (typeof syncReviewSubtitle === 'function') syncReviewSubtitle(seekTime);
+            }
+        };
+
+        reviewVideoTimeline.addEventListener('change', onReviewSeekEnd);
+        reviewVideoTimeline.addEventListener('mouseup', onReviewSeekEnd);
+        reviewVideoTimeline.addEventListener('touchend', onReviewSeekEnd);
+    }
+
+    // Volume Slider
+    if (reviewVolumeSlider) {
+        reviewVolumeSlider.addEventListener('input', (e) => {
+            reviewVideoPlayer.volume = parseFloat(e.target.value);
+        });
+    }
+
+    // Subtitle Jump Buttons (Prev / Next Subtitle)
+    const btnReviewPrevSub = document.getElementById('btnReviewPrevSub');
+    const btnReviewNextSub = document.getElementById('btnReviewNextSub');
+
+    function getReviewSubtitleList() {
+        if (Array.isArray(window.reviewNarrationSubtitles) && window.reviewNarrationSubtitles.length > 0) {
+            return window.reviewNarrationSubtitles.map((s, i) => ({
+                index: i + 1,
+                start: typeof s.startSeconds === 'number' ? s.startSeconds : (s.start || 0),
+                end: typeof s.endSeconds === 'number' ? s.endSeconds : (s.end || 0),
+                text: s.translation || s.text || s.content || ''
+            })).filter(s => !isNaN(s.start));
+        }
+        if (window.reviewParsedSubtitles && window.reviewParsedSubtitles.length > 0) {
+            return window.reviewParsedSubtitles.map((s, i) => ({
+                index: i + 1,
+                start: s.startSeconds || 0,
+                end: s.endSeconds || 0,
+                text: s.text || ''
+            })).filter(s => !isNaN(s.start));
+        }
+        if (window.reviewTabScannedAiBoxes && window.reviewTabScannedAiBoxes.length > 0) {
+            return window.reviewTabScannedAiBoxes.map((b, i) => ({
+                index: i + 1,
+                start: b.visual_start !== undefined ? b.visual_start : (b.startSeconds || 0),
+                end: b.visual_end !== undefined ? b.visual_end : (b.endSeconds || 0),
+                box: b
+            })).filter(s => !isNaN(s.start));
+        }
+        return [];
+    }
+
+    if (btnReviewPrevSub) {
+        btnReviewPrevSub.addEventListener('click', () => {
+            const list = getReviewSubtitleList();
+            if (list.length === 0) {
+                showToast("Chưa có danh sách phụ đề để nhảy!", "warning");
+                return;
+            }
+            const cur = reviewVideoPlayer.currentTime || 0;
+            // Find subtitle before current time
+            let target = null;
+            for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i].start < cur - 0.25) {
+                    target = list[i];
+                    break;
+                }
+            }
+            if (!target) target = list[0];
+            safeSeekReviewVideo(target.start + 0.05, false);
+            syncReviewDynamicBlur(target.start + 0.05, true);
+            showToast(`⏮️ Đã chuyển đến câu #${target.index} (${formatVideoTime(target.start)})`, "info");
+        });
+    }
+
+    if (btnReviewNextSub) {
+        btnReviewNextSub.addEventListener('click', () => {
+            const list = getReviewSubtitleList();
+            if (list.length === 0) {
+                showToast("Chưa có danh sách phụ đề để nhảy!", "warning");
+                return;
+            }
+            const cur = reviewVideoPlayer.currentTime || 0;
+            // Find subtitle after current time
+            let target = null;
+            for (let i = 0; i < list.length; i++) {
+                if (list[i].start > cur + 0.1) {
+                    target = list[i];
+                    break;
+                }
+            }
+            if (!target) target = list[list.length - 1];
+            safeSeekReviewVideo(target.start + 0.05, false);
+            syncReviewDynamicBlur(target.start + 0.05, true);
+            showToast(`⏭️ Đã chuyển đến câu #${target.index} (${formatVideoTime(target.start)})`, "info");
+        });
+    }
+
+    // Toggle Preview Mode (Original vs Edited)
+    if (btnReviewPreviewOriginal && btnReviewPreviewEdited) {
+        btnReviewPreviewOriginal.addEventListener('click', () => {
+            isReviewPreviewEditedMode = false;
+            btnReviewPreviewOriginal.classList.add('active');
+            btnReviewPreviewEdited.classList.remove('active');
+            if (reviewDynamicBlurOverlay) reviewDynamicBlurOverlay.style.visibility = 'hidden';
+            if (reviewVideoLogoOverlay) reviewVideoLogoOverlay.style.display = 'none';
+            window.liveDubbingEngine.stop();
+            window.liveDubbingEngine.restoreVolume(reviewVideoPlayer);
+        });
+
+        btnReviewPreviewEdited.addEventListener('click', () => {
+            isReviewPreviewEditedMode = true;
+            btnReviewPreviewEdited.classList.add('active');
+            btnReviewPreviewOriginal.classList.remove('active');
+            syncReviewDynamicBlur(reviewVideoPlayer.currentTime || 0, true);
+            if (window.renderReviewLogo) window.renderReviewLogo();
+        });
+    }
+
+    // Fullscreen Toggle for Review Player
+    const btnReviewFullscreen = document.getElementById('btnReviewFullscreen');
+    if (btnReviewFullscreen && reviewVideoContainer) {
+        btnReviewFullscreen.addEventListener('click', () => {
+            toggleContainerFullscreen(reviewVideoContainer, btnReviewFullscreen);
+        });
+    }
+
+    // Click on Video Container to Play/Pause
+    if (reviewVideoContainer) {
+        reviewVideoContainer.addEventListener('dblclick', (e) => {
+            if (e.target.closest('.logo-resize-handle') || e.target.closest('#reviewVideoLogoOverlay')) return;
+            toggleContainerFullscreen(reviewVideoContainer, btnReviewFullscreen);
+        });
+
+        reviewVideoContainer.addEventListener('click', (e) => {
+            if (e.target.closest('.logo-resize-handle') || e.target.closest('#reviewVideoLogoOverlay')) return;
+            if (!reviewVideoPlayer.src || reviewVideoPlayer.src === '' || reviewVideoPlayer.src.endsWith('/')) {
+                const inp = document.getElementById('reviewInputVideoPath');
+                if (inp && inp.value) {
+                    loadReviewVideoPlayer(inp.value);
+                    reviewVideoPlayer.play().catch(e => console.log(e));
+                }
+                return;
+            }
+            if (reviewVideoPlayer.paused) {
+                reviewVideoPlayer.play().catch(e => console.log(e));
+            } else {
+                reviewVideoPlayer.pause();
+            }
+        });
+
+        // Drag & Drop on Review Player
+        reviewVideoContainer.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            reviewVideoContainer.style.borderColor = '#38bdf8';
+            reviewVideoContainer.style.background = 'rgba(14, 165, 233, 0.08)';
+        });
+
+        reviewVideoContainer.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            reviewVideoContainer.style.borderColor = '';
+            reviewVideoContainer.style.background = '#020617';
+        });
+
+        reviewVideoContainer.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            reviewVideoContainer.style.borderColor = '';
+            reviewVideoContainer.style.background = '#020617';
+
+            const files = e.dataTransfer.files;
+            if (!files || files.length === 0) return;
+            const file = files[0];
+            const name = file.name.toLowerCase();
+            const filePath = file.path || file.name;
+
+            if (name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.mov') || name.endsWith('.avi') || name.endsWith('.webm')) {
+                const inp = document.getElementById('reviewInputVideoPath');
+                if (inp) inp.value = filePath;
+                loadReviewVideoPlayer(filePath);
+                showToast(`Đã nạp video phim: ${file.name}`, "success");
+            } else if (name.endsWith('.srt') || name.endsWith('.vtt') || name.endsWith('.ass')) {
+                const inpSrt = document.getElementById('reviewInputSrtPath');
+                if (inpSrt) inpSrt.value = filePath;
+                autoParseReviewSrt(filePath);
+            } else if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')) {
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    const dataUrl = event.target.result;
+                    const reviewLogoImg = document.getElementById('reviewVideoLogoImg');
+                    if (reviewLogoImg) reviewLogoImg.src = dataUrl;
+                    window.currentReviewLogoState.dataUrl = dataUrl;
+                    window.currentReviewLogoState.enabled = true;
+                    const enableCheckbox = document.getElementById('reviewEnableLogoWatermark');
+                    const configPanel = document.getElementById('reviewLogoConfigPanel');
+                    const logoInput = document.getElementById('reviewLogoInputPath');
+                    if (enableCheckbox) enableCheckbox.checked = true;
+                    if (configPanel) configPanel.style.display = 'flex';
+                    try {
+                        const formData = new FormData();
+                        formData.append('image', file);
+                        const res = await fetch('/api/upload_image', { method: 'POST', body: formData });
+                        const data = await res.json();
+                        if (data.success && data.file_path) {
+                            window.currentReviewLogoState.path = data.file_path;
+                            if (logoInput) logoInput.value = data.file_path;
+                        } else {
+                            window.currentReviewLogoState.path = file.path || file.name;
+                            if (logoInput) logoInput.value = file.path || file.name;
+                        }
+                    } catch (err) {
+                        window.currentReviewLogoState.path = file.path || file.name;
+                        if (logoInput) logoInput.value = file.path || file.name;
+                    }
+                    if (window.renderReviewLogo) window.renderReviewLogo();
+                    showToast(`Đã nạp Logo: ${file.name}`, "success");
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+    }
+
+    // Dynamic Blur Overlay high-precision sync
+    function syncReviewDynamicBlur(currentTime, forceUpdate = false) {
+        if (!reviewDynamicBlurOverlay || !isReviewPreviewEditedMode) {
+            if (reviewDynamicBlurOverlay) reviewDynamicBlurOverlay.style.visibility = 'hidden';
+            return;
+        }
+
+        const isBlurEnabled = document.getElementById('reviewTabBlurOriginalSubtitles')?.checked ?? true;
+        if (!isBlurEnabled) {
+            if (_lastReviewBlurState.visible || forceUpdate) {
+                reviewDynamicBlurOverlay.style.visibility = 'hidden';
+                reviewDynamicBlurOverlay.style.opacity = '0';
+                _lastReviewBlurState = { visible: false };
+            }
+            return;
+        }
+
+        const rawReviewLead = parseFloat(document.getElementById('reviewTabBlurLeadOffset')?.value);
+        const blurLead = (Number.isFinite(rawReviewLead) ? rawReviewLead : -180) / 1000;
+        const rawReviewPad = parseFloat(document.getElementById('reviewTabBlurPadding')?.value);
+        const blurPad = (Number.isFinite(rawReviewPad) ? rawReviewPad : 220) / 1000;
+        const blurVal = parseInt(document.getElementById('reviewTabDynBlurIntensity')?.value) || 15;
+        const blurY = parseFloat(document.getElementById('reviewTabBlurYPos')?.value) || 81.5;
+
+        let activeBox = null;
+        let activeIdx = -1;
+        let isInsideInterval = false;
+
+        // 1. Check AI Scanned Boxes first
+        if (window.reviewTabScannedAiBoxes && window.reviewTabScannedAiBoxes.length > 0) {
+            for (let idx = 0; idx < window.reviewTabScannedAiBoxes.length; idx++) {
+                const b = window.reviewTabScannedAiBoxes[idx];
+                if (!b) continue;
+                const vStart = (b.visual_start !== undefined ? b.visual_start : (b.startSeconds || 0)) + blurLead;
+                const vEnd = (b.visual_end !== undefined ? b.visual_end : (b.endSeconds || 0)) + blurPad;
+                if (currentTime >= vStart && currentTime <= vEnd) {
+                    activeBox = b;
+                    activeIdx = idx + 1;
+                    isInsideInterval = true;
+                    break;
+                }
+            }
+        }
+
+        // 2. Fallback to Parsed Subtitles if AI scan not done for this frame
+        if (!isInsideInterval && window.reviewParsedSubtitles && window.reviewParsedSubtitles.length > 0) {
+            for (let idx = 0; idx < window.reviewParsedSubtitles.length; idx++) {
+                const s = window.reviewParsedSubtitles[idx];
+                if (!s) continue;
+                const sStart = (s.startSeconds || 0) + blurLead;
+                const sEnd = (s.endSeconds || 0) + blurPad;
+                if (currentTime >= sStart && currentTime <= sEnd) {
+                    const calcW = calculateSubtitleWidthPercent(s.text);
+                    activeBox = {
+                        x_pct: Math.max(2, (100 - calcW) / 2),
+                        w_pct: calcW,
+                        y_pct: blurY,
+                        h_pct: 9.5
+                    };
+                    activeIdx = idx + 1;
+                    isInsideInterval = true;
+                    break;
+                }
+            }
+        }
+
+        if (!isInsideInterval) {
+            if (_lastReviewBlurState.visible || forceUpdate) {
+                reviewDynamicBlurOverlay.style.visibility = 'hidden';
+                reviewDynamicBlurOverlay.style.opacity = '0';
+                _lastReviewBlurState = { visible: false };
+            }
+            return;
+        }
+
+        const sliderW = parseFloat(document.getElementById('reviewTabBlurWidth')?.value) || (window.reviewBlurRegion?.w);
+        const sliderH = parseFloat(document.getElementById('reviewTabBlurHeight')?.value) || (window.reviewBlurRegion?.h);
+        const sliderX = parseFloat(document.getElementById('reviewTabBlurXPos')?.value) || (window.reviewBlurRegion?.x);
+        const sliderY = parseFloat(document.getElementById('reviewTabBlurYPos')?.value) || (window.reviewBlurRegion?.y) || blurY;
+
+        const regionX = (sliderX !== undefined && !isNaN(sliderX)) ? sliderX : 20;
+        const regionY = (sliderY !== undefined && !isNaN(sliderY)) ? sliderY : blurY;
+        const regionW = (sliderW !== undefined && !isNaN(sliderW)) ? sliderW : 60;
+        const regionH = (sliderH !== undefined && !isNaN(sliderH)) ? sliderH : 9.5;
+
+        const centerX = regionX + (regionW / 2.0);
+        let leftPct = regionX;
+        let topPct = regionY;
+        let widthPct = regionW;
+        let heightPct = regionH;
+
+        if (activeBox && typeof activeBox.w_pct === 'number' && activeBox.w_pct > 0) {
+            const rawBoxW = activeBox.w_pct;
+            const rawBoxX = activeBox.x_pct != null ? activeBox.x_pct : (centerX - rawBoxW / 2.0);
+            const boxCenterX = rawBoxX + (rawBoxW / 2.0);
+            const padW = Math.max(1.5, Math.min(4.0, rawBoxW * 0.05));
+            widthPct = Math.min(98, rawBoxW + (padW * 2));
+            leftPct = Math.max(0, Math.min(100 - widthPct, boxCenterX - (widthPct / 2.0)));
+            if (activeBox.y_pct != null && activeBox.h_pct != null) {
+                const rawBoxY = activeBox.y_pct;
+                const rawBoxH = activeBox.h_pct;
+                const boxCenterY = rawBoxY + (rawBoxH / 2.0);
+                const padH = Math.max(0.8, Math.min(2.5, rawBoxH * 0.18));
+                heightPct = Math.min(35, Math.max(3.0, rawBoxH + (padH * 2.0)));
+                topPct = Math.max(0, Math.min(98 - heightPct, boxCenterY - (heightPct / 2.0)));
+            }
+        } else {
+            widthPct = regionW;
+            leftPct = regionX;
+        }
+
+        // Diff caching unless forced
+        if (
+            !forceUpdate &&
+            _lastReviewBlurState.visible === true &&
+            _lastReviewBlurState.left === leftPct &&
+            _lastReviewBlurState.top === topPct &&
+            _lastReviewBlurState.width === widthPct &&
+            _lastReviewBlurState.height === heightPct &&
+            _lastReviewBlurState.blur === blurVal
+        ) {
+            return;
+        }
+
+        _lastReviewBlurState = {
+            visible: true,
+            left: leftPct,
+            top: topPct,
+            width: widthPct,
+            height: heightPct,
+            blur: blurVal
+        };
+
+        reviewDynamicBlurOverlay.style.background = 'rgba(15, 23, 42, 0.45)';
+        reviewDynamicBlurOverlay.style.backdropFilter = `blur(${blurVal}px)`;
+        reviewDynamicBlurOverlay.style.webkitBackdropFilter = `blur(${blurVal}px)`;
+        reviewDynamicBlurOverlay.style.border = '1.5px dashed rgba(56, 189, 248, 0.6)';
+        reviewDynamicBlurOverlay.style.boxShadow = '0 0 14px rgba(56, 189, 248, 0.35)';
+        reviewDynamicBlurOverlay.style.borderRadius = '6px';
+        reviewDynamicBlurOverlay.style.top = `${topPct}%`;
+        reviewDynamicBlurOverlay.style.height = `${heightPct}%`;
+        reviewDynamicBlurOverlay.style.left = `${leftPct}%`;
+        reviewDynamicBlurOverlay.style.width = `${widthPct}%`;
+        reviewDynamicBlurOverlay.style.visibility = 'visible';
+        reviewDynamicBlurOverlay.style.opacity = '1';
+
+        if (reviewPlayerStatusBadge && activeIdx > 0 && reviewVideoPlayer.paused) {
+            reviewPlayerStatusBadge.textContent = `🎯 Đang che câu #${activeIdx} (W: ${widthPct.toFixed(1)}%, X: ${leftPct.toFixed(1)}%)`;
+            reviewPlayerStatusBadge.style.color = '#38bdf8';
+            reviewPlayerStatusBadge.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+        }
+    }
+
+    if (reviewDynamicBlurOverlay) {
+        reviewDynamicBlurOverlay.style.cursor = 'pointer';
+        reviewDynamicBlurOverlay.title = 'Bấm vào đây để điều chỉnh vùng làm mờ trên màn hình (8 hướng)';
+        reviewDynamicBlurOverlay.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof showReviewBlurAdjustBox === 'function') {
+                showReviewBlurAdjustBox(true);
+            }
+        });
+    }
+
+    window.triggerReviewDynamicBlurSync = () => {
+        syncReviewDynamicBlur(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0, true);
+    };
+}
+
+function setupInteractiveReviewLogo() {
     const enableCheckbox = document.getElementById('reviewEnableLogoWatermark');
     const configPanel = document.getElementById('reviewLogoConfigPanel');
     const logoInput = document.getElementById('reviewLogoInputPath');
@@ -19691,7 +20419,7 @@ function setupReviewVideoPlayerController() {
             logoOverlay.style.left = `${newLeft}px`;
             logoOverlay.style.top = `${newTop}px`;
             logoOverlay.style.width = `${newWidth}px`;
-            logoOverlay.style.height = `${heightPx}px`;
+            logoOverlay.style.height = `${newHeight}px`;
         }
 
         if (coordBadge) {
@@ -19718,450 +20446,6 @@ function setupReviewVideoPlayerController() {
     // Đồng bộ ban đầu và gọi render ngay
     syncReviewLogoStateFromDom();
     window.renderReviewLogo();
-}rawBoxX + (rawBoxW / 2.0);
-            const padW = Math.max(1.5, Math.min(4.0, rawBoxW * 0.05));
-            widthPct = Math.min(98, rawBoxW + (padW * 2));
-            leftPct = Math.max(0, Math.min(100 - widthPct, boxCenterX - (widthPct / 2.0)));
-            if (activeBox.y_pct != null && activeBox.h_pct != null) {
-                const rawBoxY = activeBox.y_pct;
-                const rawBoxH = activeBox.h_pct;
-                const boxCenterY = rawBoxY + (rawBoxH / 2.0);
-                const padH = Math.max(0.8, Math.min(2.5, rawBoxH * 0.18));
-                heightPct = Math.min(35, Math.max(3.0, rawBoxH + (padH * 2.0)));
-                topPct = Math.max(0, Math.min(98 - heightPct, boxCenterY - (heightPct / 2.0)));
-            }
-        } else {
-            widthPct = regionW;
-            leftPct = regionX;
-        }
-
-        // Diff caching unless forced
-        if (
-            !forceUpdate &&
-            _lastReviewBlurState.visible === true &&
-            _lastReviewBlurState.left === leftPct &&
-            _lastReviewBlurState.top === topPct &&
-            _lastReviewBlurState.width === widthPct &&
-            _lastReviewBlurState.height === heightPct &&
-            _lastReviewBlurState.blur === blurVal
-        ) {
-            return;
-        }
-
-        _lastReviewBlurState = {
-            visible: true,
-            left: leftPct,
-            top: topPct,
-            width: widthPct,
-            height: heightPct,
-            blur: blurVal
-        };
-
-        reviewDynamicBlurOverlay.style.background = 'rgba(15, 23, 42, 0.45)';
-        reviewDynamicBlurOverlay.style.backdropFilter = `blur(${blurVal}px)`;
-        reviewDynamicBlurOverlay.style.webkitBackdropFilter = `blur(${blurVal}px)`;
-        reviewDynamicBlurOverlay.style.border = '1.5px dashed rgba(56, 189, 248, 0.6)';
-        reviewDynamicBlurOverlay.style.boxShadow = '0 0 14px rgba(56, 189, 248, 0.35)';
-        reviewDynamicBlurOverlay.style.borderRadius = '6px';
-        reviewDynamicBlurOverlay.style.top = `${topPct}%`;
-        reviewDynamicBlurOverlay.style.height = `${heightPct}%`;
-        reviewDynamicBlurOverlay.style.left = `${leftPct}%`;
-        reviewDynamicBlurOverlay.style.width = `${widthPct}%`;
-        reviewDynamicBlurOverlay.style.visibility = 'visible';
-        reviewDynamicBlurOverlay.style.opacity = '1';
-
-        if (reviewPlayerStatusBadge && activeIdx > 0 && reviewVideoPlayer.paused) {
-            reviewPlayerStatusBadge.textContent = `🎯 Đang che câu #${activeIdx} (W: ${widthPct.toFixed(1)}%, X: ${leftPct.toFixed(1)}%)`;
-            reviewPlayerStatusBadge.style.color = '#38bdf8';
-            reviewPlayerStatusBadge.style.borderColor = 'rgba(56, 189, 248, 0.4)';
-        }
-    }
-
-    if (reviewDynamicBlurOverlay) {
-        reviewDynamicBlurOverlay.style.cursor = 'pointer';
-        reviewDynamicBlurOverlay.title = 'Bấm vào đây để điều chỉnh vùng làm mờ trên màn hình (8 hướng)';
-        reviewDynamicBlurOverlay.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (typeof showReviewBlurAdjustBox === 'function') {
-                showReviewBlurAdjustBox(true);
-            }
-        });
-    }
-
-    window.triggerReviewDynamicBlurSync = () => {
-        syncReviewDynamicBlur(reviewVideoPlayer ? reviewVideoPlayer.currentTime : 0, true);
-    };
-}
-
-function setupInteractiveReviewLogo() {
-    const enableCheckbox = document.getElementById('reviewEnableLogoWatermark');
-    const configPanel = document.getElementById('reviewLogoConfigPanel');
-    const logoInput = document.getElementById('reviewLogoInputPath');
-    const hiddenFileInput = document.getElementById('reviewLogoFileInputHidden');
-    const btnSelect = document.getElementById('btnSelectReviewLogoFile');
-    const btnReset = document.getElementById('btnResetReviewLogo');
-    const opacitySlider = document.getElementById('reviewLogoOpacity');
-    const opacityVal = document.getElementById('reviewLogoOpacityVal');
-    const coordBadge = document.getElementById('reviewLogoCoordBadge');
-    const presetBtns = document.querySelectorAll('.btn-review-logo-preset');
-
-    const logoOverlay = document.getElementById('reviewVideoLogoOverlay');
-    const logoImg = document.getElementById('reviewVideoLogoImg');
-    const container = document.getElementById('reviewVideoContainer');
-
-    if (!logoOverlay || !container) return;
-
-    window.renderReviewLogo = function() {
-        if (!window.currentReviewLogoState.enabled || !window.currentReviewLogoState.path || !isReviewPreviewEditedMode) {
-            logoOverlay.style.display = 'none';
-            return;
-        }
-
-        const cW = container.clientWidth || 640;
-        const cH = container.clientHeight || 360;
-
-        const leftPx = (window.currentReviewLogoState.x_pct / 100) * cW;
-        const topPx = (window.currentReviewLogoState.y_pct / 100) * cH;
-        const widthPx = (window.currentReviewLogoState.w_pct / 100) * cW;
-        const heightPx = (window.currentReviewLogoState.h_pct / 100) * cH;
-
-        logoOverlay.style.display = 'block';
-        logoOverlay.style.left = `${leftPx}px`;
-        logoOverlay.style.top = `${topPx}px`;
-        logoOverlay.style.width = `${widthPx}px`;
-        logoOverlay.style.height = `${heightPx}px`;
-        logoOverlay.style.opacity = `${window.currentReviewLogoState.opacity / 100}`;
-
-        if (logoImg) {
-            logoImg.onload = () => {
-                if (logoImg.naturalWidth && logoImg.naturalHeight) {
-                    const natAspect = logoImg.naturalWidth / logoImg.naturalHeight;
-                    window.currentReviewLogoState.aspectRatio = natAspect;
-                    const cW = container.clientWidth || 640;
-                    const cH = container.clientHeight || 360;
-                    if (cW > 0 && cH > 0) {
-                        const widthPx = (window.currentReviewLogoState.w_pct / 100) * cW;
-                        const heightPx = widthPx / natAspect;
-                        window.currentReviewLogoState.h_pct = (heightPx / cH) * 100;
-                        logoOverlay.style.height = `${heightPx}px`;
-                        if (coordBadge) {
-                            coordBadge.textContent = `(x: ${window.currentReviewLogoState.x_pct.toFixed(1)}%, y: ${window.currentReviewLogoState.y_pct.toFixed(1)}%, w: ${window.currentReviewLogoState.w_pct.toFixed(1)}%)`;
-                        }
-                    }
-                }
-            };
-            if (window.currentReviewLogoState.dataUrl) {
-                if (logoImg.src !== window.currentReviewLogoState.dataUrl) logoImg.src = window.currentReviewLogoState.dataUrl;
-            } else if (window.currentReviewLogoState.path) {
-                const imgSrc = `/api/image?path=${encodeURIComponent(window.currentReviewLogoState.path)}`;
-                if (!logoImg.src.includes(encodeURIComponent(window.currentReviewLogoState.path))) {
-                    logoImg.src = imgSrc;
-                }
-            }
-        }
-
-        if (coordBadge) {
-            coordBadge.textContent = `(x: ${window.currentReviewLogoState.x_pct.toFixed(1)}%, y: ${window.currentReviewLogoState.y_pct.toFixed(1)}%, w: ${window.currentReviewLogoState.w_pct.toFixed(1)}%)`;
-        }
-    };
-
-    if (enableCheckbox) {
-        enableCheckbox.addEventListener('change', () => {
-            window.currentReviewLogoState.enabled = enableCheckbox.checked;
-            if (configPanel) configPanel.style.display = window.currentReviewLogoState.enabled ? 'flex' : 'none';
-            window.renderReviewLogo();
-        });
-    }
-
-    if (opacitySlider) {
-        opacitySlider.addEventListener('input', (e) => {
-            window.currentReviewLogoState.opacity = parseInt(e.target.value) || 100;
-            if (opacityVal) opacityVal.textContent = `${window.currentReviewLogoState.opacity}%`;
-            window.renderReviewLogo();
-        });
-    }
-
-    async function handleReviewLogoSelected(filePath) {
-        if (!filePath) return;
-        window.currentReviewLogoState.path = filePath;
-        window.currentReviewLogoState.enabled = true;
-        if (logoInput) logoInput.value = filePath;
-        if (enableCheckbox) enableCheckbox.checked = true;
-        if (configPanel) configPanel.style.display = 'flex';
-        window.renderReviewLogo();
-        showToast("Review Phim: Đã tải Logo thành công! Bạn có thể kéo thả trực tiếp trên màn hình xem trước.", "success");
-    }
-
-    if (btnSelect) {
-        btnSelect.addEventListener('click', async () => {
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.select_image_file) {
-                try {
-                    const res = await window.pywebview.api.select_image_file();
-                    if (res) {
-                        handleReviewLogoSelected(res);
-                        return;
-                    }
-                } catch (e) {
-                    console.warn("pywebview select error:", e);
-                }
-            }
-
-            try {
-                const res = await fetch('/api/select_file', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: 'Chọn file ảnh Logo / Watermark cho Review Phim',
-                        filetypes: [['Image Files', '*.png;*.jpg;*.jpeg;*.webp'], ['All Files', '*.*']]
-                    })
-                });
-                const data = await res.json();
-                if (data.success && data.file_path) {
-                    handleReviewLogoSelected(data.file_path);
-                    return;
-                }
-            } catch (e) {
-                console.warn("API select_file error:", e);
-            }
-
-            if (hiddenFileInput) hiddenFileInput.click();
-        });
-    }
-
-    if (hiddenFileInput) {
-        hiddenFileInput.addEventListener('change', (e) => {
-            const file = e.target.files && e.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = async (event) => {
-                    const dataUrl = event.target.result;
-                    if (logoImg) logoImg.src = dataUrl;
-                    window.currentReviewLogoState.dataUrl = dataUrl;
-                    window.currentReviewLogoState.enabled = true;
-                    if (enableCheckbox) enableCheckbox.checked = true;
-                    if (configPanel) configPanel.style.display = 'flex';
-                    
-                    try {
-                        const formData = new FormData();
-                        formData.append('image', file);
-                        const res = await fetch('/api/upload_image', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await res.json();
-                        if (data.success && data.file_path) {
-                            window.currentReviewLogoState.path = data.file_path;
-                            if (logoInput) logoInput.value = data.file_path;
-                        } else {
-                            window.currentReviewLogoState.path = file.path || file.name;
-                            if (logoInput) logoInput.value = file.path || file.name;
-                        }
-                    } catch (err) {
-                        window.currentReviewLogoState.path = file.path || file.name;
-                        if (logoInput) logoInput.value = file.path || file.name;
-                    }
-                    window.renderReviewLogo();
-                };
-                reader.readAsDataURL(file);
-            }
-        });
-    }
-
-    if (btnReset) {
-        btnReset.addEventListener('click', () => {
-            window.currentReviewLogoState.path = '';
-            window.currentReviewLogoState.enabled = false;
-            if (logoInput) logoInput.value = '';
-            if (enableCheckbox) enableCheckbox.checked = false;
-            if (configPanel) configPanel.style.display = 'none';
-            if (logoImg) logoImg.src = '';
-            window.renderReviewLogo();
-            showToast("Review Phim: Đã xóa logo", "info");
-        });
-    }
-
-    presetBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const pos = btn.dataset.pos;
-            const w = window.currentReviewLogoState.w_pct || 18;
-            const h = window.currentReviewLogoState.h_pct || 12;
-
-            if (pos === 'top-left') {
-                window.currentReviewLogoState.x_pct = 4.0;
-                window.currentReviewLogoState.y_pct = 4.0;
-            } else if (pos === 'top-right') {
-                window.currentReviewLogoState.x_pct = Math.max(0, 96.0 - w);
-                window.currentReviewLogoState.y_pct = 4.0;
-            } else if (pos === 'bottom-left') {
-                window.currentReviewLogoState.x_pct = 4.0;
-                window.currentReviewLogoState.y_pct = Math.max(0, 96.0 - h);
-            } else if (pos === 'bottom-right') {
-                window.currentReviewLogoState.x_pct = Math.max(0, 96.0 - w);
-                window.currentReviewLogoState.y_pct = Math.max(0, 96.0 - h);
-            } else if (pos === 'center') {
-                window.currentReviewLogoState.x_pct = Math.max(0, (100.0 - w) / 2);
-                window.currentReviewLogoState.y_pct = Math.max(0, (100.0 - h) / 2);
-            }
-            window.renderReviewLogo();
-        });
-    });
-
-    // 8-point interactive resize and drag on Review Player
-    let isDragging = false;
-    let isResizing = false;
-    let activeHandle = null;
-    let startX = 0, startY = 0;
-    let startLeft = 0, startTop = 0, startWidth = 0, startHeight = 0;
-
-    logoOverlay.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        e.stopPropagation();
-        e.preventDefault();
-
-        const handle = e.target.closest('.logo-resize-handle');
-        const cRect = container.getBoundingClientRect();
-        const lRect = logoOverlay.getBoundingClientRect();
-
-        startX = e.clientX;
-        startY = e.clientY;
-        startLeft = lRect.left - cRect.left;
-        startTop = lRect.top - cRect.top;
-        startWidth = lRect.width;
-        startHeight = lRect.height;
-
-        if (handle) {
-            isResizing = true;
-            activeHandle = handle.dataset.handle;
-        } else {
-            isDragging = true;
-        }
-
-        logoOverlay.classList.add('active');
-    });
-
-    window.addEventListener('mousemove', (e) => {
-        if (!isDragging && !isResizing) return;
-        e.preventDefault();
-
-        const cW = container.clientWidth || 640;
-        const cH = container.clientHeight || 360;
-        if (cW <= 0 || cH <= 0) return;
-
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-
-        if (isDragging) {
-            let newLeft = Math.max(0, Math.min(cW - startWidth, startLeft + dx));
-            let newTop = Math.max(0, Math.min(cH - startHeight, startTop + dy));
-
-            window.currentReviewLogoState.x_pct = (newLeft / cW) * 100;
-            window.currentReviewLogoState.y_pct = (newTop / cH) * 100;
-
-            logoOverlay.style.left = `${newLeft}px`;
-            logoOverlay.style.top = `${newTop}px`;
-        } else if (isResizing) {
-            let newLeft = startLeft;
-            let newTop = startTop;
-            let newWidth = startWidth;
-            let newHeight = startHeight;
-
-            const minW = 20;
-            const minH = 20;
-
-            const targetImg = logoImg || document.getElementById('reviewVideoLogoImg');
-            const natAspect = (targetImg && targetImg.naturalWidth && targetImg.naturalHeight && targetImg.naturalHeight > 0)
-                ? (targetImg.naturalWidth / targetImg.naturalHeight)
-                : (window.currentReviewLogoState.aspectRatio || (startWidth / Math.max(1, startHeight)));
-
-            const isCorner = activeHandle === 'nw' || activeHandle === 'ne' || activeHandle === 'sw' || activeHandle === 'se';
-
-            if (isCorner && natAspect > 0.05) {
-                if (activeHandle === 'se') {
-                    const dwX = dx;
-                    const dwY = dy * natAspect;
-                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
-                    const maxAvailableW = Math.max(minW, Math.min(cW - startLeft, (cH - startTop) * natAspect));
-                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
-                    newHeight = Math.max(minH, newWidth / natAspect);
-                    newWidth = newHeight * natAspect;
-                } else if (activeHandle === 'sw') {
-                    const dwX = -dx;
-                    const dwY = dy * natAspect;
-                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
-                    const maxAvailableW = Math.max(minW, Math.min(startLeft + startWidth, (cH - startTop) * natAspect));
-                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
-                    newHeight = Math.max(minH, newWidth / natAspect);
-                    newWidth = newHeight * natAspect;
-                    newLeft = startLeft + (startWidth - newWidth);
-                } else if (activeHandle === 'ne') {
-                    const dwX = dx;
-                    const dwY = -dy * natAspect;
-                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
-                    const maxAvailableW = Math.max(minW, Math.min(cW - startLeft, (startTop + startHeight) * natAspect));
-                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
-                    newHeight = Math.max(minH, newWidth / natAspect);
-                    newWidth = newHeight * natAspect;
-                    newTop = startTop + (startHeight - newHeight);
-                } else if (activeHandle === 'nw') {
-                    const dwX = -dx;
-                    const dwY = -dy * natAspect;
-                    const scaleDelta = (Math.abs(dwX) > Math.abs(dwY)) ? dwX : dwY;
-                    const maxAvailableW = Math.max(minW, Math.min(startLeft + startWidth, (startTop + startHeight) * natAspect));
-                    newWidth = Math.max(minW, Math.min(maxAvailableW, startWidth + scaleDelta));
-                    newHeight = Math.max(minH, newWidth / natAspect);
-                    newWidth = newHeight * natAspect;
-                    newLeft = startLeft + (startWidth - newWidth);
-                    newTop = startTop + (startHeight - newHeight);
-                }
-            } else {
-                if (activeHandle.includes('e')) {
-                    newWidth = Math.max(minW, Math.min(cW - startLeft, startWidth + dx));
-                }
-                if (activeHandle.includes('s')) {
-                    newHeight = Math.max(minH, Math.min(cH - startTop, startHeight + dy));
-                }
-                if (activeHandle.includes('w')) {
-                    const maxDx = startWidth - minW;
-                    const actualDx = Math.max(-startLeft, Math.min(maxDx, dx));
-                    newLeft = startLeft + actualDx;
-                    newWidth = startWidth - actualDx;
-                }
-                if (activeHandle.includes('n')) {
-                    const maxDy = startHeight - minH;
-                    const actualDy = Math.max(-startTop, Math.min(maxDy, dy));
-                    newTop = startTop + actualDy;
-                    newHeight = startHeight - actualDy;
-                }
-            }
-
-            window.currentReviewLogoState.x_pct = (newLeft / cW) * 100;
-            window.currentReviewLogoState.y_pct = (newTop / cH) * 100;
-            window.currentReviewLogoState.w_pct = (newWidth / cW) * 100;
-            window.currentReviewLogoState.h_pct = (newHeight / cH) * 100;
-            window.currentReviewLogoState.aspectRatio = newWidth / Math.max(1, newHeight);
-
-            logoOverlay.style.left = `${newLeft}px`;
-            logoOverlay.style.top = `${newTop}px`;
-            logoOverlay.style.width = `${newWidth}px`;
-            logoOverlay.style.height = `${newHeight}px`;
-        }
-
-        if (coordBadge) {
-            coordBadge.textContent = `(x: ${window.currentReviewLogoState.x_pct.toFixed(1)}%, y: ${window.currentReviewLogoState.y_pct.toFixed(1)}%, w: ${window.currentReviewLogoState.w_pct.toFixed(1)}%)`;
-        }
-    });
-
-    window.addEventListener('mouseup', () => {
-        if (isDragging || isResizing) {
-            isDragging = false;
-            isResizing = false;
-            activeHandle = null;
-            logoOverlay.classList.remove('active');
-            window.renderReviewLogo();
-        }
-    });
-
-    window.addEventListener('resize', window.renderReviewLogo);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -22346,6 +22630,18 @@ const projectManager = {
             // 4. Khôi phục Logo Overlay
             if (proj.logo_overlay && window.currentReviewLogoState) {
                 Object.assign(window.currentReviewLogoState, proj.logo_overlay);
+                const rLogoInput = document.getElementById('reviewLogoInputPath');
+                const rLogoEnable = document.getElementById('reviewEnableLogoWatermark');
+                const rLogoConfig = document.getElementById('reviewLogoConfigPanel');
+                const rLogoOpacity = document.getElementById('reviewLogoOpacity');
+                const rLogoOpacityVal = document.getElementById('reviewLogoOpacityVal');
+                if (rLogoInput && proj.logo_overlay.path) rLogoInput.value = proj.logo_overlay.path;
+                if (rLogoEnable) rLogoEnable.checked = Boolean(proj.logo_overlay.enabled);
+                if (rLogoConfig) rLogoConfig.style.display = proj.logo_overlay.enabled ? 'flex' : 'none';
+                if (rLogoOpacity && typeof proj.logo_overlay.opacity === 'number') {
+                    rLogoOpacity.value = proj.logo_overlay.opacity;
+                    if (rLogoOpacityVal) rLogoOpacityVal.textContent = `${proj.logo_overlay.opacity}%`;
+                }
                 if (typeof window.renderReviewLogo === 'function') {
                     window.renderReviewLogo();
                 }
@@ -23119,4 +23415,13 @@ if (btnViewOnSrtTable) {
         closeSubtitleInspectorModal();
         showToast('Đang hiển thị các câu AI phát hiện lỗi! Bấm vào từng câu để video tự động nhảy tới đối chiếu.', 'info');
     });
+}
+
+// Initialize Hongguo Downloader Module
+try {
+    if (typeof initHongguoModule === 'function') {
+        initHongguoModule();
+    }
+} catch (e) {
+    console.warn('Error initializing Hongguo Module:', e);
 }

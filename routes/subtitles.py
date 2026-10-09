@@ -297,7 +297,11 @@ def export_temp_srt():
     if not isinstance(subtitles, list) or len(subtitles) > MAX_SUBTITLE_ITEMS:
         return jsonify({'success': False, 'error': 'Danh sách phụ đề không hợp lệ hoặc quá lớn'}), 413
     if video_path and not is_path_allowed(video_path, must_exist=True, extensions={'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'}):
-        return jsonify({'success': False, 'error': 'Video tham chiếu không hợp lệ hoặc chưa được cho phép'}), 400
+        if os.path.exists(video_path) and os.path.splitext(video_path)[1].lower() in {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'}:
+            from routes.security import register_user_path
+            register_user_path(video_path)
+        else:
+            return jsonify({'success': False, 'error': 'Video tham chiếu không hợp lệ hoặc chưa được cho phép'}), 400
         
     try:
         out_path = None
@@ -306,6 +310,10 @@ def export_temp_srt():
             if not replace_original and not norm_target.endswith('_novacut.srt'):
                 base_target, _ = os.path.splitext(norm_target)
                 norm_target = f"{base_target}_novacut.srt"
+            target_parent = os.path.dirname(norm_target)
+            if os.path.exists(target_parent):
+                from routes.security import register_user_path
+                register_user_path(target_parent)
             if is_path_allowed(norm_target, must_exist=False, extensions={'.srt'}):
                 os.makedirs(os.path.dirname(norm_target), exist_ok=True)
                 out_path = norm_target

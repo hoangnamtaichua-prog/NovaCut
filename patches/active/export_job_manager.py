@@ -211,6 +211,13 @@ class ExportJob:
             self._emit_event_locked('progress', payload)
             self._cond.notify_all()
 
+        int_pct = int(progress)
+        if int_pct % 5 == 0 and int_pct != getattr(self, '_last_disk_log_pct', -1):
+            self._last_disk_log_pct = int_pct
+            speed_info = f" | {speed}x" if speed else ""
+            eta_info = f" | Còn lại: {eta}" if eta else ""
+            self.append_raw_log(f"[PROGRESS] {stage}: {int_pct}%{speed_info}{eta_info} - {message or ''}")
+
     def set_success(self, output_path, size_mb, history_id=None):
         with self._lock:
             if self.is_terminal():

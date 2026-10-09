@@ -247,13 +247,21 @@ def get_mdx_session(model_name="UVR-MDX-NET-Inst_HQ_4.onnx", device="auto",
 
     avail_providers = ort.get_available_providers() if hasattr(ort, 'get_available_providers') else []
 
-    # Ưu tiên DirectML (chạy mượt mà trên RTX 5060 và mọi GPU Windows)
-    if device in ["cuda", "gpu", "auto"]:
+    # Luôn ưu tiên provider GPU. Với lựa chọn cuda, CUDA đứng trước DirectML;
+    # auto vẫn chọn GPU khả dụng trước khi rơi về CPU.
+    if device in ["cuda", "gpu"]:
         providers = []
-        if 'DmlExecutionProvider' in avail_providers:
-            providers.append('DmlExecutionProvider')
         if 'CUDAExecutionProvider' in avail_providers:
             providers.append('CUDAExecutionProvider')
+        if 'DmlExecutionProvider' in avail_providers:
+            providers.append('DmlExecutionProvider')
+        providers.append('CPUExecutionProvider')
+    elif device == "auto":
+        providers = []
+        if 'CUDAExecutionProvider' in avail_providers:
+            providers.append('CUDAExecutionProvider')
+        if 'DmlExecutionProvider' in avail_providers:
+            providers.append('DmlExecutionProvider')
         providers.append('CPUExecutionProvider')
     elif device == "directml":
         providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
@@ -307,12 +315,16 @@ def separate_stems_mdx(
     remove_vocals=True,
     remove_bgm=False,
     keep_sfx=True,
-    overlap=0.5,
+    separate_bgm=None,
+    overlap=0.25,
     progress_cb=None,
     logger_cb=None,
     cancel_check_cb=None
 ):
     """Hàm tách âm thanh AI chuẩn UVR5 (SeperateMDX.demix)."""
+    if separate_bgm is not None:
+        if not separate_bgm:
+            remove_bgm = True
     import torchaudio
     import torchaudio.functional as F
 
@@ -431,7 +443,7 @@ def separate_stems_mdx(
             divider[..., start:end] += window
             result[..., start:end]  += tar_wave
 
-        if chunk_idx % 4 == 0:
+        if chunk_idx % 50 == 0:
             gc.collect()
 
         pct = 20 + int((chunk_idx / total_chunks) * 70)
@@ -459,7 +471,13 @@ def separate_stems_mdx(
     torchaudio.save(vocals_path, torch.from_numpy(np.ascontiguousarray(vocals_np, dtype=np.float32)), sr)
     torchaudio.save(instrumental_path, torch.from_numpy(np.ascontiguousarray(inst_np, dtype=np.float32)), sr)
 
-    clean_bg_path = instrumental_path if remove_vocals else input_audio_path
+    if remove_bgm and not remove_vocals:
+        clean_bg_path = vocals_path
+    elif remove_vocals:
+        clean_bg_path = instrumental_path
+    else:
+        clean_bg_path = input_audio_path
+
     if progress_cb:
         progress_cb(100, "Hoàn tất tách âm thanh bằng UVR5 MDX-NET!")
     log(f"[UVR-MDX] ✅ Tách âm hoàn tất:\n  - Nhạc nền / SFX: {instrumental_path}\n  - Lời thoại Vocal: {vocals_path}")
@@ -467,6 +485,7 @@ def separate_stems_mdx(
     return {
         "vocals_path": vocals_path,
         "instrumental_path": instrumental_path,
+        "bgm_path": instrumental_path,
         "clean_background_path": clean_bg_path,
     }
 
@@ -490,8 +509,9 @@ def main():
     parser.add_argument("--device", default="auto", help="Hardware device: auto, gpu, directml, cpu")
     parser.add_argument("--remove-vocals", action="store_true", default=True)
     parser.add_argument("--remove-bgm", action="store_true", default=False)
+    parser.add_argument("--separate-bgm", action="store_true", default=None)
     parser.add_argument("--keep-sfx", action="store_true", default=True)
-    parser.add_argument("--overlap", type=float, default=0.5)
+    parser.add_argument("--overlap", type=float, default=0.25)
 
     args = parser.parse_args()
 
@@ -510,6 +530,7 @@ def main():
             remove_vocals=args.remove_vocals,
             remove_bgm=args.remove_bgm,
             keep_sfx=args.keep_sfx,
+            separate_bgm=args.separate_bgm,
             overlap=args.overlap,
             progress_cb=progress_cb,
             logger_cb=logger_cb

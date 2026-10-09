@@ -28,7 +28,7 @@ _separation_progress = {
     "message": "",
     "status": "idle",
     "device": "auto",
-    "mode": "mdx_net_hq4",
+    "mode": "dsp_turbo",
     "logs": [],
     "result": None,
     "error": None
@@ -47,7 +47,7 @@ def _add_log(msg):
     print(formatted)
 
 
-def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, keep_sfx):
+def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, keep_sfx, separate_bgm=None):
     """Luồng worker chạy ngầm xử lý tách âm thanh, không làm nghẽn Flask server."""
     global _cancel_requested, _separation_progress
     def _progress_cb(pct, msg):
@@ -71,6 +71,7 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
             remove_vocals=remove_vocals,
             remove_bgm=remove_bgm,
             keep_sfx=keep_sfx,
+            separate_bgm=separate_bgm,
             mode=mode,
             device=device,
             progress_cb=_progress_cb,
@@ -84,6 +85,7 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
         cleaned_path = res.get('cleaned_path', '')
         vocals_path = res.get('vocals_path', '')
         inst_path = res.get('instrumental_path', '')
+        bgm_path = res.get('bgm_path', inst_path)
 
         result_payload = {
             "success": True,
@@ -95,6 +97,8 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
             "vocals_url": f"/api/file?path={urllib.parse.quote(vocals_path)}" if vocals_path else "",
             "instrumental_path": inst_path,
             "instrumental_url": f"/api/file?path={urllib.parse.quote(inst_path)}" if inst_path else "",
+            "bgm_path": bgm_path,
+            "bgm_url": f"/api/file?path={urllib.parse.quote(bgm_path)}" if bgm_path else "",
             "message": "🎉 Đã tách và lọc âm thanh AI thành công!"
         }
 
@@ -168,16 +172,24 @@ def api_separate_audio():
 
     data = request.get_json(silent=True) or {}
     media_path = data.get('media_path', '').strip()
-    mode = data.get('mode', 'mdx_net_hq4').strip()
+    mode = data.get('mode', 'dsp_turbo').strip()
     device = data.get('device', 'auto').strip()
     try:
         remove_vocals = parse_bool(data.get('remove_vocals'), True)
-        remove_bgm = parse_bool(data.get('remove_bgm'), False)
+        if 'separate_bgm' in data:
+            separate_bgm = parse_bool(data.get('separate_bgm'), True)
+            remove_bgm = not separate_bgm
+        elif 'keep_bgm' in data:
+            keep_bgm = parse_bool(data.get('keep_bgm'), True)
+            remove_bgm = not keep_bgm
+        else:
+            remove_bgm = parse_bool(data.get('remove_bgm'), False)
+            separate_bgm = not remove_bgm
         keep_sfx = parse_bool(data.get('keep_sfx'), True)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
 
-    if mode not in {'mdx_net_hq4', 'mdx_net_hq5', 'ai_neural', 'dsp_turbo'} or device not in {'auto', 'cpu', 'cuda'}:
+    if mode not in {'dsp_turbo', 'turbo', 'ai_neural', 'mdx_net_hq4', 'mdx_net_hq5', 'mdx_net_voc_ft', 'demucs', 'auto'} or device not in {'auto', 'cpu', 'cuda'}:
         return jsonify({'success': False, 'error': 'Mode hoặc device không hợp lệ'}), 400
 
     if not media_path:
@@ -210,7 +222,7 @@ def api_separate_audio():
     # Khởi chạy luồng ngầm phi đồng bộ (Non-blocking) để Flask luôn lắng nghe lệnh Dừng khẩn cấp
     worker_thread = threading.Thread(
         target=_run_separation_worker,
-        args=(media_path, mode, device, remove_vocals, remove_bgm, keep_sfx),
+        args=(media_path, mode, device, remove_vocals, remove_bgm, keep_sfx, separate_bgm),
         daemon=True
     )
     worker_thread.start()

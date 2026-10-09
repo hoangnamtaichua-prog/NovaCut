@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, shutil, collections, gc, hashlib
 from routes.state import *
-from routes.security import is_path_allowed, parse_bool, safe_join, register_user_path
+from routes.security import is_path_allowed, parse_bool, safe_join, register_user_path, sanitize_unicode_filename
 from werkzeug.utils import secure_filename
 import asr_manager
 import ffmpeg_installer
@@ -78,6 +78,15 @@ def is_tts_manifest_valid(temp_dir, current_fingerprint):
     if os.path.getsize(wav_file) < 1000:
         return False
     try:
+        import wave
+        with wave.open(wav_file, 'rb') as wf:
+            frames = wf.getnframes()
+            sr = wf.getframerate()
+            if sr <= 0 or frames <= 0:
+                return False
+            dur = frames / float(sr)
+            if dur < 0.5:
+                return False
         with open(manifest_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         saved_fp = data.get('fingerprint')
@@ -345,7 +354,7 @@ def validate_export_payload(data: dict):
             if os.path.exists(resolved_in):
                 output_dir = os.path.dirname(resolved_in)
                 register_user_path(output_dir)
-        output_name = secure_filename(str(data.get('outputName') or 'video_tom_tat.mp4'))
+        output_name = sanitize_unicode_filename(str(data.get('outputName') or 'video_tom_tat.mp4'))
         manual_audio = str(data.get('manualAudio') or '').strip()
         manual_srt = str(data.get('manualSrt') or '').strip()
         dubbing = data.get('dubbing') or {}
@@ -399,7 +408,15 @@ def validate_export_payload(data: dict):
     if encoder not in {'auto', 'libx264', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc', 'h264_mf', 'h264_amf', 'h264_qsv'} or bitrate_mode not in {'VBR', 'CBR'} or not 500 <= bitrate <= 100000:
         return jsonify({'success': False, 'error': 'Encoder hoặc bitrate không hợp lệ'}), 400
     if not input_video or not is_path_allowed(input_video, must_exist=True, extensions=_VIDEO_EXTENSIONS):
-        return jsonify({'success': False, 'error': 'Video đầu vào không hợp lệ hoặc chưa được cho phép'}), 400
+        from routes.core import find_media_on_system
+        resolved = find_media_on_system(input_video) if input_video else None
+        if resolved and is_path_allowed(resolved, must_exist=True, extensions=_VIDEO_EXTENSIONS):
+            input_video = resolved
+            data['inputVideo'] = resolved
+        elif input_video and os.path.exists(input_video) and os.path.splitext(input_video)[1].lower() in _VIDEO_EXTENSIONS:
+            register_user_path(input_video)
+        else:
+            return jsonify({'success': False, 'error': 'Video đầu vào không hợp lệ hoặc chưa được cho phép'}), 400
     if not os.path.isabs(output_dir):
         output_dir = os.path.abspath(os.path.join(ROOT_DIR, output_dir))
     if not is_path_allowed(output_dir):
@@ -435,6 +452,18 @@ def validate_export_payload(data: dict):
         logo_path = str(logo_data.get('path') or '').strip()
         if logo_path and not is_path_allowed(logo_path, must_exist=True, extensions={'.png', '.jpg', '.jpeg', '.webp'}):
             return jsonify({'success': False, 'error': 'File logo không hợp lệ'}), 400
+        bgm_data = data.get('bgm') or {}
+        if bgm_data:
+            if not isinstance(bgm_data, dict):
+                return jsonify({'success': False, 'error': 'Cấu hình nhạc nền không hợp lệ'}), 400
+            bgm_custom_path = str(bgm_data.get('path') or '').strip()
+            if bgm_custom_path:
+                preset_dir = os.path.join(ROOT_DIR, 'backgroundmusic')
+                custom_dir = os.path.join(USER_DATA_DIR, 'bgm')
+                is_safe_preset = os.path.exists(os.path.join(preset_dir, os.path.basename(bgm_custom_path)))
+                is_safe_custom = os.path.exists(os.path.join(custom_dir, os.path.basename(bgm_custom_path)))
+                if not (is_safe_preset or is_safe_custom or is_path_allowed(bgm_custom_path, must_exist=True, extensions=_AUDIO_EXTENSIONS)):
+                    return jsonify({'success': False, 'error': 'File nhạc nền tùy chỉnh không hợp lệ'}), 400
     except (TypeError, ValueError) as exc:
         return jsonify({'success': False, 'error': f'Cấu hình lồng tiếng không hợp lệ: {exc}'}), 400
 
@@ -468,7 +497,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         if os.path.exists(resolved_in):
             output_dir = os.path.dirname(resolved_in)
             register_user_path(output_dir)
-    output_name = secure_filename(str(data.get('outputName') or 'video_tom_tat.mp4'))
+    output_name = sanitize_unicode_filename(str(data.get('outputName') or 'video_tom_tat.mp4'))
     manual_audio = str(data.get('manualAudio') or '').strip()
     manual_srt = str(data.get('manualSrt') or '').strip()
     dubbing = data.get('dubbing') or {}
@@ -688,9 +717,16 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             import subtitle_postprocessor
             is_val, v_errs, inv_ids = subtitle_postprocessor.validate_subtitles_for_export(subtitles, target_lang=target_lang)
             if not is_val:
-                emit(f"🛑 [LỖI PHỤ ĐỀ] Không thể burn-in phụ đề: Phát hiện câu chưa dịch hoặc không đạt chuẩn (ID: {', '.join(inv_ids)}). Dừng xuất video.")
-                job.set_failed(f"Phụ đề câu {', '.join(inv_ids)} chưa được dịch hợp lệ", {"invalid_ids": inv_ids})
-                return
+                if len(inv_ids) < 15:
+                    inv_set = set(inv_ids)
+                    emit(f"⚠️ [PHỤ ĐỀ] Phát hiện {len(inv_ids)} câu chưa dịch hoặc lỗi (< 15 câu cho phép: ID {', '.join(inv_ids[:3])}...). Tự động loại bỏ để tiếp tục xuất video.")
+                    subtitles = [s for s in subtitles if str(s.get('id', '')) not in inv_set and str(s.get('translation') or '').strip() and not any(k in str(s.get('translation') or '').lower() for k in ('[lỗi', '[error', 'api error', 'rate limit'))]
+                    if data.get('subtitles_for_dubbing'):
+                        data['subtitles_for_dubbing'] = [s for s in data['subtitles_for_dubbing'] if str(s.get('id', '')) not in inv_set and str(s.get('translation') or '').strip() and not any(k in str(s.get('translation') or '').lower() for k in ('[lỗi', '[error', 'api error', 'rate limit'))]
+                else:
+                    emit(f"🛑 [LỖI PHỤ ĐỀ] Không thể burn-in phụ đề: Phát hiện câu chưa dịch hoặc không đạt chuẩn (ID: {', '.join(inv_ids)}). Dừng xuất video.")
+                    job.set_failed(f"Phụ đề câu {', '.join(inv_ids)} chưa được dịch hợp lệ", {"invalid_ids": inv_ids})
+                    return
 
             temp_srt_path = os.path.join(output_dir, f'temp_subs_{int(time.time())}.srt')
             def format_srt_time(seconds):
@@ -1193,6 +1229,12 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             else:
                 v_filters.append(f"[{curr_v}]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
             curr_v = "v_aspect"
+        elif src_vw > 0 and src_vh > 0:
+            fix_w = (int(src_vw) // 2) * 2
+            fix_h = (int(src_vh) // 2) * 2
+            cur_out_w, cur_out_h = fix_w, fix_h
+            v_filters.append(f"[{curr_v}]scale={fix_w}:{fix_h}:force_original_aspect_ratio=decrease,pad={fix_w}:{fix_h}:(ow-iw)/2:(oh-ih)/2:color=black[v_aspect]")
+            curr_v = "v_aspect"
 
         output_geometry = compute_output_geometry(src_vw, src_vh, cur_out_w, cur_out_h)
         if dyn_blur_pending:
@@ -1287,12 +1329,51 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         inputs = ['-i', input_video]
         dub_input_idx = None
         if dub_track and os.path.exists(dub_track):
-            dub_input_idx = len(inputs) // 2
+            dub_input_idx = inputs.count('-i')
             inputs.extend(['-i', dub_track])
+
+        # 3.4.1 BGM (Background Music) Configuration
+        bgm_data = data.get('bgm') or {}
+        bgm_enabled = parse_bool(bgm_data.get('enabled'), False)
+        bgm_vol = max(0.0, min(1.0, float(bgm_data.get('volume', 20)) / 100.0))
+        bgm_ducking = parse_bool(bgm_data.get('ducking'), True)
+        bgm_loop = parse_bool(bgm_data.get('loop'), True)
+        bgm_path = str(bgm_data.get('path') or '').strip()
+        bgm_preset = str(bgm_data.get('preset') or '').strip()
+
+        bgm_file = None
+        if bgm_enabled and bgm_vol > 0.005:
+            preset_dir = os.path.join(ROOT_DIR, 'backgroundmusic')
+            custom_dir = os.path.join(USER_DATA_DIR, 'bgm')
+            if bgm_path and os.path.exists(bgm_path):
+                bgm_file = bgm_path
+            elif bgm_preset and bgm_preset != 'random':
+                candidate_preset = os.path.join(preset_dir, bgm_preset)
+                candidate_custom = os.path.join(custom_dir, bgm_preset)
+                if os.path.exists(candidate_preset):
+                    bgm_file = candidate_preset
+                elif os.path.exists(candidate_custom):
+                    bgm_file = candidate_custom
+            elif bgm_preset == 'random' or (not bgm_path and not bgm_preset):
+                preset_files = [
+                    os.path.join(preset_dir, f) for f in os.listdir(preset_dir)
+                    if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac'))
+                ] if os.path.exists(preset_dir) else []
+                if preset_files:
+                    bgm_file = random.choice(preset_files)
+
+        bgm_input_idx = None
+        if bgm_file and os.path.exists(bgm_file):
+            bgm_input_idx = inputs.count('-i')
+            if bgm_loop:
+                inputs.extend(['-stream_loop', '-1', '-i', bgm_file])
+            else:
+                inputs.extend(['-i', bgm_file])
+            emit(f"🎵 [Nhạc nền] Đã thêm BGM: {os.path.basename(bgm_file)} (Âm lượng: {int(bgm_vol*100)}%, Lặp: {'Bật' if bgm_loop else 'Tắt'}, Ducking: {'Bật' if bgm_ducking else 'Tắt'})")
 
         # 3.5 Logo Watermark Overlay
         if has_logo:
-            logo_input_idx = len(inputs) // 2
+            logo_input_idx = inputs.count('-i')
             inputs.extend(['-i', logo_path])
 
             x_pct = max(0.0, min(100.0, float(logo_data.get('x_pct', 5.0))))
@@ -1499,11 +1580,19 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         stem_mode = 'mdx_net_hq4'
         stem_device = 'auto'
         precomputed_cleaned_path = ''
+        stem_remove_vocals = True
+        stem_separate_bgm = True
+        stem_remove_bgm = False
+        stem_keep_sfx = True
         if isinstance(dubbing.get('stem_separation'), dict):
             stem_cfg = dubbing.get('stem_separation', {})
             stem_mode = stem_cfg.get('mode', 'mdx_net_hq4')
             stem_device = stem_cfg.get('device', 'auto')
             precomputed_cleaned_path = stem_cfg.get('precomputed_cleaned_path', '')
+            stem_remove_vocals = stem_cfg.get('remove_vocals', True)
+            stem_separate_bgm = stem_cfg.get('separate_bgm', stem_cfg.get('keep_bgm', True))
+            stem_remove_bgm = not stem_separate_bgm if ('separate_bgm' in stem_cfg or 'keep_bgm' in stem_cfg) else stem_cfg.get('remove_bgm', False)
+            stem_keep_sfx = stem_cfg.get('keep_sfx', True)
 
         sfx_input_idx = None
         if stem_enabled and has_orig_audio:
@@ -1532,6 +1621,10 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                         output_dir=temp_stem_dir,
                         mode=stem_mode,
                         device=stem_device,
+                        remove_vocals=stem_remove_vocals,
+                        remove_bgm=stem_remove_bgm,
+                        keep_sfx=stem_keep_sfx,
+                        separate_bgm=stem_separate_bgm,
                         progress_cb=_stem_progress_cb,
                         logger_cb=_stem_logger_cb,
                         cancel_check_cb=_stem_cancel_cb
@@ -1542,46 +1635,105 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     cleaned_sfx = sep_res.get('cleaned_path')
 
                 if cleaned_sfx and os.path.exists(cleaned_sfx):
-                    sfx_input_idx = len(inputs) // 2
+                    sfx_input_idx = inputs.count('-i')
                     inputs.extend(['-i', cleaned_sfx])
                     emit("✅ [Tách âm thanh] Đã tách giọng thoại cũ thành công, giữ lại nhạc nền & SFX.")
             except Exception as e:
                 emit(f"⚠️ [Tách âm thanh] Lỗi tách âm thanh AI: {e}")
 
-        # Construct Audio Filter Complex
+        # Construct Audio Filter Complex (Hòa trộn âm thanh gốc, Giọng đọc AI, và Nhạc nền BGM)
         voice_vol = float(dubbing.get('voice_volume', 1.0))
         orig_vol = float(dubbing.get('original_volume', 0.45 if is_dubbing_enabled else 1.0))
         ducking = bool(dubbing.get('audio_ducking', False)) if is_dubbing_enabled else False
         
         a_filters = []
         orig_src = f"[{sfx_input_idx}:a]" if (sfx_input_idx is not None and stem_enabled) else "[0:a]"
-        
-        if dub_input_idx is not None:
-            if has_orig_audio and orig_vol > 0.01:
-                if abs(video_speed - 1.0) > 0.01:
-                    a_filters.append(f"{orig_src}atempo={video_speed:.4f},volume={orig_vol:.2f}[a_orig]")
-                else:
-                    a_filters.append(f"{orig_src}volume={orig_vol:.2f}[a_orig]")
-                if ducking:
-                    # Dùng apad để đảm bảo luồng voice không bị ngắt sớm làm sidechaincompress kết thúc
-                    # và làm tắt tiếng video gốc khi phụ đề kết thúc ở phút thứ 30
-                    a_filters.append(f"[{dub_input_idx}:a]volume={voice_vol:.2f},apad[a_voice_padded]")
-                    a_filters.append(f"[a_voice_padded]asplit=2[a_voice_ctrl][a_voice_mix]")
-                    a_filters.append(f"[a_orig][a_voice_ctrl]sidechaincompress=threshold=0.08:ratio=5:attack=20:release=350[a_orig_ducked]")
-                    a_filters.append(f"[a_orig_ducked][a_voice_mix]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a_final]")
-                else:
-                    a_filters.append(f"[{dub_input_idx}:a]volume={voice_vol:.2f}[a_voice]")
-                    a_filters.append(f"[a_orig][a_voice]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a_final]")
+
+        has_orig_mix = has_orig_audio and orig_vol > 0.01
+        has_dub_mix = (dub_input_idx is not None)
+        has_bgm_mix = (bgm_input_idx is not None)
+
+        if has_orig_mix:
+            if abs(video_speed - 1.0) > 0.01:
+                orig_tempo_fmt = f"{orig_src}atempo={video_speed:.4f},aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000"
             else:
-                a_filters.append(f"[{dub_input_idx}:a]volume={voice_vol:.2f}[a_final]")
-        else:
-            if has_orig_audio:
-                if abs(video_speed - 1.0) > 0.01:
-                    a_filters.append(f"{orig_src}atempo={video_speed:.4f}[a_final]")
+                orig_tempo_fmt = f"{orig_src}aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000"
+
+        if has_dub_mix:
+            a_filters.append(f"[{dub_input_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000,volume={voice_vol:.2f}[a_voice_fmt]")
+
+        if has_bgm_mix:
+            a_filters.append(f"[{bgm_input_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000,volume={bgm_vol:.2f}[a_bgm_raw]")
+            if video_duration and video_duration > 0:
+                a_filters.append(f"[a_bgm_raw]atrim=0:{video_duration:.3f},asetpts=PTS-STARTPTS[a_bgm_fmt]")
+            else:
+                a_filters.append(f"[a_bgm_raw]asetpts=PTS-STARTPTS[a_bgm_fmt]")
+
+        v_dur_arg = f"=whole_dur={video_duration:.3f}" if (video_duration and video_duration > 0) else ""
+
+        if has_dub_mix:
+            duck_orig = has_orig_mix and ducking
+            duck_bgm = has_bgm_mix and bgm_ducking
+
+            # Chuẩn bị luồng giọng đọc AI và tách nhánh điều khiển Ducking nếu cần
+            if duck_orig and duck_bgm:
+                a_filters.append(f"[a_voice_fmt]apad{v_dur_arg}[a_voice_padded]")
+                a_filters.append(f"[a_voice_padded]asplit=3[a_voice_ctrl_orig][a_voice_ctrl_bgm][a_voice_mix]")
+            elif duck_orig:
+                a_filters.append(f"[a_voice_fmt]apad{v_dur_arg}[a_voice_padded]")
+                a_filters.append(f"[a_voice_padded]asplit=2[a_voice_ctrl_orig][a_voice_mix]")
+            elif duck_bgm:
+                a_filters.append(f"[a_voice_fmt]apad{v_dur_arg}[a_voice_padded]")
+                a_filters.append(f"[a_voice_padded]asplit=2[a_voice_ctrl_bgm][a_voice_mix]")
+            else:
+                a_filters.append(f"[a_voice_fmt]apad{v_dur_arg}[a_voice_mix]")
+
+            # Xử lý âm thanh gốc
+            if has_orig_mix:
+                if duck_orig:
+                    a_filters.append(f"{orig_tempo_fmt},volume=1.00[a_orig_pre]")
+                    a_filters.append(f"[a_orig_pre][a_voice_ctrl_orig]sidechaincompress=threshold=0.08:ratio=5:attack=20:release=350[a_orig_ducked]")
+                    a_filters.append(f"[a_orig_ducked]anull[a_orig_ready]")
                 else:
-                    a_filters.append(f"{orig_src}anull[a_final]")
+                    a_filters.append(f"{orig_tempo_fmt},volume={orig_vol:.2f}[a_orig_ready]")
+
+            # Xử lý nhạc nền BGM
+            if has_bgm_mix:
+                if duck_bgm:
+                    a_filters.append(f"[a_bgm_fmt][a_voice_ctrl_bgm]sidechaincompress=threshold=0.08:ratio=4:attack=50:release=400[a_bgm_ducked]")
+                    a_filters.append(f"[a_bgm_ducked]anull[a_bgm_ready]")
+                else:
+                    a_filters.append(f"[a_bgm_fmt]anull[a_bgm_ready]")
+
+            # Hòa trộn các luồng âm thanh
+            mix_inputs = []
+            if has_orig_mix:
+                mix_inputs.append('[a_orig_ready]')
+            mix_inputs.append('[a_voice_mix]')
+            if has_bgm_mix:
+                mix_inputs.append('[a_bgm_ready]')
+
+            if len(mix_inputs) == 1:
+                a_filters.append(f"{mix_inputs[0]}anull[a_final]")
+            else:
+                joined_inputs = "".join(mix_inputs)
+                a_filters.append(f"{joined_inputs}amix=inputs={len(mix_inputs)}:duration=longest:dropout_transition=0:normalize=0[a_final]")
+        else:
+            # Không có giọng đọc AI
+            if has_orig_mix and has_bgm_mix:
+                a_filters.append(f"{orig_tempo_fmt},volume={orig_vol:.2f}[a_orig_ready]")
+                a_filters.append(f"[a_orig_ready][a_bgm_fmt]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a_final]")
+            elif has_orig_mix and not has_bgm_mix:
+                a_filters.append(f"{orig_tempo_fmt},volume={orig_vol:.2f}[a_final]")
+            elif not has_orig_mix and has_bgm_mix:
+                a_filters.append(f"[a_bgm_fmt]anull[a_final]")
             else:
                 a_filters.append(f"aevalsrc=0:d={video_duration or 10}:s=44100[a_final]")
+
+        # Căn chỉnh độ dài âm thanh khớp chính xác 100% thời lượng video (tránh kéo dài hoặc đen màn hình)
+        if video_duration and video_duration > 0 and a_filters:
+            a_filters[-1] = a_filters[-1].replace('[a_final]', '[a_mixed]')
+            a_filters.append(f"[a_mixed]atrim=0:{video_duration:.3f},apad=whole_dur={video_duration:.3f}[a_final]")
 
         full_filter_complex = ";".join(v_filters + a_filters)
 
@@ -1630,8 +1782,13 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             active_encoder = 'libx264'
 
         # Kiểm tra xem có thể dùng phần cứng giải mã (NVDEC/CUDA) hay không
+        # Lưu ý: Khi có bộ lọc phần mềm (v_filters), giải mã CPU Native an toàn tuyệt đối
+        # và tránh lỗi xung đột bộ nhớ 0xC0000005 giữa NVDEC surfaces và software filters.
+        # NVENC encoder vẫn mã hóa siêu tốc trên GPU đạt 10x - 15x (250+ fps)!
+        has_complex_filters = any(f for f in v_filters if '[0:v]null[v_final]' not in f) or bool(custom_layers) or blur_original_subtitles or subtitles_enabled
         can_hw_decode = (
             'nvenc' in active_encoder.lower()
+            and not has_complex_filters
             and (hw_dec_dict.get('cuda_hwaccel') or 'cuda' in hardware_decoders or any('cuvid' in d for d in hardware_decoders))
         )
         decoder_label = f"NVIDIA NVDEC (CUDA)" if can_hw_decode else "CPU Native"
@@ -1824,7 +1981,8 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                         else:
                             emit(f"⏳ [{hw_badge}] {l_str}")
                     elif any(kw in l_str.lower() for kw in diagnostic_keywords):
-                        emit(f"ℹ️ [{hw_badge}] {l_str}")
+                        if 'fontconfig error' not in l_str.lower():
+                            emit(f"ℹ️ [{hw_badge}] {l_str}")
 
             process.stdout.close()
             return_code = process.wait()
@@ -2026,12 +2184,17 @@ def start_generation():
     if val_err:
         return val_err
 
+    SSE_HEADERS = {
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+    }
     manager = get_export_job_manager()
     active_job = manager.get_active_job()
     if active_job and not active_job.is_terminal():
         client_run_id = str(data.get('export_run_id') or '').strip()
         if client_run_id and client_run_id == active_job.export_run_id:
-            return Response(active_job.stream_events(start_seq=0), mimetype='text/event-stream')
+            return Response(active_job.stream_events(start_seq=0), mimetype='text/event-stream', headers=SSE_HEADERS)
         return jsonify({'success': False, 'error': 'Một tác vụ xuất video khác đang chạy'}), 409
 
     source_tool = str(data.get('source_tool') or 'editor').strip()
@@ -2044,7 +2207,7 @@ def start_generation():
         export_run_id=export_run_id
     )
 
-    return Response(job.stream_events(start_seq=0), mimetype='text/event-stream')
+    return Response(job.stream_events(start_seq=0), mimetype='text/event-stream', headers=SSE_HEADERS)
 
 
 @video_edit_bp.route('/api/export/jobs', methods=['POST'])
@@ -2104,7 +2267,12 @@ def get_export_job_events(job_id):
     if not job or not hasattr(job, 'stream_events'):
         return jsonify({'success': False, 'error': 'Không tìm thấy tác vụ đang chạy'}), 404
     after_seq = int(request.args.get('after', 0))
-    return Response(job.stream_events(start_seq=after_seq), mimetype='text/event-stream')
+    sse_headers = {
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+    }
+    return Response(job.stream_events(start_seq=after_seq), mimetype='text/event-stream', headers=sse_headers)
 
 
 @video_edit_bp.route('/api/export/jobs/<job_id>/cancel', methods=['POST'])
@@ -2193,6 +2361,9 @@ def ocr_extract():
         resolved = find_media_on_system(video_path)
         if resolved and is_path_allowed(resolved, must_exist=True, extensions=_VIDEO_EXTENSIONS):
             video_path = resolved
+        elif os.path.exists(video_path) and os.path.splitext(video_path)[1].lower() in _VIDEO_EXTENSIONS:
+            from routes.security import register_user_path
+            register_user_path(video_path)
         else:
             return jsonify({'success': False, 'error': 'Video OCR không hợp lệ hoặc chưa được cho phép'}), 400
     with _ocr_lock:
@@ -2270,6 +2441,9 @@ def ocr_scan_preview_single():
         resolved = find_media_on_system(video_path)
         if resolved and is_path_allowed(resolved, must_exist=True, extensions=_VIDEO_EXTENSIONS):
             video_path = resolved
+        elif video_path and os.path.exists(video_path) and os.path.splitext(video_path)[1].lower() in _VIDEO_EXTENSIONS:
+            from routes.security import register_user_path
+            register_user_path(video_path)
         else:
             return jsonify({'success': False, 'error': 'Vui lòng cung cấp đường dẫn video'}), 400
 
@@ -2300,6 +2474,9 @@ def ocr_scan_preview_boxes():
         resolved = find_media_on_system(video_path)
         if resolved and is_path_allowed(resolved, must_exist=True, extensions=_VIDEO_EXTENSIONS):
             video_path = resolved
+        elif video_path and os.path.exists(video_path) and os.path.splitext(video_path)[1].lower() in _VIDEO_EXTENSIONS:
+            from routes.security import register_user_path
+            register_user_path(video_path)
         else:
             return jsonify({'success': False, 'error': 'Vui lòng cung cấp đường dẫn video'}), 400
     if not isinstance(region, dict) or not isinstance(subtitles, list) or len(subtitles) > 50000:
@@ -2744,15 +2921,13 @@ def bgm_list():
 
 @video_edit_bp.route('/api/bgm/upload', methods=['POST'])
 def bgm_upload():
-    if 'audio_file' not in request.files:
-        return jsonify({'success': False, 'error': 'Vui lòng chọn file âm thanh'}), 400
-    file = request.files['audio_file']
+    file = request.files.get('audio_file') or request.files.get('file')
     if not file or not file.filename:
-        return jsonify({'success': False, 'error': 'Tên file rỗng'}), 400
+        return jsonify({'success': False, 'status': 'error', 'error': 'Vui lòng chọn file âm thanh', 'message': 'Vui lòng chọn file âm thanh'}), 400
         
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in {'.mp3', '.m4a', '.wav', '.aac'}:
-        return jsonify({'success': False, 'error': 'Chỉ chấp nhận định dạng .mp3, .m4a, .wav, .aac'}), 400
+        return jsonify({'success': False, 'status': 'error', 'error': 'Chỉ chấp nhận định dạng .mp3, .m4a, .wav, .aac', 'message': 'Chỉ chấp nhận định dạng .mp3, .m4a, .wav, .aac'}), 400
         
     custom_dir = os.path.join(USER_DATA_DIR, 'bgm')
     os.makedirs(custom_dir, exist_ok=True)
@@ -2767,10 +2942,11 @@ def bgm_upload():
     # Check max size 50MB
     if os.path.getsize(save_path) > 50 * 1024 * 1024:
         os.remove(save_path)
-        return jsonify({'success': False, 'error': 'File quá lớn (tối đa 50MB)'}), 400
+        return jsonify({'success': False, 'status': 'error', 'error': 'File quá lớn (tối đa 50MB)', 'message': 'File quá lớn (tối đa 50MB)'}), 400
         
     return jsonify({
         'success': True,
+        'status': 'success',
         'track': {
             'id': f'custom_{clean_name}',
             'name': os.path.splitext(clean_name)[0],
@@ -2778,7 +2954,9 @@ def bgm_upload():
             'type': 'custom',
             'path': save_path,
             'size_mb': round(os.path.getsize(save_path) / (1024 * 1024), 2)
-        }
+        },
+        'filename': clean_name,
+        'path': save_path
     })
 
 @video_edit_bp.route('/api/bgm/stream', methods=['GET'])
@@ -2786,14 +2964,36 @@ def bgm_stream():
     path = request.args.get('path', '').strip()
     if not path or not os.path.isabs(path):
         raw_name = request.args.get('filename') or request.args.get('file') or ''
-        filename = secure_filename(raw_name)
+        base_name = os.path.basename(raw_name.replace('\\', '/'))
+        clean_sec = secure_filename(raw_name)
         track_type = request.args.get('type', '')
-        custom_candidate = os.path.join(USER_DATA_DIR, 'bgm', filename) if filename else ''
-        preset_candidate = os.path.join(ROOT_DIR, 'backgroundmusic', filename) if filename else ''
-        if track_type == 'custom' or (not os.path.exists(preset_candidate) and os.path.exists(custom_candidate)):
-            path = custom_candidate
+        
+        preset_dir = os.path.join(ROOT_DIR, 'backgroundmusic')
+        custom_dir = os.path.join(USER_DATA_DIR, 'bgm')
+        
+        candidate = None
+        if track_type == 'custom':
+            for fn in (base_name, clean_sec):
+                if fn:
+                    cand = os.path.join(custom_dir, fn)
+                    if os.path.exists(cand):
+                        candidate = cand
+                        break
         else:
-            path = preset_candidate
+            for fn in (base_name, clean_sec):
+                if fn:
+                    cand = os.path.join(preset_dir, fn)
+                    if os.path.exists(cand):
+                        candidate = cand
+                        break
+            if not candidate:
+                for fn in (base_name, clean_sec):
+                    if fn:
+                        cand = os.path.join(custom_dir, fn)
+                        if os.path.exists(cand):
+                            candidate = cand
+                            break
+        path = candidate or os.path.join(preset_dir, base_name)
             
     if not is_path_allowed(path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
         return jsonify({'error': 'File âm thanh không hợp lệ hoặc không được phép'}), 403
@@ -2814,7 +3014,7 @@ def review_start():
     mode = str(data.get('mode', 'manual')).lower()
     voice_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(data.get('voice_id', 'ngoc_huyen')))[:100]
     output_dir = str(data.get('output_dir') or os.path.join(ROOT_DIR, 'output')).strip()
-    output_name = secure_filename(str(data.get('output_name', 'video_review.mp4')))
+    output_name = sanitize_unicode_filename(str(data.get('output_name', 'video_review.mp4')))
     srt_path = str(data.get('srt_path') or '').strip()
     if mode not in {'manual', 'api', 'narration'}:
         return jsonify({'success': False, 'error': 'Chế độ review không hợp lệ'}), 400

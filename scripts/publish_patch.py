@@ -53,7 +53,8 @@ PATCH_INCLUDE_DIRS = [
     "web",
     "resources",
     "routes",
-    "prompts"
+    "prompts",
+    "services"
 ]
 
 PATCH_INCLUDE_FILES = [
@@ -381,13 +382,14 @@ def git_push_changes(version, target_files=None):
             subprocess.run(["git", "add", "."], cwd=ROOT_DIR, check=True)
         subprocess.run(["git", "commit", "-m", f"Release patch v{version}"], cwd=ROOT_DIR, check=False)
         try:
-            res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, capture_output=True, text=True, timeout=15)
+            subprocess.run(["git", "branch", "-f", "main", "HEAD"], cwd=ROOT_DIR, check=False)
+            res = subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=ROOT_DIR, capture_output=True, text=True, timeout=30)
             if res.returncode == 0:
                 log("✅ Đã push thành công lên GitHub origin main!")
             else:
                 log(f"⚠️ Git push notice: {res.stderr or res.stdout}")
         except subprocess.TimeoutExpired:
-            log("⚠️ Git push quá thời gian chờ (15s). Vui lòng chạy 'git push origin main' thủ công nếu cần.")
+            log("⚠️ Git push quá thời gian chờ (30s). Vui lòng chạy 'git push origin main' thủ công nếu cần.")
     except Exception as e:
         log(f"⚠️ Lỗi git push: {e}")
 

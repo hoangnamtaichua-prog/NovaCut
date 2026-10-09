@@ -4,6 +4,7 @@ __pycache__/
 .cache/
 .pytest_cache/
 .system_generated/
+.agents/teamwork/
 *.log
 
 # Sensitive User & License Files

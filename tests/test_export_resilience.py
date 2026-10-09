@@ -188,10 +188,14 @@ class TestExportResilience(unittest.TestCase):
         speed = 1.15
         duration = 120.0
 
-        # Tạo file audio giả lập dubbed_timeline.wav > 1000 bytes
+        # Tạo file audio giả lập dubbed_timeline.wav hợp lệ > 1000 bytes
+        import wave
         wav_path = os.path.join(self.temp_dir, 'dubbed_timeline.wav')
-        with open(wav_path, 'wb') as f:
-            f.write(b"RIFF" + b"\x00" * 2000)
+        with wave.open(wav_path, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00" * 32000)
 
         fp1 = compute_tts_fingerprint(subs_orig, voice_id, speed, duration)
         self.assertTrue(bool(fp1) and len(fp1) == 64, "Mã băm phải là chuỗi SHA-256 64 hex")

@@ -126,6 +126,7 @@ from routes.comic_review import comic_review_bp
 from routes.export_history import export_history_bp
 from routes.telegram import telegram_bp
 from routes.social_publish import social_publish_bp
+from routes.hongguo import hongguo_bp
 
 app.register_blueprint(core_bp)
 app.register_blueprint(video_edit_bp)
@@ -143,6 +144,7 @@ app.register_blueprint(comic_review_bp)
 app.register_blueprint(export_history_bp)
 app.register_blueprint(telegram_bp)
 app.register_blueprint(social_publish_bp)
+app.register_blueprint(hongguo_bp)
 
 def main():
     import threading
@@ -194,6 +196,33 @@ def main():
                 if hicon_big:
                     user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
                 break
+
+    def free_stale_port_5000():
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(('127.0.0.1', 5000))
+            s.close()
+            return
+        except OSError:
+            pass
+        if os.name == 'nt':
+            try:
+                curr_pid = os.getpid()
+                out = subprocess.check_output('netstat -ano | findstr :5000', shell=True).decode('utf-8', errors='ignore')
+                for line in out.splitlines():
+                    if 'LISTENING' in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 5:
+                            pid = int(parts[-1])
+                            if pid != curr_pid and pid > 0:
+                                print(f"[NovaCut] Giai phong port 5000 tu tien trinh cu PID {pid}...")
+                                subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True)
+                time.sleep(0.5)
+            except Exception:
+                pass
+
+    free_stale_port_5000()
 
     def start_server():
         app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)
@@ -339,6 +368,11 @@ def main():
     def handle_exit_signal(sig, frame):
         print("\n[NovaCut] Dang dong ung dung va giai phong toan bo tien trinh con...")
         try:
+            from services.hongguo_service import HongguoServiceManager
+            HongguoServiceManager.get_instance().stop_services()
+        except Exception:
+            pass
+        try:
             import ffmpeg_installer
             stealth_kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs()
             subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True, **stealth_kwargs)
@@ -372,6 +406,11 @@ def main():
     
     # Khi người dùng đóng cửa sổ app, dừng triệt để toàn bộ thread và tiến trình ngầm
     print("\n[NovaCut] Cua so ung dung da dong. Dang giai phong tai nguyen...")
+    try:
+        from services.hongguo_service import HongguoServiceManager
+        HongguoServiceManager.get_instance().stop_services()
+    except Exception:
+        pass
     try:
         import ffmpeg_installer
         stealth_kwargs = ffmpeg_installer.get_stealth_subprocess_kwargs()

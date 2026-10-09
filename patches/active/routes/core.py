@@ -209,6 +209,23 @@ def resolve_media_path_api():
 
     return jsonify({'success': False, 'error': 'Không tìm thấy file trên hệ thống'}), 404
 
+@core_bp.route('/api/register_paths', methods=['POST'])
+def register_paths_api():
+    data = request.json or {}
+    paths = data.get('paths') or []
+    if isinstance(paths, str):
+        paths = [paths]
+    registered = []
+    for p in paths:
+        if not p:
+            continue
+        clean_p = str(p).strip('\'"')
+        if os.path.exists(clean_p):
+            norm_p = os.path.normpath(clean_p)
+            register_user_path(norm_p)
+            registered.append(norm_p)
+    return jsonify({'success': True, 'registered_count': len(registered)})
+
 @core_bp.route('/api/image')
 def stream_image():
     raw_path = request.args.get('path', '')

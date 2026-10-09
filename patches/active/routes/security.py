@@ -10,7 +10,8 @@ _selection_lock = threading.RLock()
 _selected_roots = set()
 _BUILTIN_WRITABLE_DIRS = (
     'output', 'projects', 'temp', 'uploads', 'downloads', 'tiktok_output',
-    'clips', 'scratch', 'voices', 'backgroundmusic', 'movies', 'movies_retired'
+    'clips', 'scratch', 'voices', 'backgroundmusic', 'movies', 'movies_retired',
+    '.cache'
 )
 
 
@@ -58,14 +59,41 @@ def is_path_allowed(path, *, must_exist=False, extensions=None):
         return False
 
 
+def sanitize_unicode_filename(filename, default='video_output.mp4', default_ext='.mp4'):
+    """
+    Chuẩn hóa tên file an toàn cho hệ thống (Windows/Linux/macOS)
+    nhưng BẢO TỒN 100% tiếng Việt có dấu, khoảng trắng bình thường, dấu ngoặc [], (), dấu gạch ngang -.
+    Chỉ loại bỏ các ký tự cấm của hệ điều hành: < > : " / \\ | ? * và ký tự điều khiển (0x00-0x1F).
+    """
+    if not filename or not isinstance(filename, str):
+        return default
+    
+    import unicodedata
+    import re
+    name = unicodedata.normalize('NFC', str(filename).strip())
+    # Loại bỏ đường dẫn thư mục nếu có
+    name = os.path.basename(name.replace('\\', '/'))
+    # Loại bỏ các ký tự bị cấm trên file system Windows/Linux
+    name = re.sub(r'[\<\>\:\"\/\\\|\?\*\x00-\x1f]', '', name)
+    # Loại bỏ dấu chấm hoặc khoảng trắng ở đầu / cuối file
+    name = name.strip('. ')
+    if not name:
+        return default
+    # Giữ nguyên extension hiện có nếu có, hoặc thêm default_ext nếu chưa có extension
+    if not os.path.splitext(name)[1]:
+        name += (default_ext if default_ext.startswith('.') else f'.{default_ext}')
+    return name
+
+
 def safe_join(root, name, *, extensions=None):
     root_real = _real(root)
-    candidate = _real(os.path.join(root_real, str(name or '')))
-    if not _is_within(root_real, candidate):
+    full_path = os.path.abspath(os.path.join(root, str(name or '')))
+    candidate_real = _real(full_path)
+    if not _is_within(root_real, candidate_real):
         raise ValueError('Đường dẫn nằm ngoài thư mục được phép.')
-    if extensions and os.path.splitext(candidate)[1].lower() not in {e.lower() for e in extensions}:
+    if extensions and os.path.splitext(full_path)[1].lower() not in {e.lower() for e in extensions}:
         raise ValueError('Định dạng file không được phép.')
-    return candidate
+    return full_path
 
 
 def parse_bool(value, default=False):

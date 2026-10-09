@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request, send_from_directory, send_file, Response
 import os, subprocess, sys, mimetypes, json, logging, traceback, re, time, threading, urllib.parse, uuid, hashlib
 from routes.state import *
-from routes.security import atomic_write_json, is_path_allowed, safe_join
+from routes.security import atomic_write_json, is_path_allowed, safe_join, sanitize_unicode_filename
 from werkzeug.utils import secure_filename
 import asr_manager
 
@@ -886,7 +886,7 @@ def generate_tts_kokoro():
         if not filename:
             clean_vid = re.sub(r'[^a-zA-Z0-9_]', '_', voice_id)
             filename = f"tts_{clean_vid}_{timestamp}.wav"
-        filename = secure_filename(str(filename))
+        filename = sanitize_unicode_filename(str(filename), default_ext='.wav')
         if not filename.endswith('.wav'):
             filename += '.wav'
             
@@ -1129,7 +1129,7 @@ def generate_tts_openspeaker():
         timestamp = int(time.time())
         if not filename:
             filename = f"tts_open_{voice_id}_{timestamp}.mp3"
-        filename = secure_filename(str(filename))
+        filename = sanitize_unicode_filename(str(filename), default_ext='.mp3')
         if not (filename.endswith('.mp3') or filename.endswith('.wav')):
             filename += '.mp3'
             

@@ -657,6 +657,11 @@ export async function addVideosToBatch(paths) {
     }
 
     if (addedCount > 0) {
+        fetch('/api/register_paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: batchEditorItems.map(it => it.videoPath).filter(Boolean) })
+        }).catch(() => {});
         // Tự động kiểm tra file SRT cùng thư mục hoặc cùng tên
         autoCheckLocalSrtsForNewVideos();
         renderBatchTable();
@@ -2058,12 +2063,14 @@ function setupBatchExecutionEvents() {
     if (btnStop) btnStop.addEventListener('click', stopBatchExport);
 
     if (chkSaveToSource) {
-        chkSaveToSource.addEventListener('change', () => {
+        const updateSaveToSourceUI = () => {
             const outInput = document.getElementById('batch_outputDir');
             const selectBtn = document.getElementById('btnBatchSelectOutputDir');
             if (chkSaveToSource.checked) {
                 if (outInput) {
-                    if (!outInput.dataset.prevDir) outInput.dataset.prevDir = outInput.value || '';
+                    if (!outInput.dataset.prevDir && !outInput.value.startsWith('[Tự động]')) {
+                        outInput.dataset.prevDir = outInput.value || 'output/batch_export';
+                    }
                     outInput.value = '[Tự động] Cùng thư mục chứa từng video gốc';
                 }
                 if (selectBtn) {
@@ -2079,7 +2086,12 @@ function setupBatchExecutionEvents() {
                     selectBtn.style.pointerEvents = 'auto';
                 }
             }
-        });
+        };
+
+        chkSaveToSource.addEventListener('change', updateSaveToSourceUI);
+        if (chkSaveToSource.checked) {
+            updateSaveToSourceUI();
+        }
     }
     
     if (btnOpenDir) {
@@ -2236,9 +2248,16 @@ async function normalizeAndDedupSubtitles(subs, minGapSec = 0.7) {
             if (!prev.translation && item.translation) prev.translation = item.translation;
         } else {
             if (item.start_sec < prev.end_sec) {
-                item.start_sec = prev.end_sec + 0.05;
-                if (item.end_sec <= item.start_sec) {
-                    item.end_sec = item.start_sec + 0.5;
+                if (item.start_sec > prev.start_sec + 0.2) {
+                    prev.end_sec = Math.round((item.start_sec - 0.05) * 1000) / 1000;
+                } else {
+                    prev.end_sec = Math.round((prev.start_sec + 0.5) * 1000) / 1000;
+                    if (item.start_sec < prev.start_sec) {
+                        item.start_sec = prev.start_sec;
+                    }
+                    if (item.end_sec <= item.start_sec) {
+                        item.end_sec = Math.round((item.start_sec + 0.5) * 1000) / 1000;
+                    }
                 }
             }
             merged.push({ ...item });
@@ -2260,13 +2279,14 @@ async function normalizeAndDedupSubtitles(subs, minGapSec = 0.7) {
 /**
  * Kiểm tra tính hợp lệ của phụ đề trước khi xuất
  */
-function validateSubtitlesForExport(subtitles, targetLang = 'vi') {
+function validateSubtitlesForExport(subtitles, targetLang = 'vi', maxAllowedErrors = 15) {
     if (!subtitles || !Array.isArray(subtitles) || subtitles.length === 0) {
         return { isValid: false, reason: 'Danh sách phụ đề rỗng', errorCount: 0 };
     }
 
     const tLang = (targetLang || 'vi').toLowerCase();
     const errors = [];
+    const invalidIndices = new Set();
 
     subtitles.forEach((s, idx) => {
         if (s && s._ocr_garbage_skipped) return;
@@ -2276,45 +2296,63 @@ function validateSubtitlesForExport(subtitles, targetLang = 'vi') {
 
         if (!trans) {
             errors.push(`ID ${id}: Chưa có bản dịch`);
+            invalidIndices.add(idx);
             return;
         }
 
         if (trans.includes('[Lỗi') || trans.includes('API Error') || trans.includes('error:') || trans.includes('Rate limit')) {
             errors.push(`ID ${id}: Chứa thông báo lỗi ("${trans.substring(0, 30)}")`);
+            invalidIndices.add(idx);
             return;
         }
 
         if (tLang === 'vi') {
             if (/[\u4e00-\u9fff]/.test(trans)) {
                 errors.push(`ID ${id}: Bản dịch còn chứa chữ Hán ("${trans.substring(0, 30)}")`);
+                invalidIndices.add(idx);
                 return;
             }
             if (/[\u4e00-\u9fff]/.test(orig) && trans.toLowerCase() === orig.toLowerCase()) {
                 errors.push(`ID ${id}: Chưa dịch, còn nguyên chữ Hán nguồn ("${orig.substring(0, 30)}")`);
+                invalidIndices.add(idx);
                 return;
             }
         } else if (tLang === 'en') {
             if (/[\u4e00-\u9fff]/.test(trans)) {
                 errors.push(`ID ${id}: Bản dịch tiếng Anh chứa chữ Hán ("${trans.substring(0, 30)}")`);
+                invalidIndices.add(idx);
                 return;
             }
             if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(trans)) {
                 errors.push(`ID ${id}: Bản dịch tiếng Anh chứa tiếng Việt ("${trans.substring(0, 30)}")`);
+                invalidIndices.add(idx);
                 return;
             }
         }
     });
 
     if (errors.length > 0) {
+        if (errors.length < maxAllowedErrors) {
+            return {
+                isValid: true,
+                isTolerated: true,
+                reason: `Chấp nhận sai số nhỏ: ${errors.length} câu lỗi (< ${maxAllowedErrors} câu cho phép)`,
+                errorCount: errors.length,
+                errors: errors,
+                invalidIndices: invalidIndices
+            };
+        }
         return {
             isValid: false,
+            isTolerated: false,
             reason: `Phát hiện ${errors.length} câu lỗi: ${errors.slice(0, 3).join('; ')}`,
             errorCount: errors.length,
-            errors: errors
+            errors: errors,
+            invalidIndices: invalidIndices
         };
     }
 
-    return { isValid: true, reason: 'Phụ đề hợp lệ', errorCount: 0 };
+    return { isValid: true, isTolerated: false, reason: 'Phụ đề hợp lệ', errorCount: 0 };
 }
 
 /**
@@ -2338,7 +2376,7 @@ function collectBatchGlobalConfig() {
 
     // Stem separation
     const stemEnabled = Boolean(document.getElementById('batch_editorStemSeparationEnabled')?.checked);
-    const stemMode = document.getElementById('batch_editorStemMode')?.value || 'mdx_net_hq4';
+    const stemMode = document.getElementById('batch_editorStemMode')?.value || 'dsp_turbo';
 
     // Subtitle style
     const subtitlesEnabled = document.getElementById('batch_subtitlesEnabled')?.checked ?? true;
@@ -2561,6 +2599,9 @@ export async function startBatchExport() {
                     const val = validateSubtitlesForExport(itemSubs, exportTargetLang);
                     if (!val.isValid) {
                         throw new Error(`Kiểm tra phụ đề thất bại: ${val.reason}`);
+                    } else if (val.isTolerated && val.invalidIndices && val.invalidIndices.size > 0) {
+                        appendLog(`[${timeNow()}] > ⚠️ ${val.reason}. Đã tự động loại bỏ các câu lỗi để tiếp tục xuất video.`, 'warning');
+                        itemSubs = itemSubs.filter((_, idx) => !val.invalidIndices.has(idx));
                     }
                 }
                 item.subtitles = itemSubs;
@@ -2616,37 +2657,92 @@ export async function startBatchExport() {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let isItemSuccess = false;
+            let lineBuffer = '';
+
+            const processBatchSseLine = (rawLine) => {
+                const line = rawLine.trim();
+                if (!line || line.startsWith(':') || line.startsWith('id:')) return;
+
+                let cleanLine = line;
+                if (cleanLine.startsWith('data:')) {
+                    cleanLine = cleanLine.substring(5).trim();
+                }
+                if (!cleanLine) return;
+
+                if (cleanLine.startsWith('[EVENT:SUCCESS]')) {
+                    isItemSuccess = true;
+                    try {
+                        const succData = JSON.parse(cleanLine.replace('[EVENT:SUCCESS]', '').trim());
+                        if (succData.path) {
+                            item.outputPath = succData.path;
+                        }
+                    } catch(e) {}
+                    return;
+                }
+                if (cleanLine.startsWith('[EVENT:FAILED]')) {
+                    isItemSuccess = false;
+                    item.errorMsg = cleanLine.replace('[EVENT:FAILED]', '').trim();
+                    appendLog(`[${timeNow()}] > ❌ [Lỗi xuất video]: ${item.errorMsg}`, 'error');
+                    return;
+                }
+                if (cleanLine.startsWith('[EVENT:CANCELLED]') || cleanLine.startsWith('[EVENT:STAGE]') || cleanLine.startsWith('[EVENT:PROGRESS]') || cleanLine.startsWith('[HEARTBEAT]')) {
+                    return;
+                }
+
+                if (cleanLine.includes('Render') || cleanLine.includes('%')) {
+                    const m = cleanLine.match(/(\d+)%/);
+                    if (m) {
+                        item.progress = Math.min(99, parseInt(m[1]));
+                        renderBatchTable();
+                    }
+                }
+
+                let shouldLog = true;
+                if (cleanLine.includes('⏳')) {
+                    const now = Date.now();
+                    const m = cleanLine.match(/(\d+)%/);
+                    const pct = m ? parseInt(m[1]) : null;
+                    if (pct !== null && pct === item._lastLoggedPct && now - (item._lastLogTime || 0) < 3000) {
+                        shouldLog = false;
+                    } else {
+                        item._lastLoggedPct = pct;
+                        item._lastLogTime = now;
+                        shouldLog = true;
+                    }
+                } else if (cleanLine.includes('🎙️')) {
+                    const now = Date.now();
+                    const m = cleanLine.match(/(\d+)%/);
+                    const pct = m ? parseInt(m[1]) : null;
+                    if (pct !== null && (pct % 5 !== 0 || pct === item._lastTtsPct) && now - (item._lastTtsTime || 0) < 3000) {
+                        shouldLog = false;
+                    } else {
+                        item._lastTtsPct = pct;
+                        item._lastTtsTime = now;
+                        shouldLog = true;
+                    }
+                }
+
+                if (shouldLog) {
+                    const logType = cleanLine.includes('⚠️') ? 'warning' : ((cleanLine.includes('❌') || cleanLine.includes('🛑')) ? 'error' : ((cleanLine.includes('✅') || cleanLine.includes('🎉')) ? 'success' : 'info'));
+                    appendLog(`[${timeNow()}] > ${cleanLine}`, logType);
+                }
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
+                lineBuffer += decoder.decode(value, { stream: true });
+                const lines = lineBuffer.split('\n');
+                lineBuffer = lines.pop();
 
-                for (const line of lines) {
-                    const cleanLine = line.replace('data: ', '').trim();
-                    if (!cleanLine) continue;
-
-                    if (cleanLine.startsWith('[EVENT:SUCCESS]')) {
-                        isItemSuccess = true;
-                        try {
-                            const succData = JSON.parse(cleanLine.replace('[EVENT:SUCCESS]', '').trim());
-                            if (succData.path) {
-                                item.outputPath = succData.path;
-                            }
-                        } catch(e) {}
-                    } else if (cleanLine.startsWith('[EVENT:FAILED]')) {
-                        isItemSuccess = false;
-                        item.errorMsg = cleanLine.replace('[EVENT:FAILED]', '').trim();
-                    } else if (cleanLine.includes('Render') || cleanLine.includes('%')) {
-                        const m = cleanLine.match(/(\d+)%/);
-                        if (m) {
-                            item.progress = Math.min(99, parseInt(m[1]));
-                            renderBatchTable();
-                        }
-                    }
+                for (const l of lines) {
+                    processBatchSseLine(l);
                 }
+            }
+            if (lineBuffer.trim()) {
+                processBatchSseLine(lineBuffer);
+                lineBuffer = '';
             }
 
             if (isItemSuccess) {
@@ -3309,10 +3405,21 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
             }
         }
 
-        // Chỉ ném lỗi nếu còn câu DÀI thực sự chưa dịch được (không phải rác OCR)
-        if (realMissing.length > 0) {
+        // Chỉ ném lỗi nếu còn câu thực sự chưa dịch được từ 15 câu trở lên
+        const MAX_ALLOWED_UNTRANSLATED = 15;
+        if (realMissing.length >= MAX_ALLOWED_UNTRANSLATED) {
             const badPreview = realMissing.slice(0, 3).map(s => `ID ${s.id}: "${(s.translation || s.text || '').substring(0, 30)}"`).join('; ');
             throw new Error(`Dịch thuật thất bại: còn ${realMissing.length}/${totalSubs} câu chưa được dịch hoặc sai ngôn ngữ target (${badPreview})`);
+        } else if (realMissing.length > 0) {
+            const badPreview = realMissing.slice(0, 3).map(s => `ID ${s.id}: "${(s.translation || s.text || '').substring(0, 30)}"`).join('; ');
+            realMissing.forEach(badItem => {
+                const target = subMap.get(String(badItem.id));
+                if (target) {
+                    target.translation = '';
+                    target._ocr_garbage_skipped = true;
+                }
+            });
+            appendLog(`[${timeNow()}] > ⚠️ Bỏ qua ${realMissing.length} câu chưa dịch được (< ${MAX_ALLOWED_UNTRANSLATED} câu cho phép: ${badPreview}) để tiếp tục quy trình xuất video.`, 'warning');
         }
 
         if (garbageSubs.length > 0) {
@@ -3321,14 +3428,24 @@ async function executeSubtitlesTranslateBatch(subs, aiChoice, signal) {
                 appendLog(`[${timeNow()}] > ℹ️ ${skippedCount} câu rác OCR đã được bỏ qua hoàn toàn (sẽ không hiển thị trên phụ đề). Video vẫn tiếp tục xuất bình thường.`, 'info');
             }
         }
-        // Không throw lỗi – tất cả câu rác OCR đã được xử lý gracefully
-        // Lọc bỏ triệt để các câu rác OCR bỏ qua (translation rỗng) để không làm gãy Step 5 thẩm định
+        // Không throw lỗi – tất cả câu rác OCR và câu lỗi dưới ngưỡng đã được xử lý gracefully
+        // Lọc bỏ triệt để các câu rác OCR / câu chưa dịch bỏ qua (translation rỗng) để không làm gãy Step 5 thẩm định
         return resultSubs.filter(s => !s._ocr_garbage_skipped && (s.translation || '').trim() !== '');
     }
 
-    if (finalInvalid.length > 0) {
+    if (finalInvalid.length >= 15) {
         const badPreview = finalInvalid.slice(0, 3).map(s => `ID ${s.id}: "${(s.translation || s.text || '').substring(0, 30)}"`).join('; ');
         throw new Error(`Dịch thuật thất bại: còn ${finalInvalid.length}/${totalSubs} câu chưa được dịch hoặc sai ngôn ngữ target (${badPreview})`);
+    } else if (finalInvalid.length > 0) {
+        const badPreview = finalInvalid.slice(0, 3).map(s => `ID ${s.id}: "${(s.translation || s.text || '').substring(0, 30)}"`).join('; ');
+        finalInvalid.forEach(badItem => {
+            const target = subMap.get(String(badItem.id));
+            if (target) {
+                target.translation = '';
+                target._ocr_garbage_skipped = true;
+            }
+        });
+        appendLog(`[${timeNow()}] > ⚠️ Bỏ qua ${finalInvalid.length} câu lỗi dịch thuật (< 15 câu cho phép: ${badPreview}) để tiếp tục quy trình xuất video.`, 'warning');
     }
 
     return resultSubs.filter(s => !s._ocr_garbage_skipped && (s.translation || '').trim() !== '');
@@ -3803,6 +3920,12 @@ export async function startBatchSubtitleScan() {
     taskAbortController = new AbortController();
     setBatchTaskUiRunning(true, 'Quét phụ đề hàng loạt');
     appendLog(`[${timeNow()}] > 🚀 Bắt đầu quét phụ đề hàng loạt cho ${queue.length} video...`, 'info');
+
+    await fetch('/api/register_paths', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: queue.map(it => it.videoPath).filter(Boolean) })
+    }).catch(() => {});
 
     let successCount = 0;
     let failCount = 0;
@@ -4280,6 +4403,12 @@ export async function startBatchAllInOnePipeline() {
     setBatchTaskUiRunning(true, 'Tự động toàn trình qua đêm');
     appendLog(`[${timeNow()}] > ⚡ BẮT ĐẦU QUY TRÌNH TỰ ĐỘNG TOÀN TRÌNH CHO ${targetItems.length} VIDEO (TREO MÁY QUA ĐÊM)...`, 'info');
 
+    await fetch('/api/register_paths', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: targetItems.map(it => it.videoPath).filter(Boolean) })
+    }).catch(() => {});
+
     const batchStartTime = Date.now() / 1000;
     let totalSuccess = 0;
     let totalFail = 0;
@@ -4424,6 +4553,9 @@ export async function startBatchAllInOnePipeline() {
             const valResult = validateSubtitlesForExport(subs, targetLang);
             if (!valResult.isValid) {
                 throw new Error(`Kiểm tra phụ đề sau dịch không đạt yêu cầu xuất video: ${valResult.reason}`);
+            } else if (valResult.isTolerated && valResult.invalidIndices && valResult.invalidIndices.size > 0) {
+                appendLog(`[${timeNow()}] > ⚠️ [Bước 5/6] ${valResult.reason}. Đã tự động loại bỏ các câu lỗi để tiếp tục lồng tiếng & xuất video.`, 'warning');
+                subs = subs.filter((_, idx) => !valResult.invalidIndices.has(idx));
             }
 
             // Lưu file SRT thành phẩm đã dịch hoàn hảo vào _novacut.srt (KHÔNG GHI ĐÈ SRT NGUỒN)
@@ -4501,35 +4633,93 @@ export async function startBatchAllInOnePipeline() {
             const expReader = exportRes.body.getReader();
             const expDecoder = new TextDecoder();
             let isItemSuccess = false;
+            let lineBuffer = '';
+
+            const processAllInOneSseLine = (rawLine) => {
+                const line = rawLine.trim();
+                if (!line || line.startsWith(':') || line.startsWith('id:')) return;
+
+                let cleanLine = line;
+                if (cleanLine.startsWith('data:')) {
+                    cleanLine = cleanLine.substring(5).trim();
+                }
+                if (!cleanLine) return;
+
+                if (cleanLine.startsWith('[EVENT:SUCCESS]')) {
+                    isItemSuccess = true;
+                    try {
+                        const succData = JSON.parse(cleanLine.replace('[EVENT:SUCCESS]', '').trim());
+                        if (succData.path) {
+                            item.outputPath = succData.path;
+                        }
+                    } catch(e) {}
+                    return;
+                }
+                if (cleanLine.startsWith('[EVENT:FAILED]')) {
+                    isItemSuccess = false;
+                    item.errorMsg = cleanLine.replace('[EVENT:FAILED]', '').trim();
+                    appendLog(`[${timeNow()}] > ❌ [Lỗi xuất video]: ${item.errorMsg}`, 'error');
+                    return;
+                }
+                if (cleanLine.startsWith('[EVENT:CANCELLED]') || cleanLine.startsWith('[EVENT:STAGE]') || cleanLine.startsWith('[EVENT:PROGRESS]') || cleanLine.startsWith('[HEARTBEAT]')) {
+                    return;
+                }
+
+                if (cleanLine.includes('Render') || cleanLine.includes('%')) {
+                    const m = cleanLine.match(/(\d+)%/);
+                    if (m) {
+                        const renderPct = parseInt(m[1]);
+                        item.progress = Math.min(99, 60 + Math.round(renderPct * 0.39));
+                        renderBatchTable();
+                    }
+                }
+
+                let shouldLog = true;
+                if (cleanLine.includes('⏳')) {
+                    const now = Date.now();
+                    const m = cleanLine.match(/(\d+)%/);
+                    const pct = m ? parseInt(m[1]) : null;
+                    if (pct !== null && pct === item._lastLoggedPct && now - (item._lastLogTime || 0) < 3000) {
+                        shouldLog = false;
+                    } else {
+                        item._lastLoggedPct = pct;
+                        item._lastLogTime = now;
+                        shouldLog = true;
+                    }
+                } else if (cleanLine.includes('🎙️')) {
+                    const now = Date.now();
+                    const m = cleanLine.match(/(\d+)%/);
+                    const pct = m ? parseInt(m[1]) : null;
+                    if (pct !== null && (pct % 5 !== 0 || pct === item._lastTtsPct) && now - (item._lastTtsTime || 0) < 3000) {
+                        shouldLog = false;
+                    } else {
+                        item._lastTtsPct = pct;
+                        item._lastTtsTime = now;
+                        shouldLog = true;
+                    }
+                }
+
+                if (shouldLog) {
+                    const logType = cleanLine.includes('⚠️') ? 'warning' : ((cleanLine.includes('❌') || cleanLine.includes('🛑')) ? 'error' : ((cleanLine.includes('✅') || cleanLine.includes('🎉')) ? 'success' : 'info'));
+                    appendLog(`[${timeNow()}] > ${cleanLine}`, logType);
+                }
+            };
 
             while (true) {
                 const { done, value } = await expReader.read();
                 if (done) break;
-                const chunk = expDecoder.decode(value);
-                const lines = chunk.split('\n');
-                for (const line of lines) {
-                    const cleanLine = line.replace('data: ', '').trim();
-                    if (!cleanLine) continue;
-                    if (cleanLine.startsWith('[EVENT:SUCCESS]')) {
-                        isItemSuccess = true;
-                        try {
-                            const succData = JSON.parse(cleanLine.replace('[EVENT:SUCCESS]', '').trim());
-                            if (succData.path) {
-                                item.outputPath = succData.path;
-                            }
-                        } catch(e) {}
-                    } else if (cleanLine.startsWith('[EVENT:FAILED]')) {
-                        isItemSuccess = false;
-                        item.errorMsg = cleanLine.replace('[EVENT:FAILED]', '').trim();
-                    } else if (cleanLine.includes('Render') || cleanLine.includes('%')) {
-                        const m = cleanLine.match(/(\d+)%/);
-                        if (m) {
-                            const renderPct = parseInt(m[1]);
-                            item.progress = Math.min(99, 60 + Math.round(renderPct * 0.39));
-                            renderBatchTable();
-                        }
-                    }
+
+                lineBuffer += expDecoder.decode(value, { stream: true });
+                const lines = lineBuffer.split('\n');
+                lineBuffer = lines.pop();
+
+                for (const l of lines) {
+                    processAllInOneSseLine(l);
                 }
+            }
+            if (lineBuffer.trim()) {
+                processAllInOneSseLine(lineBuffer);
+                lineBuffer = '';
             }
 
             if (isItemSuccess) {

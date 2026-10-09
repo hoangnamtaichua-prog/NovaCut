@@ -6283,3 +6283,242 @@ body.is-admin-mode .header-tabs .nav-tab[data-admin-only="true"] {
     white-space: nowrap;
     text-align: center;
 }
+
+/* ========================================================================== */
+/* 🍓 HONGGUO DOWNLOADER STUDIO — NATIVE DARK MODE & GLASSMORPHISM           */
+/* ========================================================================== */
+
+/* Main Container Layout */
+.hongguo-container,
+.hongguo-studio-container {
+    width: 100%;
+    max-width: 100%;
+    padding: 0 16px 40px 16px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Top Title & Service Status Bar */
+.hongguo-top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px;
+    background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid #334155;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    flex-wrap: wrap;
+    gap: 14px;
+}
+
+.hongguo-status-pill,
+.hongguo-service-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid #334155;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+.hongguo-status-pill.online {
+    border-color: rgba(16, 185, 129, 0.4);
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.hongguo-status-pill.offline {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* Base Glassmorphic Cards */
+.hongguo-metadata-card,
+.hongguo-episodes-card,
+.hongguo-progress-card,
+.hongguo-library-card,
+.hongguo-card {
+    background: linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hongguo-metadata-card:hover,
+.hongguo-episodes-card:hover,
+.hongguo-progress-card:hover,
+.hongguo-library-card:hover {
+    border-color: rgba(56, 189, 248, 0.35);
+}
+
+/* Episode Tiles & Selector Grid */
+.hongguo-ep-tile,
+.hg-episode-btn {
+    padding: 8px 6px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s ease;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.hongguo-ep-tile:hover,
+.hg-episode-btn:hover {
+    border-color: #f43f5e;
+    color: #fff;
+    background: rgba(244, 63, 94, 0.12);
+    transform: translateY(-1px);
+}
+
+.hongguo-ep-tile.selected,
+.hg-episode-btn.selected {
+    background: linear-gradient(135deg, #e11d48, #f43f5e);
+    border-color: #f43f5e;
+    color: #fff;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(225, 29, 72, 0.4);
+}
+
+.hongguo-ep-tile.downloaded,
+.hg-episode-btn.downloaded {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+}
+
+/* Tasks Table Styling */
+.hongguo-tasks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    color: #cbd5e1;
+}
+
+.hongguo-tasks-table th {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+    text-align: left;
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.hongguo-tasks-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+}
+
+.hongguo-tasks-table tr:hover td {
+    background: rgba(30, 41, 59, 0.4);
+}
+
+/* Buttons */
+.btn.primary-rose {
+    background: linear-gradient(135deg, #e11d48, #f43f5e);
+    color: #ffffff;
+    border: none;
+    box-shadow: 0 4px 14px rgba(225, 29, 72, 0.4);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn.primary-rose:hover {
+    background: linear-gradient(135deg, #f43f5e, #fb7185);
+    box-shadow: 0 6px 18px rgba(225, 29, 72, 0.55);
+    transform: translateY(-1px);
+}
+
+.btn.primary-rose:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Workflow Action Buttons */
+.btn-hg-workflow-editor {
+    background: rgba(14, 165, 233, 0.15);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+}
+
+.btn-hg-workflow-editor:hover {
+    background: rgba(14, 165, 233, 0.3);
+    border-color: #38bdf8;
+    color: #ffffff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);
+}
+
+.btn-hg-workflow-review {
+    background: rgba(168, 85, 247, 0.15);
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    color: #c084fc;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+}
+
+.btn-hg-workflow-review:hover {
+    background: rgba(168, 85, 247, 0.3);
+    border-color: #c084fc;
+    color: #ffffff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(168, 85, 247, 0.3);
+}
+
+.btn-hg-workflow-folder {
+    background: rgba(51, 65, 85, 0.4);
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    color: #cbd5e1;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+}
+
+.btn-hg-workflow-folder:hover {
+    background: rgba(51, 65, 85, 0.8);
+    color: #f8fafc;
+}
+
+/* Responsive Grid Breakpoints */
+@media (max-width: 960px) {
+    .hongguo-main-grid {
+        grid-template-columns: 1fr !important;
+    }
+}
+

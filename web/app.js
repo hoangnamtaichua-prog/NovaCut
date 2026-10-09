@@ -6,6 +6,7 @@ import { initVideoStudioSuite, videoStudioInstances } from './js/features/video_
 import { initExportHistoryModule, loadExportHistory } from './js/features/export_history.js';
 import { initSocialPublisher, loadSocialProfiles, loadSocialHistory } from './js/features/social_publisher.js';
 import './js/features/comic_review.js';
+import { initHongguoModule, onHongguoTabActivated } from './js/features/hongguo.js';
 import { appendLog, showToast, showConfirmModal, showAlertModal, showPromptModal, formatTimeSec, parseTimeToSeconds, formatSrtTimestamp, formatDurationStr, escapeHtml, safeHttpUrl, timeNow } from './js/utils.js';
 
 export let currentLicenseState = {
@@ -160,6 +161,17 @@ mainNavTabs.forEach(tab => {
             }
         }
 
+        // Kiểm tra phân quyền Tải Phim Hồng Quả (Hongguo Downloader)
+        if (targetId === 'viewHongguo') {
+            if (typeof checkFeaturePermission === 'function') {
+                if (!checkFeaturePermission('hongguo_downloader', 'Tải Phim Hồng Quả')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+            }
+        }
+
         // Remove active from all tabs
         mainNavTabs.forEach(t => t.classList.remove('active'));
         // Add active to clicked tab
@@ -193,7 +205,7 @@ mainNavTabs.forEach(tab => {
         const targetView = document.getElementById(targetId);
         if (targetView) {
             targetView.classList.add('active');
-            targetView.style.display = (targetId === 'viewEditor' || targetId === 'viewBatchEditor' || targetId === 'viewReview' || targetId === 'viewDownload' || targetId === 'viewCapCut' || targetId === 'viewCloneVoice' || targetId === 'viewExportHistory' || targetId === 'viewSocialPublish') ? 'block' : 'flex';
+            targetView.style.display = (targetId === 'viewEditor' || targetId === 'viewBatchEditor' || targetId === 'viewReview' || targetId === 'viewDownload' || targetId === 'viewCapCut' || targetId === 'viewCloneVoice' || targetId === 'viewExportHistory' || targetId === 'viewSocialPublish' || targetId === 'viewHongguo') ? 'block' : 'flex';
             
             // Special case for Editor
             if (targetId === 'viewEditor') {
@@ -233,6 +245,14 @@ mainNavTabs.forEach(tab => {
             if (targetId === 'viewReview') {
                 if (typeof window.renderReviewLogo === 'function') {
                     window.renderReviewLogo();
+                }
+            }
+            // Special case for Hongguo Downloader
+            if (targetId === 'viewHongguo') {
+                if (typeof onHongguoTabActivated === 'function') {
+                    onHongguoTabActivated();
+                } else if (typeof window.onHongguoTabActivated === 'function') {
+                    window.onHongguoTabActivated();
                 }
             }
         }
@@ -432,10 +452,11 @@ if (btnRunStemSeparationEditor) {
         const hasPerm = await checkFeaturePermission('can_access_editor', 'Tách Âm Thanh AI & Lọc Giọng Thoại');
         if (!hasPerm) return;
 
-        const mode = document.getElementById('editorStemMode')?.value || 'mdx_net_hq4';
+        const mode = document.getElementById('editorStemMode')?.value || 'dsp_turbo';
         const device = document.getElementById('editorStemDevice')?.value || 'auto';
         const removeVocals = document.getElementById('editorRemoveVocals')?.checked !== false;
         const keepSfx = document.getElementById('editorKeepSfx')?.checked !== false;
+        const separateBgm = document.getElementById('editorSeparateBgm')?.checked !== false;
 
         const progressBox = document.getElementById('editorStemProgressBox');
         const progressBarFill = document.getElementById('editorStemProgressBarFill');
@@ -472,7 +493,10 @@ if (btnRunStemSeparationEditor) {
                     mode: mode,
                     device: device,
                     remove_vocals: removeVocals,
-                    keep_sfx: keepSfx
+                    keep_sfx: keepSfx,
+                    separate_bgm: separateBgm,
+                    keep_bgm: separateBgm,
+                    remove_bgm: !separateBgm
                 })
             });
 
@@ -523,21 +547,58 @@ if (btnRunStemSeparationEditor) {
                             const player = document.getElementById('editorStemAudioPlayer');
                             const btnApplyStem = document.getElementById('btnApplyStemToEditedPreview');
                             const btnRemoveStem = document.getElementById('btnRemoveStemFromEditedPreview');
-                            if (resultBox && player && pData.result && pData.result.cleaned_url) {
-                                window._appliedStemAudioUrl = pData.result.cleaned_url;
-                                window._appliedStemCleanedPath = pData.result.cleaned_path;
+                            if (resultBox && player && pData.result && (pData.result.cleaned_url || pData.result.instrumental_url || pData.result.bgm_url)) {
+                                window._stemSeparationResult = pData.result;
+                                window._appliedStemAudioUrl = pData.result.cleaned_url || pData.result.instrumental_url;
+                                window._appliedStemCleanedPath = pData.result.cleaned_path || pData.result.instrumental_path;
                                 resultBox.style.display = 'block';
-                                player.src = pData.result.cleaned_url;
-                                if (window._syncedStemAudioPlayer) {
-                                    window._syncedStemAudioPlayer.src = pData.result.cleaned_url;
-                                    window._syncedStemAudioPlayer.load();
+
+                                const btnClean = document.getElementById('btnStemTrackClean');
+                                const btnBgm = document.getElementById('btnStemTrackBgm');
+                                const btnVocal = document.getElementById('btnStemTrackVocal');
+
+                                const setTrackActive = (btnActive, url, path) => {
+                                    [btnClean, btnBgm, btnVocal].forEach(b => {
+                                        if (b) {
+                                            b.style.borderColor = '#334155';
+                                            b.style.color = '#94a3b8';
+                                            b.style.background = '#1e293b';
+                                        }
+                                    });
+                                    if (btnActive) {
+                                        btnActive.style.borderColor = '#38bdf8';
+                                        btnActive.style.color = '#38bdf8';
+                                        btnActive.style.background = 'rgba(56, 189, 248, 0.2)';
+                                    }
+                                    if (player && url) {
+                                        player.src = url;
+                                        player.load();
+                                        player.play().catch(() => {});
+                                    }
+                                    window._appliedStemAudioUrl = url;
+                                    window._appliedStemCleanedPath = path;
+                                    if (window._syncedStemAudioPlayer && url) {
+                                        window._syncedStemAudioPlayer.src = url;
+                                        window._syncedStemAudioPlayer.load();
+                                    }
+                                    if (btnApplyStem) {
+                                        btnApplyStem.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
+                                        btnApplyStem.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+                                    }
+                                    if (btnRemoveStem) btnRemoveStem.style.display = 'none';
+                                };
+
+                                if (btnClean) {
+                                    btnClean.onclick = () => setTrackActive(btnClean, pData.result.cleaned_url || pData.result.instrumental_url, pData.result.cleaned_path || pData.result.instrumental_path);
                                 }
-                                if (btnApplyStem) {
-                                    btnApplyStem.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
-                                    btnApplyStem.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+                                if (btnBgm) {
+                                    btnBgm.onclick = () => setTrackActive(btnBgm, pData.result.bgm_url || pData.result.instrumental_url, pData.result.bgm_path || pData.result.instrumental_path);
                                 }
-                                if (btnRemoveStem) btnRemoveStem.style.display = 'none';
-                                player.play().catch(() => {});
+                                if (btnVocal) {
+                                    btnVocal.onclick = () => setTrackActive(btnVocal, pData.result.vocals_url, pData.result.vocals_path);
+                                }
+
+                                setTrackActive(btnClean, pData.result.cleaned_url || pData.result.instrumental_url, pData.result.cleaned_path || pData.result.instrumental_path);
                             }
                             resolve();
                         } else if (pData.status === 'cancelled') {
@@ -1090,10 +1151,13 @@ window.buildEditorExportConfig = function(overrides = {}) {
         remove_original_vocals: shouldRemoveVocals,
         stem_separation: {
             enabled: stemSepMasterEnabled,
-            mode: overrides.dubbing?.stem_separation?.mode || document.getElementById('editorStemMode')?.value || 'mdx_net_hq4',
+            mode: overrides.dubbing?.stem_separation?.mode || document.getElementById('editorStemMode')?.value || 'dsp_turbo',
             device: overrides.dubbing?.stem_separation?.device || document.getElementById('editorStemDevice')?.value || 'auto',
             remove_vocals: shouldRemoveVocals,
             keep_sfx: overrides.dubbing?.stem_separation?.keep_sfx ?? (document.getElementById('editorKeepSfx')?.checked ?? true),
+            separate_bgm: overrides.dubbing?.stem_separation?.separate_bgm ?? (document.getElementById('editorSeparateBgm')?.checked ?? true),
+            keep_bgm: overrides.dubbing?.stem_separation?.keep_bgm ?? (document.getElementById('editorSeparateBgm')?.checked ?? true),
+            remove_bgm: overrides.dubbing?.stem_separation?.remove_bgm ?? (!(document.getElementById('editorSeparateBgm')?.checked ?? true)),
             precomputed_cleaned_path: overrides.dubbing?.stem_separation?.precomputed_cleaned_path || ((window._isStemAudioAppliedToEdited && window._appliedStemCleanedPath) ? window._appliedStemCleanedPath : '')
         },
         manual_audio: overrides.dubbing?.manual_audio || document.getElementById('manualAudioPath')?.value || '',
@@ -1214,7 +1278,16 @@ window.buildEditorExportConfig = function(overrides = {}) {
             size: overrides.delogo?.size || document.getElementById('delogoSize')?.value || 'medium',
             method: overrides.delogo?.method || document.getElementById('delogoMethod')?.value || 'delogo'
         },
-        custom_overlay_layers: overrides.custom_overlay_layers || (Array.isArray(window.customOverlayLayers) ? window.customOverlayLayers : []).filter(l => l.visible !== false)
+        custom_overlay_layers: overrides.custom_overlay_layers || (Array.isArray(window.customOverlayLayers) ? window.customOverlayLayers : []).filter(l => l.visible !== false),
+        bgm: {
+            enabled: Boolean(overrides.bgm?.enabled ?? document.getElementById('editorBgmEnabled')?.checked),
+            source: overrides.bgm?.source || window._editorBgmSourceMode || 'preset',
+            preset: overrides.bgm?.preset || document.getElementById('editorBgmPresetSelect')?.value || 'random',
+            path: overrides.bgm?.path || (window._editorBgmSourceMode === 'custom' ? window._editorBgmCustomPath : '') || '',
+            volume: parseSafeNum(overrides.bgm?.volume ?? document.getElementById('editorBgmVol')?.value, 20),
+            ducking: Boolean(overrides.bgm?.ducking ?? (document.getElementById('editorBgmDucking')?.checked ?? true)),
+            loop: Boolean(overrides.bgm?.loop ?? (document.getElementById('editorBgmLoop')?.checked ?? true))
+        }
     };
 
     return config;
@@ -9820,52 +9893,38 @@ if (btnMergeSelectedSrt) {
         const lastIdx = selectedIndices[selectedIndices.length - 1];
         const selectedSubs = srtData.slice(firstIdx, lastIdx + 1);
 
-        const startSec = selectedSubs[0].startSeconds;
-        const endSec = selectedSubs[selectedSubs.length - 1].endSeconds;
+        const firstSub = selectedSubs[0];
+        const lastSub = selectedSubs[selectedSubs.length - 1];
+        const startSec = firstSub.startSeconds;
+        const endSec = typeof lastSub.endSeconds === 'number' ? Math.max(firstSub.endSeconds || 0, lastSub.endSeconds) : (firstSub.endSeconds || 0);
 
-        // Nối nội dung text
-        const mergedText = selectedSubs
-            .map(s => (s.text || s.original_text || '').trim())
-            .filter(Boolean)
-            .join(' ');
-
-        // Nối bản dịch (nếu có)
-        const mergedTranslation = selectedSubs
-            .map(s => (s.translation || '').trim())
-            .filter(Boolean)
-            .join(' ');
-
-        // Định dạng thời gian
+        // Định dạng thời gian gộp: lấy từ thời điểm bắt đầu của dòng đầu đến kết thúc của dòng cuối
         const startTimeStr = formatSrtTimestamp(startSec).replace(',', '.');
         const endTimeStr = formatSrtTimestamp(endSec).replace(',', '.');
         const timeStr = `${startTimeStr} - ${endTimeStr}`;
 
-        // Gộp aiBox nếu có
-        let mergedAiBox = null;
-        const subsWithAiBox = selectedSubs.filter(s => s.aiBox && typeof s.aiBox.x_pct === 'number');
-        if (subsWithAiBox.length > 0) {
-            const minX = Math.min(...subsWithAiBox.map(s => s.aiBox.x_pct));
-            const maxXPlusW = Math.max(...subsWithAiBox.map(s => s.aiBox.x_pct + (s.aiBox.w_pct || 0)));
-            const minY = Math.min(...subsWithAiBox.map(s => s.aiBox.y_pct || 81.5));
-            const maxH = Math.max(...subsWithAiBox.map(s => s.aiBox.h_pct || 9.5));
-            mergedAiBox = {
-                x_pct: Math.round(minX * 10) / 10,
-                y_pct: Math.round(minY * 10) / 10,
-                w_pct: Math.round((maxXPlusW - minX) * 10) / 10,
-                h_pct: Math.round(maxH * 10) / 10
-            };
-        }
+        // Phụ đề (text, original_text, translation) giữ nguyên của dòng đầu tiên
+        const primaryText = firstSub.text || firstSub.original_text || '';
+        const primaryOriginalText = firstSub.original_text || firstSub.text || '';
+        // Ưu tiên bản dịch của dòng đầu tiên; nếu dòng đầu chưa có bản dịch thì lấy bản dịch của dòng có sẵn tiếp theo
+        const primaryTranslation = (firstSub.translation && firstSub.translation.trim())
+            ? firstSub.translation
+            : (selectedSubs.find(s => s.translation && s.translation.trim())?.translation || '');
+
+        // aiBox giữ nguyên của dòng đầu tiên (nếu dòng đầu không có thì lấy của dòng có aiBox)
+        const primaryAiBox = firstSub.aiBox || (selectedSubs.find(s => s.aiBox)?.aiBox || null);
 
         const mergedSub = {
+            ...firstSub,
             id: String(firstIdx + 1),
             time: timeStr,
             startSeconds: startSec,
             endSeconds: endSec,
-            text: mergedText,
-            original_text: mergedText,
-            translation: mergedTranslation,
+            text: primaryText,
+            original_text: primaryOriginalText,
+            translation: primaryTranslation,
             selected: true,
-            aiBox: mergedAiBox
+            aiBox: primaryAiBox
         };
 
         // Thay thế các dòng được chọn bằng 1 dòng đã gộp
@@ -9883,7 +9942,11 @@ if (btnMergeSelectedSrt) {
             updateDynamicBlurOverlayVisibility();
         }
 
-        showToast(`🎉 Đã gộp thành công ${selectedIndices.length} dòng phụ đề thành 1 câu!`, 'success');
+        if (typeof triggerAutoSaveEditorCache === 'function') {
+            triggerAutoSaveEditorCache();
+        }
+
+        showToast(`🎉 Đã gộp mốc thời gian ${selectedIndices.length} dòng phụ đề (giữ nguyên phụ đề câu đầu)!`, 'success');
     });
 }
 
@@ -11855,41 +11918,46 @@ if (btnBgmSourcePreset && btnBgmSourceCustom && panelBgmPreset && panelBgmCustom
 
 // Load Preset BGM List from Server
 async function loadBgmPresetList() {
-    if (!reviewBgmPresetSelect) return;
     try {
         const res = await fetch('/api/bgm/list');
         if (!res.ok) return;
         const data = await res.json();
         const trackList = Array.isArray(data.tracks) ? data.tracks : (Array.isArray(data.files) ? data.files : []);
         if (trackList.length > 0) {
-            const currentVal = reviewBgmPresetSelect.value || 'random';
-            reviewBgmPresetSelect.innerHTML = '<option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>';
-            
-            const safeGroup = document.createElement('optgroup');
-            safeGroup.label = '🛡️ AN TOÀN YOUTUBE (NO-COPYRIGHT)';
-            const normalGroup = document.createElement('optgroup');
-            normalGroup.label = '🎬 NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC';
-
-            trackList.forEach(t => {
-                if (t.type === 'custom') return; // Custom uploads handled in custom tab
-                const opt = document.createElement('option');
-                opt.value = t.filename;
-                const cleanName = t.name || t.title || t.filename;
-                opt.textContent = `${cleanName}${t.genre ? ` (${t.genre})` : ''}`;
+            const populateSelect = (selectEl) => {
+                if (!selectEl) return;
+                const currentVal = selectEl.value || 'random';
+                selectEl.innerHTML = '<option value="random">🎲 Ngẫu nhiên (Random theo tâm trạng)</option>';
                 
-                if (t.is_safe || (t.filename && t.filename.toLowerCase().includes('kevin macleod'))) {
-                    safeGroup.appendChild(opt);
-                } else {
-                    normalGroup.appendChild(opt);
+                const safeGroup = document.createElement('optgroup');
+                safeGroup.label = '🛡️ AN TOÀN YOUTUBE (NO-COPYRIGHT)';
+                const normalGroup = document.createElement('optgroup');
+                normalGroup.label = '🎬 NHẠC ĐIỆN ẢNH & KỊCH TÍNH KHÁC';
+
+                trackList.forEach(t => {
+                    if (t.type === 'custom') return; // Custom uploads handled in custom tab
+                    const opt = document.createElement('option');
+                    opt.value = t.filename;
+                    const cleanName = t.name || t.title || t.filename;
+                    opt.textContent = `${cleanName}${t.genre ? ` (${t.genre})` : ''}`;
+                    
+                    if (t.is_safe || (t.filename && t.filename.toLowerCase().includes('kevin macleod'))) {
+                        safeGroup.appendChild(opt);
+                    } else {
+                        normalGroup.appendChild(opt);
+                    }
+                });
+
+                if (safeGroup.children.length > 0) selectEl.appendChild(safeGroup);
+                if (normalGroup.children.length > 0) selectEl.appendChild(normalGroup);
+
+                if (trackList.some(t => t.filename === currentVal)) {
+                    selectEl.value = currentVal;
                 }
-            });
+            };
 
-            if (safeGroup.children.length > 0) reviewBgmPresetSelect.appendChild(safeGroup);
-            if (normalGroup.children.length > 0) reviewBgmPresetSelect.appendChild(normalGroup);
-
-            if (trackList.some(t => t.filename === currentVal)) {
-                reviewBgmPresetSelect.value = currentVal;
-            }
+            populateSelect(reviewBgmPresetSelect);
+            populateSelect(document.getElementById('editorBgmPresetSelect'));
         }
     } catch (err) {
         console.error('Failed to load BGM list:', err);
@@ -12022,6 +12090,225 @@ if (btnRemoveCustomBgm) {
             btnPreviewCustomBgm.textContent = '▶️';
         }
         btnRemoveCustomBgm.style.display = 'none';
+        showToast('Đã hủy chọn nhạc nền riêng', 'info');
+    });
+}
+
+// ==========================================
+// EDITOR BGM CONTROLS (BIÊN TẬP PHIM)
+// ==========================================
+const editorBgmEnabled = document.getElementById('editorBgmEnabled');
+const editorBgmConfig = document.getElementById('editorBgmConfig');
+const editorBgmVol = document.getElementById('editorBgmVol');
+const editorBgmVolVal = document.getElementById('editorBgmVolVal');
+const btnEditorBgmSourcePreset = document.getElementById('btnEditorBgmSourcePreset');
+const btnEditorBgmSourceCustom = document.getElementById('btnEditorBgmSourceCustom');
+const panelEditorBgmPreset = document.getElementById('panelEditorBgmPreset');
+const panelEditorBgmCustom = document.getElementById('panelEditorBgmCustom');
+const editorBgmPresetSelect = document.getElementById('editorBgmPresetSelect');
+const btnEditorPreviewBgm = document.getElementById('btnEditorPreviewBgm');
+const btnEditorUploadBgm = document.getElementById('btnEditorUploadBgm');
+const editorBgmFileInput = document.getElementById('editorBgmFileInput');
+const editorBgmCustomFileName = document.getElementById('editorBgmCustomFileName');
+const btnEditorPreviewCustomBgm = document.getElementById('btnEditorPreviewCustomBgm');
+const btnEditorRemoveCustomBgm = document.getElementById('btnEditorRemoveCustomBgm');
+const editorBgmPreviewAudio = document.getElementById('editorBgmPreviewAudio');
+
+window._editorBgmSourceMode = 'preset';
+window._editorBgmCustomPath = '';
+window._editorBgmCustomFilename = '';
+
+if (editorBgmEnabled && editorBgmConfig) {
+    editorBgmEnabled.addEventListener('change', (e) => {
+        editorBgmConfig.style.opacity = e.target.checked ? '1' : '0.4';
+        editorBgmConfig.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+        if (!e.target.checked && editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.pause();
+            if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+            if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+}
+
+if (editorBgmVol && editorBgmVolVal) {
+    editorBgmVol.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        editorBgmVolVal.textContent = val + '%';
+        if (editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.volume = Math.max(0, Math.min(1.0, val / 100));
+        }
+    });
+}
+
+if (btnEditorBgmSourcePreset && btnEditorBgmSourceCustom && panelEditorBgmPreset && panelEditorBgmCustom) {
+    btnEditorBgmSourcePreset.addEventListener('click', () => {
+        window._editorBgmSourceMode = 'preset';
+        btnEditorBgmSourcePreset.classList.add('active');
+        btnEditorBgmSourcePreset.style.borderColor = '#38bdf8';
+        btnEditorBgmSourcePreset.style.color = '#38bdf8';
+        btnEditorBgmSourcePreset.style.background = 'rgba(56, 189, 248, 0.1)';
+        
+        btnEditorBgmSourceCustom.classList.remove('active');
+        btnEditorBgmSourceCustom.style.borderColor = '';
+        btnEditorBgmSourceCustom.style.color = '#94a3b8';
+        btnEditorBgmSourceCustom.style.background = '';
+        
+        panelEditorBgmPreset.style.display = 'flex';
+        panelEditorBgmCustom.style.display = 'none';
+        
+        if (editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.pause();
+            if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+
+    btnEditorBgmSourceCustom.addEventListener('click', () => {
+        window._editorBgmSourceMode = 'custom';
+        btnEditorBgmSourceCustom.classList.add('active');
+        btnEditorBgmSourceCustom.style.borderColor = '#38bdf8';
+        btnEditorBgmSourceCustom.style.color = '#38bdf8';
+        btnEditorBgmSourceCustom.style.background = 'rgba(56, 189, 248, 0.1)';
+        
+        btnEditorBgmSourcePreset.classList.remove('active');
+        btnEditorBgmSourcePreset.style.borderColor = '';
+        btnEditorBgmSourcePreset.style.color = '#94a3b8';
+        btnEditorBgmSourcePreset.style.background = '';
+        
+        panelEditorBgmPreset.style.display = 'none';
+        panelEditorBgmCustom.style.display = 'flex';
+        
+        if (editorBgmPreviewAudio) {
+            editorBgmPreviewAudio.pause();
+            if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+        }
+    });
+}
+
+if (btnEditorPreviewBgm && editorBgmPreviewAudio && editorBgmPresetSelect) {
+    btnEditorPreviewBgm.addEventListener('click', () => {
+        if (!editorBgmPreviewAudio.paused && editorBgmPreviewAudio.dataset.currentType === 'preset') {
+            editorBgmPreviewAudio.pause();
+            btnEditorPreviewBgm.textContent = '▶️';
+            return;
+        }
+
+        let selected = editorBgmPresetSelect.value;
+        if (selected === 'random') {
+            const options = Array.from(editorBgmPresetSelect.options).map(o => o.value).filter(v => v !== 'random');
+            if (options.length > 0) {
+                selected = options[Math.floor(Math.random() * options.length)];
+            } else {
+                showToast('Chưa có file nhạc nền khả dụng để nghe thử', 'warning');
+                return;
+            }
+        }
+
+        editorBgmPreviewAudio.src = `/api/bgm/stream?type=preset&filename=${encodeURIComponent(selected)}&file=${encodeURIComponent(selected)}`;
+        editorBgmPreviewAudio.dataset.currentType = 'preset';
+        editorBgmPreviewAudio.volume = Math.max(0, Math.min(1.0, parseInt(editorBgmVol?.value || 20) / 100));
+        editorBgmPreviewAudio.play().then(() => {
+            btnEditorPreviewBgm.textContent = '⏸️';
+            if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+        }).catch(err => {
+            console.error('Editor Audio play failed:', err);
+            showToast('Không thể phát nhạc nghe thử', 'error');
+        });
+    });
+
+    editorBgmPreviewAudio.addEventListener('ended', () => {
+        if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+        if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.textContent = '▶️';
+    });
+    editorBgmPreviewAudio.addEventListener('pause', () => {
+        if (editorBgmPreviewAudio.dataset.currentType === 'preset' && btnEditorPreviewBgm) {
+            btnEditorPreviewBgm.textContent = '▶️';
+        } else if (editorBgmPreviewAudio.dataset.currentType === 'custom' && btnEditorPreviewCustomBgm) {
+            btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+    });
+}
+
+if (btnEditorUploadBgm && editorBgmFileInput) {
+    btnEditorUploadBgm.addEventListener('click', () => {
+        editorBgmFileInput.click();
+    });
+
+    editorBgmFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('audio_file', file);
+        formData.append('file', file);
+
+        showToast('Đang tải lên nhạc nền cho Biên tập phim...', 'info');
+        try {
+            const res = await fetch('/api/bgm/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (res.ok && (data.status === 'success' || data.success)) {
+                window._editorBgmCustomPath = data.path || data.track?.path;
+                window._editorBgmCustomFilename = data.filename || data.track?.filename;
+                if (editorBgmCustomFileName) {
+                    editorBgmCustomFileName.textContent = `🎵 ${window._editorBgmCustomFilename}`;
+                    editorBgmCustomFileName.style.color = '#38bdf8';
+                }
+                if (btnEditorPreviewCustomBgm) btnEditorPreviewCustomBgm.style.display = 'flex';
+                if (btnEditorRemoveCustomBgm) btnEditorRemoveCustomBgm.style.display = 'flex';
+                showToast('Tải lên nhạc nền thành công!', 'success');
+            } else {
+                showToast(data.error || data.message || 'Lỗi khi tải file nhạc lên', 'error');
+            }
+        } catch (err) {
+            console.error('Editor BGM upload failed:', err);
+            showToast('Không thể kết nối máy chủ để tải nhạc', 'error');
+        } finally {
+            editorBgmFileInput.value = '';
+        }
+    });
+}
+
+if (btnEditorPreviewCustomBgm && editorBgmPreviewAudio) {
+    btnEditorPreviewCustomBgm.addEventListener('click', () => {
+        if (!window._editorBgmCustomFilename) return;
+
+        if (!editorBgmPreviewAudio.paused && editorBgmPreviewAudio.dataset.currentType === 'custom') {
+            editorBgmPreviewAudio.pause();
+            btnEditorPreviewCustomBgm.textContent = '▶️';
+            return;
+        }
+
+        editorBgmPreviewAudio.src = `/api/bgm/stream?type=custom&filename=${encodeURIComponent(window._editorBgmCustomFilename)}&file=${encodeURIComponent(window._editorBgmCustomFilename)}`;
+        editorBgmPreviewAudio.dataset.currentType = 'custom';
+        editorBgmPreviewAudio.volume = Math.max(0, Math.min(1.0, parseInt(editorBgmVol?.value || 20) / 100));
+        editorBgmPreviewAudio.play().then(() => {
+            btnEditorPreviewCustomBgm.textContent = '⏸️';
+            if (btnEditorPreviewBgm) btnEditorPreviewBgm.textContent = '▶️';
+        }).catch(err => {
+            console.error('Custom audio play failed:', err);
+            showToast('Không thể phát file nhạc tải lên', 'error');
+        });
+    });
+}
+
+if (btnEditorRemoveCustomBgm) {
+    btnEditorRemoveCustomBgm.addEventListener('click', () => {
+        window._editorBgmCustomPath = '';
+        window._editorBgmCustomFilename = '';
+        if (editorBgmPreviewAudio && editorBgmPreviewAudio.dataset.currentType === 'custom') {
+            editorBgmPreviewAudio.pause();
+        }
+        if (editorBgmCustomFileName) {
+            editorBgmCustomFileName.textContent = 'Chưa chọn file (.mp3, .wav, .m4a)';
+            editorBgmCustomFileName.style.color = '#94a3b8';
+        }
+        if (btnEditorPreviewCustomBgm) {
+            btnEditorPreviewCustomBgm.style.display = 'none';
+            btnEditorPreviewCustomBgm.textContent = '▶️';
+        }
+        btnEditorRemoveCustomBgm.style.display = 'none';
         showToast('Đã hủy chọn nhạc nền riêng', 'info');
     });
 }
@@ -13225,7 +13512,10 @@ async function startReviewPipeline({ isScriptOnly = false, continueFromScript = 
             enabled: Boolean(document.getElementById('reviewStemSeparationEnabled')?.checked),
             remove_vocals: document.getElementById('reviewRemoveVocals')?.checked !== false,
             keep_sfx: document.getElementById('reviewKeepSfx')?.checked !== false,
-            mode: document.getElementById('reviewStemMode')?.value || 'mdx_net_hq4',
+            separate_bgm: document.getElementById('reviewSeparateBgm')?.checked !== false,
+            keep_bgm: document.getElementById('reviewSeparateBgm')?.checked !== false,
+            remove_bgm: !(document.getElementById('reviewSeparateBgm')?.checked !== false),
+            mode: document.getElementById('reviewStemMode')?.value || 'dsp_turbo',
             device: document.getElementById('reviewStemDevice')?.value || 'auto'
         },
         output_dir: document.getElementById('reviewOutputFolder')?.value?.trim() || window.currentTtsOutputDir || 'output',
@@ -14924,6 +15214,12 @@ function sendVideoToReview(filePath) {
     }
 
     showToast('Đã nạp video vào Studio Review Phim!', 'success');
+}
+
+if (typeof window !== 'undefined') {
+    window.sendVideoToEditor = sendVideoToEditor;
+    window.sendVideoToReview = sendVideoToReview;
+    window.showToast = showToast;
 }
 
 function openDownloadFileFolder(filePath) {
@@ -23119,4 +23415,13 @@ if (btnViewOnSrtTable) {
         closeSubtitleInspectorModal();
         showToast('Đang hiển thị các câu AI phát hiện lỗi! Bấm vào từng câu để video tự động nhảy tới đối chiếu.', 'info');
     });
+}
+
+// Initialize Hongguo Downloader Module
+try {
+    if (typeof initHongguoModule === 'function') {
+        initHongguoModule();
+    }
+} catch (e) {
+    console.warn('Error initializing Hongguo Module:', e);
 }

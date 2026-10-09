@@ -245,19 +245,21 @@ def deterministic_normalize_subtitles(subtitles: List[Dict[str, Any]], dedup_win
         deduped.append(item)
 
     # 4. Xử lý Overlap: Không để câu sau chen vào thời gian hiển thị của câu trước
+    # TUYỆT ĐỐI KHÔNG dịch chuyển nxt['startSeconds'] về tương lai để tránh gây hiệu ứng domino
+    # làm lệch toàn bộ timeline giọng đọc AI lên tới hàng chục giây.
     for i in range(len(deduped) - 1):
         curr = deduped[i]
         nxt = deduped[i + 1]
         if curr['endSeconds'] > nxt['startSeconds']:
-            overlap = curr['endSeconds'] - nxt['startSeconds']
-            # Nếu overlap nhỏ hoặc câu sau bắt đầu sau curr.startSeconds
-            if nxt['startSeconds'] > curr['startSeconds'] + 0.3:
-                curr['endSeconds'] = round(nxt['startSeconds'], 3)
+            if nxt['startSeconds'] > curr['startSeconds'] + 0.2:
+                curr['endSeconds'] = round(nxt['startSeconds'] - 0.05, 3)
             else:
-                # Dịch chuyển start của nxt
-                nxt['startSeconds'] = round(curr['endSeconds'], 3)
+                # Hai câu bắt đầu gần như đồng thời: giữ mốc bắt đầu thực tế của cả hai câu
+                curr['endSeconds'] = round(curr['startSeconds'] + 0.5, 3)
+                if nxt['startSeconds'] < curr['startSeconds']:
+                    nxt['startSeconds'] = curr['startSeconds']
                 if nxt['endSeconds'] <= nxt['startSeconds']:
-                    nxt['endSeconds'] = round(nxt['startSeconds'] + 1.0, 3)
+                    nxt['endSeconds'] = round(nxt['startSeconds'] + 0.5, 3)
 
     # 5. Đánh lại ID tuần tự & Chuẩn hóa time string
     result = []

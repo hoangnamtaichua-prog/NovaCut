@@ -829,7 +829,8 @@ PACKAGE_TIERS = {
             "tts_unlimited_local": True,
             "online_voices_enabled": False,
             "cloud_gpt_included": True,
-            "can_access_social_publish": True
+            "can_access_social_publish": True,
+            "hongguo_downloader": True
         }
     },
     "pro": {
@@ -848,7 +849,8 @@ PACKAGE_TIERS = {
             "tts_unlimited_local": True,
             "online_voices_enabled": False,
             "cloud_gpt_included": False, # Tự túc API key
-            "can_access_social_publish": True
+            "can_access_social_publish": True,
+            "hongguo_downloader": True
         }
     },
     "vip": {
@@ -867,7 +869,8 @@ PACKAGE_TIERS = {
             "tts_unlimited_local": True,
             "online_voices_enabled": True, # Full 1000+ giọng
             "cloud_gpt_included": True,      # Bao server GPT
-            "can_access_social_publish": True
+            "can_access_social_publish": True,
+            "hongguo_downloader": True
         }
     },
     "yearly": {
@@ -886,7 +889,8 @@ PACKAGE_TIERS = {
             "tts_unlimited_local": True,
             "online_voices_enabled": True,
             "cloud_gpt_included": True,
-            "can_access_social_publish": True
+            "can_access_social_publish": True,
+            "hongguo_downloader": True
         }
     },
     "admin": {
@@ -906,7 +910,8 @@ PACKAGE_TIERS = {
             "online_voices_enabled": True,
             "cloud_gpt_included": True,
             "is_admin": True,
-            "can_access_social_publish": True
+            "can_access_social_publish": True,
+            "hongguo_downloader": True
         }
     },
     "unlicensed": {
@@ -925,7 +930,8 @@ PACKAGE_TIERS = {
             "tts_unlimited_local": False,
             "online_voices_enabled": False,
             "cloud_gpt_included": False,
-            "can_access_social_publish": False
+            "can_access_social_publish": False,
+            "hongguo_downloader": False
         }
     }
 }
@@ -1126,6 +1132,14 @@ def _get_current_license_status_raw(force_cloud_sync=False):
             badge_text = f"{base_tier_info['badge_text']} ({hours_left}h)"
 
         features = dict(base_tier_info["features"])
+        # Tự động đồng bộ các tính năng mới được cập nhật vào cache cục bộ
+        cached_features = cached.get('features', {})
+        if not all(k in cached_features for k in base_tier_info["features"]):
+            cached['features'] = dict(base_tier_info["features"])
+            try:
+                save_local_license_cache(cached)
+            except Exception:
+                pass
         pro_selected_module = cached.get('pro_selected_module', None)
         if tier == 'pro':
             if pro_selected_module == 'review':

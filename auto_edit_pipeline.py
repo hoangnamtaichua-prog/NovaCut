@@ -1881,6 +1881,10 @@ def run_audio_separator_with_progress(
     output_dir,
     mode="mdx_net_hq4",
     device="auto",
+    remove_vocals=None,
+    remove_bgm=None,
+    keep_sfx=None,
+    separate_bgm=None,
     log_func=None,
     check_stop_func=None
 ):
@@ -1903,6 +1907,16 @@ def run_audio_separator_with_progress(
 
     def _worker():
         try:
+            extra_kwargs = {}
+            if remove_vocals is not None:
+                extra_kwargs["remove_vocals"] = remove_vocals
+            if remove_bgm is not None:
+                extra_kwargs["remove_bgm"] = remove_bgm
+            if keep_sfx is not None:
+                extra_kwargs["keep_sfx"] = keep_sfx
+            if separate_bgm is not None:
+                extra_kwargs["separate_bgm"] = separate_bgm
+
             res = audio_separator.separate_audio_stems(
                 video_path,
                 output_dir=output_dir,
@@ -1910,7 +1924,8 @@ def run_audio_separator_with_progress(
                 device=device,
                 progress_cb=_prog,
                 logger_cb=_log,
-                cancel_check_cb=check_stop_func
+                cancel_check_cb=check_stop_func,
+                **extra_kwargs
             )
             q.put(('done', res))
         except Exception as e:
@@ -2688,11 +2703,19 @@ def run_auto_edit_workflow(payload, check_stop_func):
                 try:
                     stem_mode = stem_sep_data.get('mode', 'mdx_net_hq4')
                     stem_device = stem_sep_data.get('device', 'auto')
+                    stem_remove_vocals = stem_sep_data.get('remove_vocals', True)
+                    stem_separate_bgm = stem_sep_data.get('separate_bgm', stem_sep_data.get('keep_bgm', True))
+                    stem_remove_bgm = not stem_separate_bgm if ('separate_bgm' in stem_sep_data or 'keep_bgm' in stem_sep_data) else stem_sep_data.get('remove_bgm', False)
+                    stem_keep_sfx = stem_sep_data.get('keep_sfx', True)
                     sep_res = yield from run_audio_separator_with_progress(
                         video_path=video_path,
                         output_dir=temp_dir,
                         mode=stem_mode,
                         device=stem_device,
+                        remove_vocals=stem_remove_vocals,
+                        remove_bgm=stem_remove_bgm,
+                        keep_sfx=stem_keep_sfx,
+                        separate_bgm=stem_separate_bgm,
                         log_func=log,
                         check_stop_func=check_stop_func
                     )
@@ -3438,11 +3461,19 @@ def run_narration_workflow(payload, check_stop_func):
             try:
                 stem_mode = stem_sep_data.get('mode', 'mdx_net_hq4')
                 stem_device = stem_sep_data.get('device', 'auto')
+                stem_remove_vocals = stem_sep_data.get('remove_vocals', True)
+                stem_separate_bgm = stem_sep_data.get('separate_bgm', stem_sep_data.get('keep_bgm', True))
+                stem_remove_bgm = not stem_separate_bgm if ('separate_bgm' in stem_sep_data or 'keep_bgm' in stem_sep_data) else stem_sep_data.get('remove_bgm', False)
+                stem_keep_sfx = stem_sep_data.get('keep_sfx', True)
                 sep_res = yield from run_audio_separator_with_progress(
                     video_path=video_path,
                     output_dir=temp_dir,
                     mode=stem_mode,
                     device=stem_device,
+                    remove_vocals=stem_remove_vocals,
+                    remove_bgm=stem_remove_bgm,
+                    keep_sfx=stem_keep_sfx,
+                    separate_bgm=stem_separate_bgm,
                     log_func=log,
                     check_stop_func=check_stop_func
                 )
