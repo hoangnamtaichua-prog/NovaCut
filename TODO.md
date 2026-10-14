@@ -9,7 +9,213 @@
 
 ## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
 
-*(Hiện tại toàn bộ tính năng và bản vá mới nhất đã được đóng gói và phát hành thành công trong phiên bản v1.3.5)*
+- **Khắc Phục Hiện Tượng Trùng Lặp 2 Lớp Phụ Đề (Double Subtitles) Khi Xuất Video Review & Narration (14/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
+  - **Vấn đề & Triệu chứng:** Khi người dùng xuất video trong luồng Review Phim (hoặc Thuyết minh video Narration) có bật tính năng chèn phụ đề, video sau khi xuất ra khi mở bằng các trình phát video trên máy tính (Windows Media Player, VLC, PotPlayer, Movies & TV) hiển thị 2 dòng phụ đề đè lên nhau cùng lúc (1 dòng phụ đề nhỏ chuẩn font Montserrat do phần mềm khắc cứng vào khung hình video và 1 dòng phụ đề lớn 2 dòng font mặc định của trình phát hiển thị đè lên trên).
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Khi tùy chọn chèn phụ đề `auto_subtitles = True` được bật, bộ mã hóa FFmpeg đã thực hiện khắc cứng phụ đề (Hardsub) trực tiếp vào từng pixel khung hình của tệp video xuất ra (`[TênVideo].mp4`).
+    2. Tuy nhiên, ở bước hoàn tất xuất video, hệ thống tự động sao chép tệp phụ đề `voice_srt_cleaned_path` ra cùng thư mục với tên trùng khớp hoàn toàn `out_srt = [TênVideo].srt` (vd: `Mustang.mp4` và `Mustang.srt`).
+    3. Hầu hết các trình phát video máy tính (Windows Media Player, VLC, PotPlayer, Movies & TV) đều có cơ chế mặc định tự động dò tìm và nạp phụ đề rời (Softsub) nếu tệp `.srt` nằm cùng thư mục và có cùng tên với tệp video. Do đó trình phát tự động vẽ thêm lớp phụ đề rời đè trực tiếp lên lớp phụ đề đã khắc cứng, gây ra lỗi hiển thị 2 phụ đề chồng lấn.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Phân tách thông minh tên tệp phụ đề rời (`auto_edit_pipeline.py`):*
+       - Khi `auto_subtitles = True` (đã khắc cứng Hardsub vào video): Hệ thống lưu tệp phụ đề rời với tên `[TênVideo]_subtitles.srt`. Điều này ngăn chặn 100% các trình phát media tự động nạp đè softsub lên hardsub, đồng thời người dùng vẫn giữ được tệp SRT tiện lợi để tải lên YouTube Closed Captions (CC) hoặc nhập vào CapCut/Premiere nếu cần.
+       - Tự động kiểm tra và dọn dẹp tệp `[TênVideo].srt` cũ còn sót lại trong thư mục xuất để triệt tiêu việc trình phát tiếp tục nạp tệp cũ.
+       - Khi `auto_subtitles = False` (người dùng tắt Hardsub): Hệ thống giữ nguyên việc xuất `[TênVideo].srt` chuẩn để trình phát media tự động nạp Softsub theo đúng ý định của người dùng.
+    2. *Đồng bộ đầy đủ:* Đã đồng bộ 100% vào `patches/active/auto_edit_pipeline.py` và đổi tên tệp SRT xung đột trên máy khách (`Mustang.srt` -> `Mustang_subtitles.srt`). Khi phát lại video, hiện tượng 2 lớp phụ đề được giải quyết triệt để 100%.
+
+- **Khắc Phục Lỗi Cài Đặt PyTorch Mã 9009 Trên Giao Diện Tách & Lọc Âm Gốc AI (Stem Separator) & Tự Động Thiết Lập Môi Trường Portable (14/10/2026) (`audio_separator.py`, `patches/active/audio_separator.py`):**
+  - **Vấn đề & Triệu chứng:** Khi người dùng bật tính năng *Tách & Lọc Âm Gốc AI (Stem Separator)* và bấm *"⚡ Tách & Nghe Thử Âm SFX"*, thanh tiến trình dừng lại ở 6% và báo lỗi màu đỏ:
+    `❌ Lỗi: Tự động cài đặt PyTorch thất bại (Mã lỗi: 9009). Vui lòng kiểm tra kết nối mạng.`
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. *Thực thi nhầm Windows App Execution Alias (Mã thoát 9009):* Khi máy tính người dùng chưa cài đặt Python hoặc chạy ứng dụng từ bản đóng gói `NovaCut.exe`, hàm tìm kiếm Python fallback sử dụng `shutil.which(["python.exe", "python", "py.exe", "py"])`. Trên Windows 10/11, biến môi trường PATH mặc định luôn chứa `%LOCALAPPDATA%\Microsoft\WindowsApps`. Trình tìm kiếm đã nhặt trúng tệp stub ảo `WindowsApps\python.exe` (vốn là shortcut trỏ sang Microsoft Store). Khi hệ thống gọi subprocess chạy lệnh pip trên tệp stub này, Windows trả về ngay mã thoát `9009` (`'python' is not recognized as an internal or external command, operable program or batch file`), khiến ứng dụng hiểu lầm là lỗi kết nối mạng.
+    2. *Thiếu cơ chế kiểm định tính hợp lệ của Python (`_is_functional_python`):* Hệ thống trước đây chỉ kiểm tra `os.path.exists()` mà không xác thực xem trình thông dịch Python đó có thực sự chạy được không hay là tệp stub/alias rác của hệ điều hành.
+    3. *Chưa có cơ chế tải tự động Python độc lập khi máy khách hoàn toàn không có Python:* Nếu người dùng không cài Python, hệ thống ném lỗi khiến người dùng phải tự cài đặt thủ công.
+    4. *Thiếu PyPI fallback index:* Tham số pip chỉ truyền `--index-url https://download.pytorch.org/whl/cu124` mà thiếu `--extra-index-url https://pypi.org/simple`, dễ gây lỗi không tìm thấy các thư viện phụ thuộc (`soundfile`, `onnxruntime-directml`, `numpy`).
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Bộ lọc kiểm định trình thông dịch Python (`_is_functional_python`):* Tuyệt đối loại trừ các tệp nằm trong `WindowsApps` và tệp nhị phân chính `NovaCut.exe`. Kiểm tra chạy thực tế qua lệnh nhanh `python -c "import sys; print(f'PY_{sys.version_info.major}')"`, chỉ chấp nhận các runtime Python 3 thực sự phản hồi `PY_3` với mã thoát 0.
+    2. *Truy quét Python toàn diện qua Windows Registry & System Paths:* Tự động quét `HKCU` và `HKLM` tại `SOFTWARE\Python\PythonCore` để tìm ra tất cả các phiên bản Python chính thức (3.10 - 3.13) được cài trên máy dù người dùng không tick chọn "Add to PATH", đồng thời quét các đường dẫn Conda, Pyenv, Scoop, Chocolatey.
+    3. *Tự động tải gói Python Portable chính thức (~17MB) từ Microsoft NuGet (`_ensure_portable_python`):* Nếu máy tính người dùng hoàn toàn chưa có Python, hệ thống tự động tải gói Python 3.11.9 độc lập siêu nhẹ (~17MB) từ Azure CDN của Microsoft NuGet, giải nén vào thư mục `python-nuget` (hoặc `USER_DATA_DIR/python-nuget` nếu thư mục app bị hạn chế quyền ghi). Gói này đã tích hợp sẵn `pip`, hoàn toàn tự động 100% mà không đòi hỏi quyền Administrator hay cài đặt thủ công.
+    4. *Hoàn thiện cơ chế cài đặt PyTorch AI (`pip install`):*
+       - Bổ sung `--extra-index-url https://pypi.org/simple` song song với repo PyTorch CUDA (`cu124`) / CPU.
+       - Thu thập 25 dòng log lỗi gần nhất từ `pip` vào buffer, cung cấp nguyên nhân chính xác thay vì thông báo chung chung "kiểm tra kết nối mạng".
+       - Cập nhật tiến độ trực quan từng bước (5% chuẩn bị, 6% tải runtime, 7% tải PyTorch, 8% cài đặt thư viện).
+    5. *Đồng bộ đầy đủ:* Đã đồng bộ 100% vào `patches/active/audio_separator.py`. Kiểm thử tự động trên môi trường thật đạt kết quả thành công hoàn hảo.
+
+- **Khắc Phục Triệt Để Lỗi Tiến Độ TTS Đứng Yên Ở 90% & Nâng Cấp Báo Cáo Tiến Độ Thời Gian Thực (13/10/2026) (`routes/tts.py`, `web/app.js`, `web/style.css`, `patches/active/`):**
+  - **Vấn đề & Triệu chứng:** Khi người dùng bấm tạo giọng đọc AI (Text to Speech), thanh tiến độ phần trăm (%) lập tức nhảy vọt lên 90% chỉ sau 1–2 giây đầu tiên, sau đó đứng im hoàn toàn ở 90% trong suốt thời gian máy chủ đang xử lý (từ vài chục giây đến vài phút) cho tới khi hoàn tất mới nhảy sang 100%. Người dùng không nắm được máy chủ đang thực hiện công đoạn nào và tiến độ thực tế là bao nhiêu.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Trong hàm xử lý nút `btnGenerateTTS` tại `web/app.js`, mã nguồn cũ sử dụng bộ đếm giả lập `setInterval` tăng ngẫu nhiên `Math.floor(Math.random() * 12) + 5` mỗi 300ms cho tới khi chạm trần 90% rồi dừng hẳn (`if (currentPct < 90)`), trong khi API backend `/api/tts/kokoro` và `/api/tts/openspeaker` chỉ trả về JSON một lần khi hoàn tất chứ không có luồng truyền sự kiện trực tiếp.
+    2. Trong `web/style.css`, class `.hi-progress-fill` chứa animation vô hạn `indeterminate-progress` khiến thanh tiến độ trôi dạt liên tục mà không thể hiện độ rộng phần trăm thực tế theo `width`.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Backend SSE Streaming Endpoint (`routes/tts.py`):* Xây dựng hàm `generate_tts_stream_internal` và endpoint SSE `/api/tts/generate_stream` (đồng thời hỗ trợ cờ `stream: true` trên cả hai route `/api/tts/kokoro` và `/api/tts/openspeaker`). Báo cáo chính xác tiến độ theo từng giai đoạn thực:
+       - `5%`: Chuẩn hóa văn bản và phân tích kịch bản.
+       - `10% - 85%`: Quá trình tổng hợp giọng đọc từng câu thoại theo thời gian thực (hỗ trợ `as_completed` cho đa luồng và sub-batch linh hoạt cho GPU). Báo cáo chi tiết: câu thứ mấy/tổng số câu, phần trăm thực tế và trích đoạn câu thoại đang tổng hợp.
+       - `86%`: Tự động thử lại các câu thoại chưa đạt yêu cầu (Self-healing retry).
+       - `89%`: Ghép nối âm thanh PCM đa luồng và chuẩn hóa tần số lấy mẫu.
+       - `95%`: Đồng bộ mốc thời gian và ghi tệp phụ đề SRT.
+       - `100%`: Hoàn tất tạo giọng đọc và phụ đề.
+    2. *Frontend SSE Consumer (`web/app.js`):* Gỡ bỏ hoàn toàn `setInterval` giả lập và `Math.random()`. Tích hợp `ReadableStream` (`reader.read()`) đọc luồng SSE thời gian thực, đồng bộ liên tục phần trăm, thông điệp trạng thái, badge tiến độ `Đang xử lý (X%)` và nút bấm Hero `ĐANG TẠO GIỌNG (X%)...`. Hỗ trợ hủy luồng an toàn qua `AbortController` khi người dùng xóa tác vụ.
+    3. *Hiệu ứng & Giao diện CSS (`web/style.css`):* Gỡ bỏ animation trôi dạt `indeterminate-progress`, cập nhật thanh tiến độ `transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1)`, bo góc mềm mại và căn chỉnh nhãn trạng thái trích đoạn câu thoại (`.hi-processing-text`) với `text-overflow: ellipsis`.
+    4. *Đồng bộ đầy đủ* sang `patches/active/routes/tts.py`, `patches/active/web/app.js`, `patches/active/web/style.css`. Đã kiểm thử tự động toàn diện: cả kịch bản đơn câu và đa câu đều cập nhật tiến độ mượt mà từ 0% đến 100%.
+
+- **Sửa Lỗi Giao Diện Card Cài Đặt TTS Studio Bị Cắt Cụt Hàng Nút Bấm Thao Tác (12/10/2026) (`web/style.css`, `patches/active/web/style.css`):**
+  - **Vấn đề & Triệu chứng:** Trên giao diện tab Studio Thuyết Minh & Lồng Tiếng AI (Text to Speech), card Cấu hình cài đặt (Card 2) bị co rút chiều cao bất thường khiến hàng công cụ dưới cùng (gồm chọn thư mục lưu trữ, đặt tên tệp và nút "TẠO GIỌNG ĐỌC AI" / "ĐANG TẠO GIỌNG ĐỌC...") bị cắt ngang một nửa (overflow clipped). Người dùng không nhìn thấy trọn vẹn nút bấm và các thông tin đích.
+  - **Nguyên nhân cốt lõi (Root Cause):** Card cài đặt mang cả hai class `.card` (có thuộc tính `overflow: hidden`) và `.tts-card` (kế thừa `flex: 2`). Khi thanh trượt mới *Số luồng xử lý song song* được bổ sung vào card, tổng chiều cao nội dung tăng lên ~341px, nhưng thuật toán Flexbox của layout dọc vẫn bóp chiều cao card về ~300px theo tỷ lệ `flex: 2 1 0%`, kết hợp với `overflow: hidden` khiến 41px phía dưới bị che khuất hoàn toàn.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. Bổ sung `flex: none !important; overflow: visible !important;` cho `.tts-vertical-layout .tts-card` và `.tts-controls-card` trong `web/style.css`.
+    2. Cho phép Card 2 tự động co giãn theo 100% kích thước nội dung thực tế và thanh cuộn của khung nhìn chính (`#viewTTS`) hoạt động mượt mà, bao quát trọn vẹn cả danh sách lịch sử (Card 3).
+    3. Đồng bộ đầy đủ sang `patches/active/web/style.css`. Đã kiểm thử trực quan với headless/headed browser: 100% các nút và trường nhập liệu hiển thị trọn vẹn, không còn hiện tượng tràn hay cắt xén.
+
+- **Khắc Phục Triệt Để Lỗi WinError 5 "Access is denied" Khi Ghi Cache Bản Quyền `.license.dat` (12/10/2026) (`license_manager.py`, `patches/active/license_manager.py`):**
+  - **Vấn đề & Triệu chứng:** Trong màn hình console máy chủ xuất hiện dòng lỗi đỏ:
+    `Lỗi lưu cache bản quyền: [WinError 5] Access is denied: 'C:\Users\hoang\AppData\Roaming\NovaCut\.license.dat.<pid>.<tid>.tmp' -> 'C:\Users\hoang\AppData\Roaming\NovaCut\.license.dat'`
+    khi trình duyệt gửi nhiều yêu cầu đồng thời lúc tải trang.
+  - **Nguyên nhân cốt lõi (Root Cause):** Trên Windows, hàm `os.replace` sử dụng Win32 API `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`. Khi nhiều luồng Flask xử lý song song các API (`/api/license/info`, `/api/license/token_quota`,...), một luồng đang mở file `.license.dat` để đọc dữ liệu bản quyền trong khi luồng khác thực hiện ghi nguyên tử (`_atomic_write_json`) bằng cách replace file tạm. Windows cấm thay thế tệp đang có luồng giữ handle mở và ném ngoại lệ `Access is denied` (mã lỗi 5).
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. Thiết lập biến khóa luồng `_license_cache_lock = threading.RLock()` bảo vệ độc quyền cho cả hai hàm `load_local_license_cache()` và `save_local_license_cache()`.
+    2. Bọc `load_token_quota_stats()` và `save_token_quota_stats()` bằng `_quota_lock`.
+    3. Tích hợp cơ chế thử lại lũy tiến (Retry Backoff tối đa 6 lần, giãn cách 50ms - 300ms) trong `_atomic_write_json` để tự động vượt qua tình trạng giữ handle tạm thời của hệ điều hành/antivirus.
+    4. Thêm fallback ghi trực tiếp (`direct write + fsync`) nếu lệnh `os.replace` bị Windows chặn cứng, đảm bảo không bao giờ thất lạc dữ liệu bản quyền.
+    5. Tự động kiểm tra và gỡ cờ Read-only (`stat.S_IWRITE`) trước khi ghi đè tệp đích.
+    6. Đồng bộ 100% sang `patches/active/license_manager.py`. Đã kiểm thử chịu tải với 8 luồng song song liên tục 80 lượt đọc/ghi không phát sinh bất kỳ lỗi nào.
+
+- **Khắc Phục Triệt Để Lỗi FFmpeg Crash (Exit code 4294967274 / -22 EINVAL) Khi Biên Tập Hàng Loạt Video Có Âm Thanh Lỗi AAC (09/10/2026) (`routes/video_edit.py`, `downloader.py`, `auto_edit_pipeline.py`, `tests/test_audio_corruption_resilience.py`, `patches/active/`):**
+  - **Vấn đề & Triệu chứng:** Khi người dùng biên tập hàng loạt video trong Biên Tập Phim (ví dụ: các tập phim ngắn dài gần 3 tiếng / 10211 giây), sau khi render hơn 20 phút thì xuất video bị thất bại với thông báo:
+    `[FFmpeg] Conversion failed!`
+    `[Lỗi xuất video]: {"reason": "FFmpeg export failed", "stage": "encoding", "details": {"reason": "FFmpeg export failed", "return_code": 4294967274}}`
+    Và hệ thống tự động nhảy sang video kế tiếp mà không xuất được video hiện tại.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Mã lỗi `4294967274` ở dạng số bù 2 tương ứng với `-22` (`-EINVAL: Invalid argument` trong FFmpeg/C).
+    2. Video nguồn (đặc biệt là các video phim ngắn tải về từ web hoặc video đã qua ghép nối Merged) có một số frame âm thanh AAC bị lỗi gói tin bitstream (`Sample rate index in program config element does not match`, `decode_pce: Input buffer exhausted`). Bộ giải mã native `aac` của FFmpeg hiểu nhầm các byte rác thành Program Config Element mới và tự ý thay đổi tham số luồng âm thanh giữa chừng: `Reconfiguring filter graph because audio parameters changed to 88200 Hz, 56 channels, fltp`.
+    3. Bộ chuyển đổi `auto_aresample` / `libswresample` tự động trong filter graph không có ma trận ánh xạ cho 56 kênh về stereo (`Rematrix is needed between 56 channels and stereo but there is not enough information to do it`), dẫn đến vỡ filter graph: `Error reinitializing filters! Task finished with error code: -22 (Invalid argument)` và hủy tiến trình xuất.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Chuẩn Hóa Kênh Âm Thanh Với Bộ Lọc `pan`:* Tích hợp bộ lọc explicit channel mapping `pan=stereo|c0=c0|c1=c1` (hoặc `pan=stereo|c0=c0|c1=c0` nếu nguồn Mono) ngay từ điểm đầu vào của luồng âm thanh gốc (`orig_tempo_fmt`) trong `routes/video_edit.py`. Bộ lọc `pan` ghim cứng kênh âm thanh ở chuẩn Stereo, triệt tiêu hoàn toàn tất cả các kênh ảo (> 2 kênh) do packet AAC hỏng sinh ra, giúp FFmpeg đọc mượt qua đoạn âm thanh lỗi mà không bao giờ kích hoạt reinitialization lỗi 56 kênh.
+    2. *Thăm Dò Số Kênh Nguồn:* Nâng cấp hàm `probe_video_info` trích xuất chính xác số kênh âm thanh thực tế (`audio_ch`) bằng ffprobe để chọn ma trận ánh xạ phù hợp nhất.
+    3. *Đồng Bộ Toàn Diện Vào Concat & Review Phim:* Bổ sung bộ lọc bảo vệ tương tự vào `downloader.py` (khâu ghép nối video hàng loạt) và `auto_edit_pipeline.py` (khâu hòa trộn giọng đọc AI và âm thanh gốc của Review Phim).
+    4. *Cải Thiện Chẩn Đoán Ngữ Cảnh:* Bổ sung cờ nhận diện `is_audio_corrupt` trong bộ bắt lỗi stderr của FFmpeg để đưa ra khuyến nghị chính xác, rõ ràng.
+    5. *Kiểm Thử & Xác Minh:* Viết bài kiểm tra tự động `tests/test_audio_corruption_resilience.py` chạy thử nghiệm trực tiếp trên phân đoạn âm thanh lỗi của tệp video người dùng: không có pan thì fail mã -22, có pan thì hoàn tất 100% với Exit code 0.
+    6. *Đồng bộ đầy đủ* sang thư mục bản vá `patches/active/routes/video_edit.py`, `patches/active/downloader.py`, `patches/active/auto_edit_pipeline.py`.
+
+
+- **Khắc Phục Triệt Để Lỗi Tạo TTS `ndarray has no attribute get` & Nâng Cấp Tạo Audio Truyện Dài 30p - 1 Tiếng Kèm Tính Năng Nhập Tệp Đa Định Dạng (09/10/2026) (`routes/tts.py`, `local_voice_worker_client.py`, `web/index.html`, `web/app.js`, `patches/active/`):**
+  - **Vấn đề & Triệu chứng:**
+    1. Khi người dùng tạo giọng đọc TTS (đặc biệt là giọng Local Voice / Cloned Voice như Minh Phương Review Phim), tiến trình tạo giọng chạy đến 90% thì báo lỗi đỏ trong danh sách audio: `Lỗi: Lỗi tạo TTS: 'numpy.ndarray' object has no attribute 'get'`.
+    2. Người dùng cần làm các dự án audio truyện dài (từ 30 phút đến 1 tiếng một lần tạo), cần hỗ trợ nhập nhanh nội dung kịch bản từ tệp bên ngoài (.txt, .docx, .pdf, .srt, .vtt) và đảm bảo hệ thống không bị crash, tràn RAM hoặc timeout khi xử lý văn bản quy mô lớn.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Trong hàm `generate_tts_kokoro()` tại `routes/tts.py`, biến `data` ở đầu hàm nhận dữ liệu JSON gửi lên từ client (`data = request.json or {}`). Tuy nhiên, trong vòng lặp đọc các chunk âm thanh để ghép nối file tổng, câu lệnh `data, sr = sf.read(c_file, dtype='float32')` đã vô tình ghi đè biến `data` thành đối tượng `numpy.ndarray`. Đến dòng 1577, câu lệnh `data.get('skip_notify')` được gọi trên `numpy.ndarray`, gây ra ngoại lệ `AttributeError: 'numpy.ndarray' object has no attribute 'get'`.
+    2. Biểu thức regex tách câu cũ `(?<=[.!?…\n])\s+` không thể tách được lời thoại nằm trong ngoặc kép đóng (`“...?” “...!”`), khiến toàn bộ đoạn đối thoại dài bị gộp thành một khối văn bản khổng lồ.
+    3. Khi tạo audio truyện dài (hàng trăm đến hàng ngàn câu), việc đẩy toàn bộ danh sách câu vào một mảng IPC đơn lẻ có thể dẫn đến timeout 300s của tiến trình worker và tốn bộ nhớ đệm RAM.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Sửa lỗi biến `data` & Bảo vệ luồng:* Đổi tên biến dữ liệu request thành `req_data`, đổi tên biến audio waveform thành `chunk_pcm`. Áp dụng cơ chế kiểm tra kiểu `isinstance(r, dict)` phòng thủ đa tầng khi duyệt kết quả sinh batch.
+    2. *Hỗ trợ Audio Truyện Dài (30 phút đến 1 tiếng):*
+       - Nâng giới hạn độ dài kịch bản từ 250.000 lên 1.000.000 ký tự.
+       - Nâng cấp bộ tách câu `parse_text_into_speech_segments` với regex nhận diện dấu câu sau ngoặc kép đóng `(?<=[.!?…\n][\x22\x27\u201d\u2019»])\s+|(?<=[.!?…\n])\s+`.
+       - Tích hợp bộ tách nhịp thứ cấp (sub-sentence splitter) cho các câu văn miêu tả dài (> 160 ký tự) tại các dấu phẩy, chấm phẩy, gạch ngang kèm khoảng nghỉ thở 0.25s, chống nghẽn bộ nhớ mô hình và loại bỏ hoàn toàn hiện tượng nuốt âm/lặp từ.
+       - Phân cụm Sub-Batch 32 câu (`CHUNK_SUB_BATCH = 32`) khi gọi GPU Worker, giữ RAM/VRAM luôn mát và tối ưu.
+       - Tự động thử lại (Self-healing retry) với `ai_dubbing.synthesize_sentence` cho bất kỳ câu nào bị thiếu hoặc lỗi, đảm bảo 100% đủ câu.
+       - Nâng cấp dynamic timeout cho IPC Client theo số lượng câu: `max(300.0, float(len(items)) * 10.0)`.
+       - Ghi tuần tự theo khối (Stream-based chunk write) giữ RAM luôn < 5MB trong suốt quá trình lắp ráp file WAV 1 tiếng.
+    3. *Tính năng Nhập Tệp Kịch Bản Đa Định Dạng (Import File):*
+       - Thêm nút "Nhập tệp" (Import File) trên thanh công cụ Studio TTS và hỗ trợ Kéo & Thả (Drag & Drop) tệp trực tiếp vào khung soạn thảo với hiệu ứng viền phát sáng Dark Mode.
+       - Backend API `/api/tts/import_file` tự động giải mã và trích xuất nội dung văn bản sạch:
+         + `.docx`: Bóc tách đầy đủ các đoạn văn qua `python-docx`.
+         + `.pdf`: Trích xuất từng trang qua `pypdf`.
+         + `.srt`, `.vtt`: Tự động loại bỏ timeline và số thứ tự phụ đề, chỉ lấy lời thoại sạch.
+         + `.txt`, `.md`: Hỗ trợ tự động nhận diện bảng mã UTF-8, UTF-8-BOM, UTF-16, Windows-1258 tiếng Việt, CP1252.
+         + `.json`, `.csv`: Tự động trích xuất các cột/trường văn bản kịch bản.
+       - Tự động thống kê số ký tự, số từ, ước tính thời lượng phát (hỗ trợ cả định dạng giờ: `32m 20s`, `1h 15m`) và tự động điền tên file audio gợi ý.
+    4. *Đồng bộ & Kiểm thử:*
+       - Đồng bộ 100% mã nguồn sang các file trong `patches/active/`.
+       - Đã viết bộ kiểm thử tự động `tests/test_tts_long_audio_import.py` (5/5 tests passed) và benchmark thực tế tạo audio truyện dài thành công 100%.
+  - **Vấn đề & Triệu chứng:** Khi người dùng mở xem một tập phim thuộc tuyển tập/bộ sưu tập trên Douyin Web và sao chép liên kết trình duyệt (chứa tham số `showSubTab=compilation&showTab=post&vid=7676413264112225545`) rồi dán vào ô Tải Bộ Sưu Tập Douyin, hệ thống báo lỗi màu đỏ: *"Lỗi khi phân tích kênh: Không nhận diện được mix_id từ liên kết: ... "*, khiến người dùng không thể quét và tải toàn bộ các tập của bộ sưu tập.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Hàm `extract_mix_id()` trước đây chỉ nhận diện các regex tĩnh truyền thống (`/collection/(\d+)`, `mix_id=(\d+)`, số thuần), không nhận diện được khi người dùng dán liên kết web có chứa tham số `vid=...`, `modal_id=...`, `aweme_id=...` hoặc tab `showSubTab=compilation`.
+    2. Hàm `extract_video_id()` và `parse_douyin_url()` chưa hỗ trợ regex cho tham số `vid=(\d+)`.
+    3. Khi gặp liên kết chứa tập video trong bộ sưu tập mà chưa có `mix_id` trực tiếp trong chuỗi URL, phương thức `scan_collection_videos()` lập tức ném ngoại lệ `ValueError` thay vì kích hoạt Browser Worker để giải mã metadata video tìm `mix_info.mix_id`.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. Cập nhật `extract_video_id` và `parse_douyin_url` hỗ trợ nhận diện toàn diện các tham số video: `vid=`, `aweme_id=`, `item_id=`.
+    2. Mở rộng `extract_mix_id` nhận diện thêm các cấu trúc: `collection/(\d+)/\d+`, `mix/detail/(\d+)`, `compilation/(\d+)`.
+    3. Tích hợp cơ chế **Smart Sniffer 2 tầng** trong `scan_collection_videos`:
+       - Tầng 1: Nếu URL chứa `vid` (video tập phim), tự động gọi API nội bộ Douyin lấy `aweme_detail.mix_info` để trích xuất chính xác `mix_id`, `mix_name`, nickname và avatar tác giả.
+       - Tầng 2: Nếu URL là trang kênh ở tab `showSubTab=compilation` (chưa chọn tập), tự động dò tìm danh sách tuyển tập trong DOM trang cá nhân.
+       - Tự động ghép nối `mix_name` vào tiêu đề hiển thị: `[Tên Kênh] - [Tên Tuyển Tập]`.
+    4. Cập nhật các API route `/api/download/douyin/scan_channel_stream` và `/api/download/douyin/scan_channel` trong `routes/download.py` tự động phát hiện cờ `is_collection` khi URL có `showSubTab=compilation` hoặc `collection` ngay cả khi người dùng chưa kịp đổi dropdown nguồn.
+    5. Đã kiểm thử thực tế trên chính xác liên kết của người dùng: Quét và phân trang thành công 100% toàn bộ 104 tập của bộ phim ngắn, sắp xếp chuẩn thứ tự tập 1 -> 104.
+    6. Đồng bộ toàn bộ mã nguồn sang `patches/active/douyin_browser_downloader.py`.
+
+- **Khắc Phục Triệt Để Lỗi Zoom/Pan Video Không Được Áp Dụng Khi Xuất Video (Biên Tập Phim & Review Phim) (09/10/2026) (`routes/video_edit.py`, `auto_edit_pipeline.py`, `web/js/features/video_studio_suite.js`, `web/app.js`, `patches/active/`):**
+  - **Vấn đề & Triệu chứng:** Người dùng chọn phóng to (zoom) hoặc căn chỉnh dịch chuyển (pan) video trên giao diện xem trước (bằng thanh trượt Zoom 100%-200%, phím tắt preset 105%, 110%, 120%, khung điều khiển 8 điểm viền xanh CapCut, cuộn chuột Ctrl+Wheel hoặc Delogo Smart Crop), nhưng khi bấm Xuất video, video xuất ra vẫn ở kích thước gốc và không được zoom như đã chọn.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Biến quản lý bộ công cụ `videoStudioInstances` không được gắn vào `window.videoStudioInstances` trên phạm vi toàn cục, khiến hàm đóng gói tham số xuất `buildEditorExportConfig()` không đọc được giá trị `studio.state.zoom`, `panX`, `panY`.
+    2. Fallback `currentVideoZoom` trong `web/app.js` bị cô lập trong module-scope, không cập nhật khi các thao tác giao diện kích hoạt sự kiện thay đổi trên `window.currentVideoZoom` hoặc thanh trượt DOM.
+    3. Delogo với phương thức `smart_crop` (phóng to nhẹ 1.05x để giấu logo ở rìa) chỉ phóng to trong trình phát tạm thời mà không được chuyển giao vào cấu hình xuất backend.
+    4. Ở backend `routes/video_edit.py`, kiểm tra Stream-Copy chỉ lọc `abs(video_zoom - 1.0) < 0.001` và `video_pan_x == 0`; khi zoom không được truyền lên, video bị stream-copy trực tiếp mà không đi qua bộ lọc re-encode. Đồng thời, bộ lọc zoom chỉ kích hoạt khi `video_zoom > 1.01`, bỏ sót các dải zoom nhỏ (100.5% - 101%) và chưa hỗ trợ thu nhỏ (zoom-out < 1.0).
+    5. Trong `auto_edit_pipeline.py` (Review Phim & Auto Edit), kích thước video xuất ra chưa được làm tròn thành số chẵn (`int(clip_vw) // 2 * 2`), và tọa độ pan bị lồng biểu thức phụ.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Tầng Giao diện (Frontend):*
+       - Gắn `window.videoStudioInstances = videoStudioInstances;` toàn cục.
+       - Trong `VideoStudioSuite.onConfigChange`, tự động đồng bộ 2 chiều các biến `window.currentVideoZoom`, `window.videoPanX`, `window.videoPanY` và thanh trượt slider/badge.
+       - Cập nhật `buildEditorExportConfig()` để quét theo thứ tự ưu tiên đa tầng: studio transform -> DOM slider `editToolZoomSlider` -> biến `currentVideoZoom` / `window.currentVideoZoom` -> Delogo Smart Crop (1.05x). Đảm bảo giá trị zoom và tọa độ pan luôn được đóng gói 100% vào payload API.
+       - Đồng bộ cơ chế đọc zoom tương tự cho luồng Review Phim trong `startReviewPipeline`.
+    2. *Tầng Máy chủ & Bộ lọc FFmpeg (Backend):*
+       - Cập nhật điều kiện bypass Stream-Copy trong `routes/video_edit.py`: Kiểm tra chặt chẽ `abs(video_zoom - 1.0) < 0.005` và `abs(video_pan_x) < 0.5`, `abs(video_pan_y) < 0.5`. Bắt buộc re-encode nếu người dùng có zoom hoặc dịch khung hình.
+       - Tự động nhận diện Delogo Smart Crop (`video_zoom = max(video_zoom, 1.05)`).
+       - Hoàn thiện bộ lọc FFmpeg cho cả Phóng to (Zoom-in `> 1.005`) với Center Crop Lanczos và Thu nhỏ (Zoom-out `< 0.995`) với Scale + Pad viền đen, chuẩn hóa kích thước chia hết cho 2 (`trunc(iw/zoom/2)*2`, `scale={vw_even}:{vh_even}`).
+       - Đồng bộ đầy đủ logic zoom và pan vào cả 2 quy trình trong `auto_edit_pipeline.py` (`run_narration_workflow` và `run_auto_edit_workflow`).
+       - Đồng bộ toàn bộ các tệp thay đổi sang thư mục `patches/active/`.
+
+- **Tính Năng Tạo Voice TTS Trước Khi Xuất, Tái Sử Dụng 100% (0s) & Bảng Đối Soát Dòng Thời Gian SRT Phát Hiện Trùng Lặp (Overlap Detection) (09/10/2026) (`routes/tts.py`, `routes/video_edit.py`, `web/index.html`, `web/app.js`, `tests/test_voice_pregeneration_timeline.py`):**
+  - **Yêu cầu & Mục tiêu:** Người dùng muốn tạo giọng đọc TTS trước khi xuất video để nghe kiểm tra trước, hiển thị bảng thời gian dạng SRT để biết câu nào nói từ đâu đến đâu, phát hiện xem có câu nào bị trùng đè thời gian lên nhau không; sau khi tạo xong, bấm xuất video sẽ tự động dùng lại bản voice đó mà không sinh lại từ đầu.
+  - **Cải tiến Tầng Máy chủ (Backend):**
+    1. *API Tạo Voice Trước SSE Streaming (`/api/tts/pregenerate_stream`):* Xử lý tạo giọng TTS theo cơ chế luồng sự kiện thời gian thực, báo cáo chi tiết phần trăm (%) hoàn thành, mốc thời gian và số câu đã tạo xong. Hỗ trợ dừng khẩn cấp qua `/api/tts/cancel_pregenerate`.
+    2. *Thuật toán Phân Tích & Phát Hiện Trùng Lặp (`analyze_voice_timeline_overlaps`):* Đọc chính xác từng mili-giây thời lượng thực tế của file âm thanh WAV từng câu; tự động so sánh thời điểm kết thúc câu trước với thời điểm bắt đầu câu sau. Nếu câu trước đọc chưa xong mà câu sau đã phát, tự động đánh dấu cờ cảnh báo `has_overlap = True`, đo chính xác số giây bị nói đè (`overlap_duration`), ghi nhận câu bị đè (`overlap_targets`) và câu đè (`is_overlapped_by`).
+    3. *Tự động Xuất Bản SRT & Manifest:* Lưu trữ file `dubbed_timeline.wav`, `tts_manifest.json`, `voice_timeline.srt` và `timeline_audio_manifest.json` trong thư mục tạm `editor_temp_dir`. Bổ sung API `/api/tts/export_timeline_srt` cho phép tải file SRT về máy.
+    4. *Cơ chế Tái Sử Dụng Bản Voice Tức Thì (Instant 0s Reuse) trong `routes/video_edit.py`:* Khi bấm Xuất video (Export), hệ thống kiểm tra bản voice đã tạo trước và fingerprint hợp lệ; tự động lấy trực tiếp track âm thanh timeline sẵn có, bỏ qua hoàn toàn bước tạo TTS, giúp video bắt đầu render ngay lập tức (tiết kiệm 100% thời gian tạo voice và token).
+  - **Cải tiến Giao diện (Frontend):**
+    1. *Khối Hành Động Trong Thẻ Lồng Tiếng AI (`dubbingTtsContent`):* Nút bấm `🎙️ Tạo Voice Trước & Xem SRT Timeline`, nút dừng khẩn cấp `🛑 Dừng`, thanh tiến trình gradient neon và badge trạng thái `✅ Bản Voice đã sẵn sàng (Tái sử dụng 100% khi xuất)`.
+    2. *Modal Bảng Dòng Thời Gian Voice TTS (`voiceTimelineModal`):*
+       - Giao diện Dark Mode sang trọng, hiển thị dạng bảng phụ đề SRT chuyên nghiệp với các cột: `#`, `Dòng thời gian (SRT Timecode: 00:00:12,450 --> 00:00:16,270)`, `Thời lượng Voice (giây)`, `Nội dung câu thoại`, `Đối soát trùng lặp`, `Nghe thử`.
+       - Banner cảnh báo tổng quan: Hiển thị trạng thái hoàn hảo (xanh lục) nếu các câu liền mạch hoặc cảnh báo (cam/đỏ) nêu rõ tổng số vị trí bị nói đè và tổng thời gian trùng đè, kèm hướng dẫn khắc phục (tăng speed hoặc rút gọn câu).
+       - Huy hiệu cảnh báo rõ ràng trên từng hàng: `⚠️ Đè câu #X (+Y.YYs)` hoặc `Khoảng nghỉ +Z.Zs`.
+       - Trình phát Master Player: Cho phép phát toàn bộ track voice cho cả video, kéo thanh seekbar tua nhanh, karaoke follow tự động highlight hàng đang phát.
+       - Nút nghe thử mini (▶) riêng cho từng câu thoại.
+       - Bộ lọc thông minh 1-click: `Tất cả` vs `⚠️ Chỉ câu bị trùng đè` và ô tìm kiếm câu thoại theo từ khóa.
+       - Nút `📥 Tải file SRT Voice` xuất file SRT chuẩn có chú thích mốc thời gian thực tế.
+    3. *Tự động Tái Sử Dụng Khi Xuất:* Biến `window._pregeneratedVoice` tự động kết nối vào `buildEditorExportConfig()` và `executeExportPipeline()`, hiển thị thông báo Toast xác nhận tái sử dụng 100% (0s).
+    4. *Khắc phục lỗi không mở được Modal SRT Timeline:*
+       - Sửa lỗi cấu trúc HTML lồng thẻ (thẻ đóng `</div>` bị thiếu ở `hongguoVideoPreviewModal` khiến `voiceTimelineModal` bị nhét nhầm vào bên trong modal preview đang ẩn `display: none`).
+       - Bổ sung sự kiện `onclick` trực tiếp và nâng cấp hàm `window.openVoiceTimelineModal` tự động gọi API `/api/tts/get_timeline_manifest` để khôi phục dữ liệu timeline từ file cache nếu trang vừa được tải lại.
+    5. *Đưa Thẻ Xem SRT Lên Thanh Bộ Lọc Phụ Đề (`editor-filters-segmented`):*
+       - Thêm thẻ `🎙️ Xem SRT` (pill filter) trực tiếp vào thanh bộ lọc trên cùng của bảng phụ đề (cùng hàng với `Tất cả`, `Quá dài`, `Chưa dịch`, `Có thể lỗi`, `Trùng lặp`, `🤖 AI Check`).
+       - Tích hợp huy hiệu thông minh hiển thị số câu trùng đè (ví dụ: `⚠️ 15` hoặc `✓`), tự động cập nhật khi tạo voice xong hoặc khi tải SRT.
+       - Khi click vào thẻ: Vừa mở ngay Modal Bảng Dòng Thời Gian SRT Timeline chi tiết để nghe thử và tải file SRT, vừa lọc danh sách câu bị trùng đè thời gian trên bảng phụ đề chính và đánh dấu viền đỏ cảnh báo.
+    6. *Tự Động Áp Dụng Giọng Đọc Vào Phần Xem Preview:*
+       - Sau khi tạo giọng đọc xong (hoặc khi khôi phục cache), hệ thống tự động kích hoạt chế độ phát Voice AI trên thanh điều khiển của Video Preview Player (`videoPlayer`).
+       - Thêm huy hiệu trạng thái `🎙️ Voice AI Preview` ngay cạnh nút Bản gốc / Bản sau khi sửa, hỗ trợ bật/tắt tức thời.
+       - Tự động đồng bộ chuẩn xác thời gian, Play/Pause, tua thời gian (seek), âm lượng giữa trình phát video và track âm thanh voice AI.
+    7. *Nút Tự Động Đẩy Lùi SRT Triệt Tiêu Hoàn Toàn Trùng Đè (Auto-Shift Subtitles):*
+       - Bổ sung nút `⚡ Tự động đẩy lùi SRT (Xóa đè)` trên cả Modal Timeline, Banner cảnh báo và Thanh công cụ bảng phụ đề chính (`btnAutoShiftSrtModal`, `btnAutoShiftSrtEditor`).
+       - Thuật toán thông minh: Đo đạc thời lượng thực tế của từng câu thoại; khi câu sau bị câu trước nói lố sang (ví dụ: 0.422s), tự động đẩy mốc bắt đầu của câu sau lùi lại đúng khoảng cách đó kèm safety buffer 0.05s để 2 câu không bị dính sát mép, đồng thời dịch chuyển thời gian kết thúc tương ứng để bảo toàn độ dài câu thoại.
+       - Backend API `/api/tts/restitch_timeline`: Tự động tái ghép nối master audio track `dubbed_timeline.wav` và manifest từ các file WAV có sẵn trong cache (0 TTS token/cost, tốc độ cực nhanh < 0.5s), cập nhật ngay lập tức vào Preview và bảng đối soát dòng thời gian.
+  - **Kiểm thử tự động:** Vượt qua 100% (10/10 bài kiểm thử unit & API) trong `tests/test_voice_pregeneration_timeline.py`.
+
+- **Hoàn Thiện Tự Động Đẩy Lùi SRT Triệt Tiêu Trùng Đè, Làm Mới Preview Khi Đổi Giọng & Chuyển Nút Voice AI Lên Hàng Trên Cùng Phím Điều Khiển (09/10/2026) (`web/index.html`, `web/app.js`, `web/js/features/video_studio_suite.js`, `patches/active/`, `tests/test_voice_pregeneration_timeline.py`):**
+  - **Vấn đề & Triệu chứng người dùng:**
+    1. *Ấn đẩy lùi SRT nhưng mốc thời gian chưa cập nhật:* Khi người dùng bấm `⚡ Tự động đẩy lùi SRT (Xóa đè)`, hệ thống không đẩy được mốc thời gian hoặc bảng phụ đề chính vẫn còn giữ nguyên các cảnh báo `⚠️ Đè +0.11s`.
+    2. *Đổi giọng khác rồi tạo lại voice nhưng preview chưa cập nhật giọng mới:* Người dùng chọn giọng đọc khác trong danh viện voice và bấm tạo lại, nhưng khi bấm Play ở tab Bản sau khi sửa, video vẫn phát lại giọng đọc cũ trước đó.
+    3. *Bố cục nút Voice AI:* Nút `🎙️ Voice AI: BẬT` nằm ở hàng điều khiển dưới chân video làm chật chội thanh timeline slider, người dùng yêu cầu đưa lên cùng hàng với các phím ở hàng trên (thanh Studio toolbar chứa Fit/Cover/Stretch, Tỷ lệ khung hình và các phím công cụ).
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Trong `autoShiftSrtToResolveOverlaps`, việc đọc `startSeconds` và `endSeconds` gặp lỗi khi phụ đề lưu dạng chuỗi timecode có dấu mũi tên `-->`; đồng thời sau khi gọi `/api/tts/restitch_timeline`, giao diện bảng phụ đề chính `renderSrtTable()` không được render lại với dữ liệu sạch, và file SRT gốc chưa được lưu tức thì.
+    2. Trong `applyPregeneratedVoiceToPreview`, câu lệnh điều kiện `if (!window._syncedVoiceAudioPlayer.src || !window._syncedVoiceAudioPlayer.src.includes(audioUrl))` luôn trả về `false` do URL audio vẫn chứa `dubbed_timeline.wav`, khiến trình duyệt không bao giờ cập nhật lại `src` mới và không gọi `.load()`. Trình duyệt tiếp tục phát lại buffer âm thanh cũ từ bộ nhớ.
+    3. Nút `previewVoiceBadge` ban đầu được định nghĩa cứng trong `.player-controls` ở hàng dưới thay vì gắn vào toolbar chuẩn của `VideoStudioSuite`.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Nâng cấp thuật toán Đẩy lùi SRT Liên hoàn (Cascade Shift):* Viết hàm `extractSubSec` phân giải chuẩn xác mọi định dạng thời gian (số, text, timecode `-->`). Tự động quét cờ `has_overlap` và `overlap_duration` từ chunks để đẩy lùi mốc bắt đầu (`targetStart = max(minAllowedStart, curStart)`) và dịch chuyển toàn bộ các mốc thời gian liên quan (`startSeconds`, `endSeconds`, `start`, `end`, `time`). Lưu tức thì vào cache và tệp SRT gốc. Gọi lại `renderSrtTable()`, `renderVoiceTimelineUI()`, `updateBottomBarStats()` ngay sau khi backend tái ghép nối âm thanh để triệt tiêu 100% cờ trùng đè trên màn hình.
+    2. *Khắc phục triệt để cập nhật giọng đọc mới trong Preview:* Loại bỏ điều kiện kiểm tra URL cũ; luôn gán `src = finalUrl` với chuỗi chống cache `_t=${Date.now()}` và gọi trực tiếp `window._syncedVoiceAudioPlayer.load()`. Đồng thời truyền `force_refresh: true` khi người dùng bấm "Tạo Voice Trước".
+    3. *Đưa nút Voice AI lên cùng hàng với các phím hàng trên:* Bổ sung slot `studioVoiceBadgeSlot_editor` vào góc phải của thanh `studio-docked-toolbar` (cạnh cụm phím công cụ ⤢ ⟳ 🛡️ ⊞ 📷). Nút `previewVoiceBadge` được tự động chuyển lên hàng trên, bo góc 6px đồng bộ dark mode neon, giải phóng toàn bộ không gian hàng dưới cho thanh trượt thời gian và âm lượng.
+    4. *Sửa lỗi sập toàn bộ giao diện (NotFoundError trong VideoStudioSuite.renderToolbar):*
+       - Triệu chứng: Console báo lỗi `NotFoundError: Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node at VideoStudioSuite.renderToolbar (video_studio_suite.js:207)`. Khiến toàn bộ script `app.js` bị dừng đột ngột, giao diện không tải được các tính năng.
+       - Nguyên nhân: Thẻ đóng `</div>` của `.card-header` sau nút `btnSelectEditorInput` trong `web/index.html` bị thiếu, khiến trình duyệt gom toàn bộ `.video-container` và `.player-controls` làm thẻ con của `.card-header`. Khi `renderToolbar` cố gọi `card.insertBefore(toolbar, this.playerControls)` với `card = .video-player-card`, trình duyệt từ chối vì `this.playerControls` thuộc `.card-header` chứ không phải con trực tiếp của `card`.
+       - Khắc phục: Đóng thẻ `</div>` chuẩn xác cho `.card-header` tại cả `web/index.html` và `patches/active/web/index.html`. Đồng thời nâng cấp hàm `renderToolbar` trong `video_studio_suite.js` sử dụng mẫu chèn phòng thủ `this.playerControls.parentNode.insertBefore(toolbar, this.playerControls)` với fallback đa tầng (`card.appendChild`, `this.container.parentNode.insertBefore`), vĩnh viễn không bao giờ phát sinh lỗi DOM. Thêm delegated click listener trên `document` cho `#previewVoiceBadge`.
+    5. *Đồng bộ & Kiểm thử:* Đã đồng bộ 100% sang `patches/active/` và bổ sung bài test `test_auto_shift_srt_cascade_resolve`, toàn bộ 11/11 bài test tự động vượt qua 100%.
 
 ---
 

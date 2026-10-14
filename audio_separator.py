@@ -12,6 +12,13 @@ import subprocess
 import shutil
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+try:
+    from platformdirs import user_data_dir
+    USER_DATA_DIR = user_data_dir("NovaCut", "NovaCut", roaming=True)
+except Exception:
+    app_data = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    USER_DATA_DIR = os.path.join(app_data, "NovaCut")
+os.makedirs(USER_DATA_DIR, exist_ok=True)
 TEMP_DIR = os.path.join(ROOT_DIR, "output", "separated_stems")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -97,9 +104,61 @@ def _clean_child_env():
     return env
 
 
+def _is_functional_python(py_path):
+    """
+    Kiểm tra một tệp thực thi Python có thực sự hoạt động và là Python 3 hay không.
+    Loại trừ tuyệt đối:
+    1. App Execution Alias của Windows Store (WindowsApps/python.exe) - vốn trả về mã lỗi 9009 nếu chưa cài.
+    2. Tệp NovaCut.exe hoặc tệp không tồn tại / 0 bytes.
+    """
+    if not py_path or not os.path.isfile(py_path):
+        return False
+    norm = os.path.normpath(py_path).lower()
+    if "windowsapps" in norm or norm.endswith("novacut.exe"):
+        return False
+    try:
+        res = subprocess.run(
+            [py_path, "-c", "import sys; print(f'PY_{sys.version_info.major}')"],
+            capture_output=True, text=True, timeout=6, env=_clean_child_env(),
+            creationflags=0x08000000 if os.name == "nt" else 0
+        )
+        return res.returncode == 0 and "PY_3" in (res.stdout or "")
+    except Exception:
+        return False
+
+
+def _find_pythons_in_registry():
+    """Tìm tất cả các cài đặt Python chuẩn đã đăng ký trong Windows Registry."""
+    found = []
+    if os.name != "nt":
+        return found
+    try:
+        import winreg
+        for hkey in [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]:
+            for subkey_path in [r"SOFTWARE\Python\PythonCore", r"SOFTWARE\WOW6432Node\Python\PythonCore"]:
+                try:
+                    with winreg.OpenKey(hkey, subkey_path) as key:
+                        num_subkeys = winreg.QueryInfoKey(key)[0]
+                        for i in range(num_subkeys):
+                            ver_name = winreg.EnumKey(key, i)
+                            try:
+                                with winreg.OpenKey(key, f"{ver_name}\\InstallPath") as ip_key:
+                                    ip = winreg.QueryValue(ip_key, "")
+                                    exe = os.path.join(ip, "python.exe")
+                                    if os.path.isfile(exe) and exe not in found:
+                                        found.append(exe)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return found
+
+
 def _test_python_torch(py_path):
     """Kiểm tra xem executable có thể nạp torch và torchaudio thành công không."""
-    if not py_path or not os.path.exists(py_path):
+    if not _is_functional_python(py_path):
         return False
     try:
         res = subprocess.run(
@@ -125,6 +184,96 @@ def _has_nvidia_gpu():
         return False
 
 
+def _ensure_portable_python(progress_cb=None, logger_cb=None):
+    """
+    Tự động tải và giải nén gói Python Portable chính thức (~17MB) từ Microsoft NuGet
+    nếu trên máy người dùng hoàn toàn chưa có bất kỳ bản cài đặt Python nào.
+    Đảm bảo 100% tự động, hoạt động không cần quyền Admin và không cần cài thủ công.
+    """
+    import urllib.request
+    import zipfile
+
+    target_dirs = [
+        os.path.join(ROOT_DIR, "python-nuget"),
+        os.path.join(USER_DATA_DIR, "python-nuget")
+    ]
+    nuget_dir = None
+    for d in target_dirs:
+        try:
+            os.makedirs(d, exist_ok=True)
+            test_file = os.path.join(d, ".write_test")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+            nuget_dir = d
+            break
+        except Exception:
+            continue
+
+    if not nuget_dir:
+        nuget_dir = os.path.join(USER_DATA_DIR, "python-nuget")
+        os.makedirs(nuget_dir, exist_ok=True)
+
+    target_exe = os.path.join(nuget_dir, "tools", "python.exe")
+    if _is_functional_python(target_exe):
+        return target_exe
+
+    if logger_cb:
+        logger_cb("[MDX-Separator] 📥 Đang tự động tải môi trường Python Portable độc lập (~17MB) từ NuGet...")
+    if progress_cb:
+        progress_cb(5, "Đang tải môi trường Python Portable (~17MB)...")
+
+    nuget_url = "https://www.nuget.org/api/v2/package/python/3.11.9"
+    zip_tmp = os.path.join(nuget_dir, "python_3.11.9.nupkg.tmp")
+    try:
+        req = urllib.request.Request(
+            nuget_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NovaCut/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            total_size = int(resp.headers.get("Content-Length", 17500000))
+            downloaded = 0
+            with open(zip_tmp, "wb") as out_file:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0 and progress_cb:
+                        pct = 5 + int((downloaded / total_size) * 3)
+                        progress_cb(min(pct, 8), f"Đang tải Python Portable ({downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB)...")
+
+        if logger_cb:
+            logger_cb("[MDX-Separator] 📦 Đang giải nén môi trường Python Portable...")
+        if progress_cb:
+            progress_cb(8, "Đang giải nén môi trường Python...")
+
+        with zipfile.ZipFile(zip_tmp, "r") as z:
+            z.extractall(nuget_dir)
+
+        if os.path.exists(zip_tmp):
+            try:
+                os.remove(zip_tmp)
+            except Exception:
+                pass
+
+        if _is_functional_python(target_exe):
+            if logger_cb:
+                logger_cb(f"[MDX-Separator] ✅ Môi trường Python Portable đã sẵn sàng: {target_exe}")
+            return target_exe
+        else:
+            raise RuntimeError(f"Giải nén thành công nhưng không thể khởi chạy {target_exe}")
+
+    except Exception as e:
+        if os.path.exists(zip_tmp):
+            try:
+                os.remove(zip_tmp)
+            except Exception:
+                pass
+        raise RuntimeError(f"Không thể tự động tải môi trường Python ({e}). Vui lòng kiểm tra kết nối mạng hoặc cài đặt Python 3.10 - 3.12.")
+
+
 def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
     """
     Tìm hoặc tự động chuẩn bị môi trường Python có sẵn PyTorch (torch + torchaudio).
@@ -134,47 +283,88 @@ def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
     # 1. Thu thập tất cả các ứng viên Python trên máy
     candidates = []
 
-    # Ưu tiên các runtime chuyên dụng / nội bộ
-    runtime_candidates = [
-        os.path.join(ROOT_DIR, "runtimes", "vieneu_gpu", "Scripts", "python.exe"),
-        os.path.join(ROOT_DIR, ".asr_venv", "Scripts", "python.exe"),
-        os.path.join(ROOT_DIR, "runtimes", "mdx_runtime", "Scripts", "python.exe"),
-        os.path.join(ROOT_DIR, "runtimes", "python", "python.exe"),
-        os.path.join(ROOT_DIR, "rvc_env", "python.exe"),
-        os.path.join(ROOT_DIR, "python-nuget", "tools", "python.exe"),
-        os.path.join(ROOT_DIR, "python-nuget", "python.exe"),
-    ]
-    for c in runtime_candidates:
-        if os.path.exists(c) and c not in candidates:
-            candidates.append(c)
+    def _add_candidate(path):
+        if path:
+            norm_p = os.path.normpath(path)
+            if "windowsapps" not in norm_p.lower() and not norm_p.lower().endswith("novacut.exe"):
+                if os.path.isfile(norm_p) and norm_p not in candidates:
+                    candidates.append(norm_p)
+
+    # Ưu tiên các runtime chuyên dụng / nội bộ (cả ở ROOT_DIR và USER_DATA_DIR)
+    for base_dir in [ROOT_DIR, USER_DATA_DIR]:
+        runtime_candidates = [
+            os.path.join(base_dir, "runtimes", "vieneu_gpu", "Scripts", "python.exe"),
+            os.path.join(base_dir, ".asr_venv", "Scripts", "python.exe"),
+            os.path.join(base_dir, "runtimes", "mdx_runtime", "Scripts", "python.exe"),
+            os.path.join(base_dir, "python-nuget", "tools", "python.exe"),
+            os.path.join(base_dir, "python-nuget", "python.exe"),
+            os.path.join(base_dir, "runtimes", "python", "python.exe"),
+            os.path.join(base_dir, "rvc_env", "python.exe"),
+        ]
+        for c in runtime_candidates:
+            _add_candidate(c)
 
     # Nếu không phải ứng dụng đóng gói EXE, kiểm tra chính sys.executable
-    if not getattr(sys, 'frozen', False):
-        if sys.executable and sys.executable not in candidates:
-            candidates.append(sys.executable)
+    if not getattr(sys, "frozen", False):
+        if sys.executable:
+            _add_candidate(sys.executable)
+
+    # Các Python đã đăng ký trong Windows Registry
+    for reg_py in _find_pythons_in_registry():
+        _add_candidate(reg_py)
 
     # Các Python chuẩn đã cài đặt trên hệ thống Windows
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     prog_files = os.environ.get("ProgramFiles", "")
-    if local_app_data:
-        for py_ver in ["Python312", "Python311", "Python310"]:
-            p = os.path.join(local_app_data, "Programs", "Python", py_ver, "python.exe")
-            if os.path.exists(p) and p not in candidates:
-                candidates.append(p)
-    if prog_files:
-        for py_ver in ["Python312", "Python311", "Python310"]:
-            p = os.path.join(prog_files, py_ver, "python.exe")
-            if os.path.exists(p) and p not in candidates:
-                candidates.append(p)
+    prog_files_x86 = os.environ.get("ProgramFiles(x86)", "")
+    user_profile = os.environ.get("USERPROFILE", "")
+
+    for py_ver in ["Python313", "Python312", "Python311", "Python310"]:
+        if local_app_data:
+            _add_candidate(os.path.join(local_app_data, "Programs", "Python", py_ver, "python.exe"))
+        if prog_files:
+            _add_candidate(os.path.join(prog_files, py_ver, "python.exe"))
+        if prog_files_x86:
+            _add_candidate(os.path.join(prog_files_x86, py_ver, "python.exe"))
+        _add_candidate(f"C:\\{py_ver}\\python.exe")
+        _add_candidate(f"D:\\{py_ver}\\python.exe")
+
+    # Kiểm tra Conda / Miniconda / Pyenv / Scoop / Choco
+    if user_profile:
+        _add_candidate(os.path.join(user_profile, "miniconda3", "python.exe"))
+        _add_candidate(os.path.join(user_profile, "anaconda3", "python.exe"))
+        _add_candidate(os.path.join(user_profile, ".pyenv", "pyenv-win", "shims", "python.exe"))
+        _add_candidate(os.path.join(user_profile, "scoop", "apps", "python", "current", "python.exe"))
+    prog_data = os.environ.get("ProgramData", "")
+    if prog_data:
+        _add_candidate(os.path.join(prog_data, "miniconda3", "python.exe"))
+        _add_candidate(os.path.join(prog_data, "anaconda3", "python.exe"))
+        _add_candidate(os.path.join(prog_data, "chocolatey", "bin", "python.exe"))
 
     # Thử py launcher hoặc python trong biến môi trường PATH
-    for cmd in ["python.exe", "python"]:
+    for cmd in ["python.exe", "python3.exe", "py.exe"]:
         found = shutil.which(cmd)
-        if found and os.path.exists(found) and "WindowsApps" not in found and found not in candidates:
-            candidates.append(found)
+        if found:
+            if found.lower().endswith("py.exe"):
+                try:
+                    res_p = subprocess.run(
+                        [found, "-c", "import sys; print(sys.executable)"],
+                        capture_output=True, text=True, timeout=5, env=_clean_child_env(),
+                        creationflags=0x08000000 if os.name == "nt" else 0
+                    )
+                    real_py = res_p.stdout.strip()
+                    if real_py:
+                        _add_candidate(real_py)
+                except Exception:
+                    pass
+            else:
+                _add_candidate(found)
 
-    # 2. Kiểm tra xem ứng viên nào đã có sẵn torch & torchaudio
-    for py_exe in candidates:
+    # 2. Lọc chỉ giữ các ứng viên thực sự hoạt động được (loại bỏ stub WindowsApps 9009)
+    valid_candidates = [p for p in candidates if _is_functional_python(p)]
+
+    # Kiểm tra xem ứng viên nào đã có sẵn torch & torchaudio
+    for py_exe in valid_candidates:
         if _test_python_torch(py_exe):
             if logger_cb:
                 logger_cb(f"[MDX-Separator] 🎯 Sử dụng môi trường AI sẵn có: {py_exe}")
@@ -186,31 +376,35 @@ def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
     if progress_cb:
         progress_cb(5, "Đang chuẩn bị môi trường AI PyTorch...")
 
-    # Tìm Python cơ sở để tạo runtime hoặc cài đặt
-    base_python = None
-    for py_exe in candidates:
-        if os.path.exists(py_exe) and not py_exe.endswith("NovaCut.exe"):
-            base_python = py_exe
-            break
+    # Tìm Python cơ sở
+    base_python = valid_candidates[0] if valid_candidates else None
 
+    # Nếu trên máy hoàn toàn chưa có Python nào: Tự động tải Python Portable từ NuGet (~17MB)
     if not base_python:
-        for cmd in ["python.exe", "python", "py.exe", "py"]:
-            found = shutil.which(cmd)
-            if found and os.path.exists(found) and not found.endswith("NovaCut.exe"):
-                base_python = found
-                break
+        base_python = _ensure_portable_python(progress_cb=progress_cb, logger_cb=logger_cb)
 
-    if not base_python:
-        raise RuntimeError("Không tìm thấy Python trên hệ thống để cài đặt PyTorch. Vui lòng cài đặt Python (3.10 - 3.12).")
+    if not base_python or not _is_functional_python(base_python):
+        raise RuntimeError("Không tìm thấy Python hợp lệ trên hệ thống để cài đặt PyTorch. Vui lòng cài đặt Python (3.10 - 3.12).")
 
-    # Tạo virtualenv riêng biệt tại runtimes/mdx_runtime để tránh xung đột
-    mdx_runtime_dir = os.path.join(ROOT_DIR, "runtimes", "mdx_runtime")
+    # Xác định thư mục runtime cho MDX (ưu tiên ROOT_DIR, fallback sang USER_DATA_DIR nếu ROOT_DIR chỉ đọc)
+    runtime_dirs = [
+        os.path.join(ROOT_DIR, "runtimes", "mdx_runtime"),
+        os.path.join(USER_DATA_DIR, "runtimes", "mdx_runtime")
+    ]
+    mdx_runtime_dir = runtime_dirs[0]
     target_python = os.path.join(mdx_runtime_dir, "Scripts", "python.exe")
 
-    if not os.path.exists(target_python):
+    # Thử tạo virtualenv riêng biệt tại runtimes/mdx_runtime để tránh xung đột
+    if not _is_functional_python(target_python):
+        try:
+            os.makedirs(os.path.dirname(mdx_runtime_dir), exist_ok=True)
+        except Exception:
+            mdx_runtime_dir = runtime_dirs[1]
+            os.makedirs(os.path.dirname(mdx_runtime_dir), exist_ok=True)
+            target_python = os.path.join(mdx_runtime_dir, "Scripts", "python.exe")
+
         if logger_cb:
-            logger_cb("[MDX-Separator] 📦 Đang khởi tạo môi trường AI tách biệt tại runtimes/mdx_runtime...")
-        os.makedirs(os.path.dirname(mdx_runtime_dir), exist_ok=True)
+            logger_cb(f"[MDX-Separator] 📦 Đang khởi tạo môi trường AI tách biệt tại {mdx_runtime_dir}...")
         try:
             subprocess.run(
                 [base_python, "-m", "venv", mdx_runtime_dir],
@@ -219,11 +413,19 @@ def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
             )
         except Exception as venv_err:
             if logger_cb:
-                logger_cb(f"[MDX-Separator] ⚠️ Không thể tạo venv ({venv_err}). Sử dụng trực tiếp {base_python}")
-            target_python = base_python
+                logger_cb(f"[MDX-Separator] ⚠️ Không thể tạo venv ({venv_err}).")
 
-    if not os.path.exists(target_python):
+    # Nếu sau khi tạo venv target_python không hoạt động (ví dụ NuGet python không hỗ trợ venv), dùng trực tiếp base_python
+    if not _is_functional_python(target_python):
+        if logger_cb:
+            logger_cb(f"[MDX-Separator] 💡 Sử dụng trực tiếp môi trường Python: {base_python}")
         target_python = base_python
+
+    # Kiểm tra lại xem target_python đã có sẵn torch chưa
+    if _test_python_torch(target_python):
+        if logger_cb:
+            logger_cb(f"[MDX-Separator] 🎯 Môi trường {target_python} đã có sẵn PyTorch AI.")
+        return target_python
 
     # Xác định phiên bản CUDA / CPU phù hợp
     has_gpu = _has_nvidia_gpu()
@@ -243,7 +445,8 @@ def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
         target_python, "-m", "pip", "install",
         "--no-warn-script-location",
         "torch", "torchaudio", "onnxruntime-directml", "numpy", "soundfile",
-        "--index-url", index_url
+        "--index-url", index_url,
+        "--extra-index-url", "https://pypi.org/simple"
     ]
 
     install_proc = subprocess.Popen(
@@ -257,6 +460,7 @@ def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
         creationflags=0x08000000 if os.name == "nt" else 0
     )
 
+    recent_output = []
     while True:
         line = install_proc.stdout.readline()
         if not line:
@@ -267,22 +471,30 @@ def _find_or_prepare_mdx_python(progress_cb=None, logger_cb=None):
         line_clean = line.strip()
         if not line_clean:
             continue
-        if any(keyword in line_clean.lower() for keyword in ["downloading", "collecting", "installing", "successfully installed"]):
+        recent_output.append(line_clean)
+        if len(recent_output) > 25:
+            recent_output.pop(0)
+
+        line_lower = line_clean.lower()
+        if any(keyword in line_lower for keyword in ["downloading", "collecting", "installing", "successfully installed"]):
             if logger_cb:
                 logger_cb(f"[PyTorch-Installer] {line_clean}")
-            if "downloading" in line_clean.lower() and progress_cb:
+            if "downloading" in line_lower and progress_cb:
                 progress_cb(7, "Đang tải gói dữ liệu AI...")
+            elif "installing" in line_lower and progress_cb:
+                progress_cb(8, "Đang cài đặt thư viện PyTorch AI...")
 
     ret = install_proc.wait()
     if ret != 0:
-        raise RuntimeError(f"Tự động cài đặt PyTorch thất bại (Mã lỗi: {ret}). Vui lòng kiểm tra kết nối mạng.")
+        err_detail = "\n".join(recent_output[-6:]) if recent_output else "Không nhận được phản hồi từ pip."
+        raise RuntimeError(f"Tự động cài đặt PyTorch thất bại (Mã lỗi: {ret}).\nChi tiết:\n{err_detail}")
 
     if _test_python_torch(target_python):
         if logger_cb:
             logger_cb("[MDX-Separator] 🎉 Đã cài đặt hoàn tất PyTorch AI thành công! Bắt đầu xử lý âm thanh...")
         return target_python
     else:
-        raise RuntimeError("Cài đặt PyTorch hoàn tất nhưng không thể nạp module torch/torchaudio.")
+        raise RuntimeError("Cài đặt PyTorch hoàn tất nhưng không thể nạp module torch/torchaudio vào runtime.")
 
 
 def _run_mdx_in_isolated_process(
