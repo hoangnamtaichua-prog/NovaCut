@@ -212,9 +212,9 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
             <input type="file" id="inputOpenProjectFile" accept=".amsproj,.json" style="display: none;">
 
             <!-- Live License Status Badge -->
-            <div id="headerLicenseBadge" class="license-header-badge" title="Nhấp để xem thông tin bản quyền & nâng cấp gói" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 20px; font-size: 12px; color: #fbbf24; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);">
-                <span id="headerLicenseIcon">⚡</span>
-                <span id="headerLicenseText" style="font-weight: 700;">Đang kiểm tra...</span>
+            <div id="headerLicenseBadge" class="license-header-badge" title="Nhấp để xem thông tin bản quyền (Miễn Phí Vĩnh Viễn)" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 20px; font-size: 12px; color: #10b981; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);">
+                <span id="headerLicenseIcon">👑</span>
+                <span id="headerLicenseText" style="font-weight: 700;">💎 Miễn Phí Vĩnh Viễn</span>
             </div>
             <!-- Live Token Usage Counter Badge -->
             <div id="tokenUsageBadge" class="token-badge" title="Nhấp để xem chi tiết thống kê Token đã sử dụng" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 20px; font-size: 12.5px; color: #38bdf8; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);">
@@ -246,6 +246,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                         <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                         <span>Chọn File</span>
                     </button>
+                </div>
+                <div id="previewVoiceBadge" style="display: none; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.45); cursor: pointer; user-select: none; transition: all 0.2s;" title="Đang phát Giọng đọc AI khi xem Bản sau khi sửa. Click để bật/tắt">
+                    <span style="font-size: 12px;">🎙️</span>
+                    <span id="previewVoiceBadgeText">Voice AI Preview</span>
                 </div>
                 <div class="video-container" id="videoContainer">
                     <div class="capcut-canvas-frame" id="videoCanvasFrame">
@@ -520,6 +524,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <label class="filter-pill"><input type="radio" name="srtFilter" value="error"><span id="lblSrtFilterError">Có thể lỗi</span></label>
                                 <label class="filter-pill"><input type="radio" name="srtFilter" value="duplicate"><span id="lblSrtFilterDuplicate">Trùng lặp</span></label>
                                 <label class="filter-pill"><input type="radio" name="srtFilter" value="ai_check"><span id="lblSrtFilterAiCheck" style="color: #38bdf8; font-weight: 600;">🤖 AI Check</span></label>
+                                <label class="filter-pill" id="pillFilterVoiceTimeline" title="Mở bảng dòng thời gian Voice SRT và kiểm tra câu trùng đè" onclick="if(window.openVoiceTimelineModal) window.openVoiceTimelineModal();"><input type="radio" name="srtFilter" value="voice_timeline"><span id="lblSrtFilterVoiceTimeline" style="color: #c084fc; font-weight: 600;">🎙️ Xem SRT</span></label>
                             </div>
                             <div class="editor-tools-group">
                                 <button class="btn secondary outline-border flex-btn btn-action-pill" id="btnCleanSrtAI" title="Làm sạch phụ đề bằng AI: loại bỏ trùng lặp OCR, sửa ký tự rác và chuẩn hóa timestamp">
@@ -529,6 +534,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <button class="btn secondary outline-border flex-btn btn-action-pill" id="btnCondenseSrtAI" title="Rút gọn và chắt lọc phụ đề bằng AI: tóm tắt câu thoại dài cho kịch bản tóm tắt phim">
                                     <svg viewBox="0 0 24 24" width="13" height="13" stroke="#38bdf8" stroke-width="2" fill="none"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="20" y1="4" x2="8.12" y2="15.88"></line><line x1="14.47" y1="14.48" x2="20" y2="20"></line><line x1="8.12" y1="8.12" x2="12" y2="12"></line></svg>
                                     <span>Rút gọn SRT</span>
+                                </button>
+                                <button class="btn secondary outline-border flex-btn btn-action-pill" id="btnAutoShiftSrtEditor" title="Tự động dịch chuyển/đẩy lùi thời gian câu sau để không bị nói đè lên câu trước" style="color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.08);">
+                                    <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+                                    <span style="font-weight: 600;">⚡ Đẩy lùi SRT (Xóa đè)</span>
                                 </button>
                                 <button class="btn btn-danger-outline flex-btn btn-action-pill" style="display: none;" id="btnStopCleanSrtAI" title="Dừng quá trình làm sạch AI ngay lập tức">
                                     <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
@@ -733,6 +742,53 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                         <div class="help-text mt-10" style="font-size: 11px; color: #94a3b8; line-height: 1.4; display: flex; align-items: center; gap: 4px;">
                             <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" style="flex-shrink: 0;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                             <span>Tự động đọc theo các câu phụ đề đã dịch trên bảng Editor.</span>
+                        </div>
+
+                        <!-- Pre-Generate Voice & SRT Timeline Action Box -->
+                        <div class="pregen-voice-box" style="margin-top: 12px; padding: 12px; background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <span style="font-size: 15px;">🎙️</span>
+                                    <span style="font-size: 12px; font-weight: 700; color: #38bdf8;">Tạo Voice Trước Khi Xuất (Voice Pre-Render)</span>
+                                </div>
+                                <span style="font-size: 10.5px; color: #10b981; font-weight: 600; background: rgba(16, 185, 129, 0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3);">⚡ Tái sử dụng 0s</span>
+                            </div>
+                            <p style="font-size: 11px; color: #94a3b8; line-height: 1.4; margin: 0 0 10px;">
+                                Tạo trước toàn bộ giọng đọc TTS, xuất bảng dòng thời gian dạng SRT để kiểm tra từng câu và phát hiện các đoạn giọng đọc bị trùng đè thời gian trước khi render video.
+                            </p>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" id="btnPreGenerateVoice" class="btn primary small" style="flex: 1; padding: 7px 12px; font-size: 12px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #8b5cf6); border: none; border-radius: 6px; color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 10px rgba(14, 165, 233, 0.35);" title="Tạo trước toàn bộ giọng đọc TTS và đối soát thời gian / trùng đè giọng đọc">
+                                    <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                                    <span>🎙️ Tạo Voice Trước &amp; Xem SRT Timeline</span>
+                                </button>
+                                <button type="button" id="btnCancelPreGenVoice" class="btn secondary small" style="display: none; padding: 7px 12px; font-size: 11.5px; border-color: rgba(239, 68, 68, 0.5); color: #ef4444; background: rgba(239, 68, 68, 0.15); font-weight: 700; cursor: pointer;" title="Dừng khẩn cấp tiến trình tạo voice">
+                                    <span>🛑 Dừng</span>
+                                </button>
+                            </div>
+
+                            <!-- Live Progress Box -->
+                            <div id="preGenVoiceProgressBox" style="display: none; margin-top: 8px; padding: 8px 10px; background: rgba(10, 15, 29, 0.95); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
+                                    <span id="preGenVoiceStatusText" style="color: #38bdf8; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80%;">Đang chuẩn bị...</span>
+                                    <span id="preGenVoicePercentText" style="color: #a855f7; font-family: monospace; font-weight: bold;">0%</span>
+                                </div>
+                                <div style="width: 100%; height: 6px; background: #0f172a; border-radius: 4px; overflow: hidden; border: 1px solid #1e293b;">
+                                    <div id="preGenVoiceProgressBarFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #0ea5e9, #a855f7); transition: width 0.2s ease; box-shadow: 0 0 8px rgba(14, 165, 233, 0.5);"></div>
+                                </div>
+                            </div>
+
+                            <!-- Ready Status Box -->
+                            <div id="preGenVoiceReadyBadge" style="display: none; margin-top: 8px; padding: 8px 10px; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 6px; font-size: 11px; color: #34d399;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                                    <div style="display: flex; align-items: center; gap: 5px; overflow: hidden;">
+                                        <span style="font-size: 13px;">✅</span>
+                                        <span id="preGenVoiceReadyText" style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Bản Voice đã sẵn sàng (Tái sử dụng 100% khi xuất)</span>
+                                    </div>
+                                    <button type="button" id="btnOpenVoiceTimelineModal" onclick="if(window.openVoiceTimelineModal) window.openVoiceTimelineModal();" class="btn small" style="padding: 4px 10px; font-size: 11.5px; font-weight: 700; background: rgba(14, 165, 233, 0.25); border: 1px solid #0ea5e9; color: #38bdf8; border-radius: 5px; cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px;" title="Mở bảng dòng thời gian SRT kiểm tra từng câu và câu trùng lặp">
+                                        📋 Xem SRT Timeline
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- AI Stem & Vocal Separation Box in Editor -->
@@ -1934,6 +1990,36 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                             </label>
                         </div>
 
+                        <!-- Sub & Blur Position Controls for Batch Editor -->
+                        <div id="batch_blurOptionsBox" style="margin-top: 6px; padding: 8px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; display: flex; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div style="display: flex; align-items: center; gap: 5px;">
+                                    <span style="font-size: 12px;">🎯</span>
+                                    <span style="font-size: 11px; color: #38bdf8; font-weight: 600;">Tự động khóa tâm mờ &amp; sub đè lên chữ gốc (AI Scan)</span>
+                                </div>
+                                <label class="switch" style="width: 30px; height: 16px; margin-bottom: 0;">
+                                    <input type="checkbox" id="batch_blurAutoAlign" checked>
+                                    <span class="slider-toggle round" style="--slider-size: 12px;"></span>
+                                </label>
+                            </div>
+                            <div id="batch_blurManualGroup" style="display: none; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 2px; padding-top: 6px; border-top: 1px dashed rgba(56, 189, 248, 0.2);">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <div style="display: flex; justify-content: space-between; font-size: 10.5px; color: #94a3b8; margin-bottom: 2px;">
+                                        <span>📍 Vị trí dọc (Y):</span>
+                                        <span id="batch_blurYPosVal" style="color: #38bdf8; font-weight: 600;">81.5%</span>
+                                    </div>
+                                    <input type="range" id="batch_blurYPos" min="50" max="95" value="81.5" step="0.5" class="cyan-slider">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <div style="display: flex; justify-content: space-between; font-size: 10.5px; color: #94a3b8; margin-bottom: 2px;">
+                                        <span>↕️ Độ cao mờ (H):</span>
+                                        <span id="batch_blurHeightVal" style="color: #38bdf8; font-weight: 600;">9.5%</span>
+                                    </div>
+                                    <input type="range" id="batch_blurHeight" min="4" max="25" value="9.5" step="0.5" class="cyan-slider">
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- AI Subtitle Inspector Toggle -->
                         <div style="margin-top: 10px; padding: 8px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; display: flex; flex-direction: column; gap: 6px;">
                             <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -2184,56 +2270,154 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                 </div>
             </div>
 
-            <!-- Card 1: Text Input Area -->
+            <!-- Card 1: Text Input & Batch Queue Area -->
             <div class="card tts-card tts-editor-card">
-                <div class="tts-editor-header">
-                    <div class="tts-header-stats">
-                        <span class="stat-badge"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg><strong id="ttsCharCount">0</strong> ký tự</span>
-                        <span class="stat-badge"><strong id="ttsWordCount">0</strong> từ</span>
-                        <span class="stat-badge stat-time" title="Ước tính thời lượng phát"><svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> ~<strong id="ttsEstTime">0s</strong></span>
+                <!-- Mode Switch Tabs -->
+                <div class="tts-mode-switch-bar">
+                    <div class="tts-mode-tabs">
+                        <button type="button" class="tts-mode-tab active" id="tabTtsSingleMode" title="Chế độ nhập hoặc soạn thảo trực tiếp 1 kịch bản">
+                            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                            <span>Soạn thảo văn bản</span>
+                        </button>
+                        <button type="button" class="tts-mode-tab" id="tabTtsBatchMode" title="Chế độ nạp một loạt file kịch bản và tạo lần lượt đến khi hết danh sách">
+                            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+                            <span>Danh sách tệp hàng loạt</span>
+                            <span class="tts-batch-count-badge" id="ttsBatchCountBadge" style="display: none;">0</span>
+                        </button>
                     </div>
-                    
-                    <div class="tts-quick-tools">
-                        <!-- Pause Presets Dropdown -->
-                        <div class="tts-pause-dropdown-wrap">
-                            <button type="button" class="btn btn-tool" id="btnTtsInsertPause" title="Chèn thời gian nghỉ/ngắt nghỉ giữa câu">
-                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                                <span>Chèn độ trễ (Pause)</span>
-                                <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                            </button>
-                            <div class="tts-pause-menu" id="ttsPauseMenu" style="display: none;">
-                                <button type="button" class="pause-opt" data-pause="[pause 0.5s]"><span>Nghỉ ngắn</span> <code>0.5s</code></button>
-                                <button type="button" class="pause-opt" data-pause="[pause 1.0s]"><span>Nghỉ vừa (Khuyên dùng)</span> <code>1.0s</code></button>
-                                <button type="button" class="pause-opt" data-pause="[pause 2.0s]"><span>Nghỉ dài (Chuyển cảnh)</span> <code>2.0s</code></button>
-                            </div>
-                        </div>
+                    <div class="tts-mode-status-pill">
+                        <span class="engine-dot" id="ttsModeDot" style="background: #38bdf8;"></span>
+                        <span id="ttsModeStatusText">Soạn thảo đơn</span>
+                    </div>
+                </div>
 
-                        <button type="button" class="btn btn-tool" id="btnTtsPaste" title="Dán nội dung từ Clipboard">
-                            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                            <span>Dán</span>
-                        </button>
+                <!-- Single Script Mode Section -->
+                <div id="ttsSingleModeContainer">
+                    <div class="tts-editor-header">
+                        <div class="tts-header-stats">
+                            <span class="stat-badge"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg><strong id="ttsCharCount">0</strong> ký tự</span>
+                            <span class="stat-badge"><strong id="ttsWordCount">0</strong> từ</span>
+                            <span class="stat-badge stat-time" title="Ước tính thời lượng phát"><svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> ~<strong id="ttsEstTime">0s</strong></span>
+                        </div>
                         
-                        <button type="button" class="btn btn-tool" id="btnTtsSample" title="Nạp văn bản kịch bản mẫu">
-                            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-                            <span>Văn bản mẫu</span>
-                        </button>
+                        <div class="tts-quick-tools">
+                            <!-- Pause Presets Dropdown -->
+                            <div class="tts-pause-dropdown-wrap">
+                                <button type="button" class="btn btn-tool" id="btnTtsInsertPause" title="Chèn thời gian nghỉ/ngắt nghỉ giữa câu">
+                                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                    <span>Chèn độ trễ (Pause)</span>
+                                    <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                </button>
+                                <div class="tts-pause-menu" id="ttsPauseMenu" style="display: none;">
+                                    <button type="button" class="pause-opt" data-pause="[pause 0.5s]"><span>Nghỉ ngắn</span> <code>0.5s</code></button>
+                                    <button type="button" class="pause-opt" data-pause="[pause 1.0s]"><span>Nghỉ vừa (Khuyên dùng)</span> <code>1.0s</code></button>
+                                    <button type="button" class="pause-opt" data-pause="[pause 2.0s]"><span>Nghỉ dài (Chuyển cảnh)</span> <code>2.0s</code></button>
+                                </div>
+                            </div>
+
+                            <button type="button" class="btn btn-tool btn-tool-cyan" id="btnTtsImportFile" title="Nhập 1 hoặc nhiều tệp kịch bản (.txt, .docx, .pdf, .srt, .vtt, .md)">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                <span>Nhập tệp</span>
+                            </button>
+                            <input type="file" id="ttsFileInput" accept=".txt,.docx,.pdf,.srt,.vtt,.md,.json,.csv" multiple style="display: none;">
+
+                            <button type="button" class="btn btn-tool" id="btnTtsImportFolder" title="Nhập toàn bộ tệp kịch bản trong 1 thư mục">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                                <span>Nhập thư mục</span>
+                            </button>
+                            <input type="file" id="ttsFolderInput" webkitdirectory directory style="display: none;">
+
+                            <button type="button" class="btn btn-tool" id="btnTtsAddToBatch" title="Đưa nội dung kịch bản này vào hàng đợi tạo hàng loạt">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                                <span>+ Đưa vào hàng đợi</span>
+                            </button>
+
+                            <button type="button" class="btn btn-tool" id="btnTtsPaste" title="Dán nội dung từ Clipboard">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                <span>Dán</span>
+                            </button>
+                            
+                            <button type="button" class="btn btn-tool" id="btnTtsSample" title="Nạp văn bản kịch bản mẫu">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                                <span>Văn bản mẫu</span>
+                            </button>
+                            
+                            <button type="button" class="btn btn-tool btn-tool-danger" id="btnTtsClear" title="Xóa toàn bộ nội dung">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                <span>Xóa</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="tts-input-container" style="position: relative;">
+                        <textarea class="tts-main-input" id="ttsInputText" placeholder="Nhập, dán hoặc kéo thả file kịch bản / truyện audio vào đây (.txt, .docx, .pdf, .srt, .vtt)... Hỗ trợ nội dung dài từ 30 phút đến 1 tiếng."></textarea>
                         
-                        <button type="button" class="btn btn-tool btn-tool-danger" id="btnTtsClear" title="Xóa toàn bộ nội dung">
-                            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                            <span>Xóa</span>
+                        <!-- Floating Smart Rhythm Button -->
+                        <button type="button" id="btnTtsAutoRhythm" class="btn-floating-rhythm" title="Tự động phân câu, ngắt nhịp và định dạng khoảng nghỉ 0.5s chuẩn giọng đọc">
+                            <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="m12 3-1.9 4.8L5.3 9.7l3.9 3.5-1.2 5.1 4-2.5 4 2.5-1.2-5.1 3.9-3.5-4.8-1.9L12 3z"/>
+                            </svg>
+                            <span>Tự ngắt nhịp</span>
                         </button>
                     </div>
                 </div>
-                <div class="tts-input-container" style="position: relative;">
-                    <textarea class="tts-main-input" id="ttsInputText" placeholder="Nhập hoặc dán nội dung kịch bản văn bản cần đọc tại đây... (Ví dụ: Bạn có từng nghĩ chuyện gì sẽ xảy ra nếu một ngày thế giới hoàn toàn mất điện? Mọi thiết bị tắt ngấm...)"></textarea>
-                    
-                    <!-- Floating Smart Rhythm Button -->
-                    <button type="button" id="btnTtsAutoRhythm" class="btn-floating-rhythm" title="Tự động phân câu, ngắt nhịp và định dạng khoảng nghỉ 0.5s chuẩn giọng đọc">
-                        <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="m12 3-1.9 4.8L5.3 9.7l3.9 3.5-1.2 5.1 4-2.5 4 2.5-1.2-5.1 3.9-3.5-4.8-1.9L12 3z"/>
-                        </svg>
-                        <span>Tự ngắt nhịp</span>
-                    </button>
+
+                <!-- Batch Mode Section (Sequential TTS Queue) -->
+                <div id="ttsBatchModeContainer" style="display: none;">
+                    <div class="tts-batch-header">
+                        <div class="tts-batch-stats-left">
+                            <span class="stat-badge"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg><strong id="ttsBatchTotalFiles">0</strong> tệp</span>
+                            <span class="stat-badge"><strong id="ttsBatchTotalWords">0</strong> từ</span>
+                            <span class="stat-badge stat-time" title="Tổng ước tính thời lượng phát">~<strong id="ttsBatchTotalDuration">0s</strong></span>
+                            <span class="stat-badge tts-batch-live-status" id="ttsBatchLiveStatus" style="display: none;"></span>
+                        </div>
+                        <div class="tts-batch-tools-right">
+                            <button type="button" class="btn btn-tool btn-tool-cyan" id="btnTtsBatchAddFiles" title="Chọn thêm 1 hoặc nhiều tệp kịch bản (.txt, .docx, .srt, .pdf...)">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                <span>+ Thêm tệp</span>
+                            </button>
+                            <button type="button" class="btn btn-tool" id="btnTtsBatchAddFolder" title="Quét toàn bộ thư mục chứa các tệp kịch bản">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                                <span>📁 Thêm thư mục</span>
+                            </button>
+                            <button type="button" class="btn btn-tool btn-tool-danger" id="btnTtsBatchClear" title="Xóa toàn bộ danh sách tệp chờ tạo">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                <span>Xóa danh sách</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Global Batch Progress (visible when running) -->
+                    <div class="tts-batch-progress-wrapper" id="ttsBatchGlobalProgress" style="display: none;">
+                        <div class="tts-batch-prog-info">
+                            <span class="prog-title" id="ttsBatchProgTitle">Đang tạo giọng đọc hàng loạt...</span>
+                            <span class="prog-pct" id="ttsBatchProgPct">0%</span>
+                        </div>
+                        <div class="tts-batch-progress-bar">
+                            <div class="tts-batch-progress-fill" id="ttsBatchProgFill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Batch Queue Content List -->
+                    <div class="tts-batch-content-wrap">
+                        <div class="tts-batch-empty" id="ttsBatchEmptyState">
+                            <div class="empty-icon-box">
+                                <svg viewBox="0 0 24 24" width="36" height="36" stroke="#475569" stroke-width="1.5" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+                            </div>
+                            <h5>Hàng đợi tệp kịch bản đang trống</h5>
+                            <p>Kéo thả 1 loạt file kịch bản vào đây hoặc bấm <strong>"+ Thêm tệp"</strong> / <strong>"📁 Thêm thư mục"</strong> để hệ thống tạo giọng đọc tự động lần lượt đến khi hết danh sách.</p>
+                        </div>
+
+                        <div class="tts-batch-table-container" id="ttsBatchTableContainer" style="display: none;">
+                            <div class="tts-batch-table-header">
+                                <span class="col-stt">STT</span>
+                                <span class="col-name">Tên tệp kịch bản</span>
+                                <span class="col-meta">Thông số</span>
+                                <span class="col-status">Trạng thái tạo giọng</span>
+                                <span class="col-actions">Thao tác</span>
+                            </div>
+                            <div class="tts-batch-list-rows" id="ttsBatchListRows"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2252,10 +2436,10 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                 <span id="ttsVoiceAvatar">🎙️</span>
                             </div>
                             <div class="voice-card-details">
-                                <span id="selectedVoiceName" class="voice-card-name">Ngọc Huyền V1 (Kokoro)</span>
-                                <span id="selectedVoiceTag" class="voice-card-tag">Offline • Tiếng Việt Nữ</span>
+                                <span id="selectedVoiceName" class="voice-card-name">Ngọc Huyền (Local Voice)</span>
+                                <span id="selectedVoiceTag" class="voice-card-tag">Offline • Tiếng Việt Nữ • Siêu tốc GPU (RTX 5060)</span>
                             </div>
-                            <input type="hidden" id="ttsVoice" value="ngoc_huyen">
+                            <input type="hidden" id="ttsVoice" value="local_ngoc_huyen">
                             <div class="voice-card-actions">
                                 <button type="button" class="btn-voice-preview" data-target="ttsVoice" title="Nghe thử mẫu giọng này" onclick="event.stopPropagation(); window.playPreviewVoice(document.getElementById('ttsVoice').value, this)">
                                     <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
@@ -2319,11 +2503,15 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                         </div>
                     </div>
 
-                    <div class="tts-primary-btn-wrap">
+                    <div class="tts-primary-btn-wrap" style="display: flex; gap: 10px; align-items: center;">
                         <button type="button" class="btn btn-hero-generate" id="btnGenerateTTS">
                             <div class="btn-glow-layer"></div>
                             <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
-                            <span>TẠO GIỌNG ĐỌC AI</span>
+                            <span id="btnGenerateTTSSpan">TẠO GIỌNG ĐỌC AI</span>
+                        </button>
+                        <button type="button" class="btn btn-hero-stop" id="btnStopBatchTTS" style="display: none;" title="Dừng tiến trình tạo hàng loạt">
+                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><rect x="6" y="6" width="12" height="12"></rect></svg>
+                            <span>DỪNG HÀNG LOẠT</span>
                         </button>
                     </div>
                 </div>
@@ -2400,6 +2588,34 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                         </div>
                     </div>
                 </template>
+            </div>
+        </div>
+
+        <!-- Modal Xem Trước / Soạn Thảo Kịch Bản Hàng Loạt -->
+        <div id="ttsBatchPreviewModal" class="custom-modal" style="display: none;">
+            <div class="custom-modal-backdrop" onclick="window.closeTtsBatchPreviewModal()"></div>
+            <div class="custom-modal-content" style="max-width: 700px; max-height: 85vh; display: flex; flex-direction: column;">
+                <div class="custom-modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid #334155;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <svg viewBox="0 0 24 24" width="18" height="18" stroke="#38bdf8" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                        <h4 id="ttsBatchPreviewTitle" style="margin: 0; font-size: 0.95rem; color: #f8fafc;">Xem kịch bản</h4>
+                    </div>
+                    <button type="button" class="btn-modal-close" onclick="window.closeTtsBatchPreviewModal()" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 18px;">✕</button>
+                </div>
+                <div class="custom-modal-body" style="padding: 16px 20px; flex: 1; overflow-y: auto;">
+                    <div style="display: flex; gap: 10px; margin-bottom: 12px; font-size: 12px; color: #94a3b8; flex-wrap: wrap;">
+                        <span>Tên tệp xuất: <strong id="ttsBatchPreviewFilename" style="color: #38bdf8;"></strong></span>
+                        <span>•</span>
+                        <span>Số từ: <strong id="ttsBatchPreviewWords" style="color: #34d399;"></strong></span>
+                        <span>•</span>
+                        <span>Thời lượng: <strong id="ttsBatchPreviewDuration" style="color: #c084fc;"></strong></span>
+                    </div>
+                    <textarea id="ttsBatchPreviewText" style="width: 100%; min-height: 280px; max-height: 50vh; background: #090e17; border: 1px solid #334155; border-radius: 8px; color: #f1f5f9; padding: 12px; font-size: 0.9rem; line-height: 1.6; resize: vertical; outline: none; box-sizing: border-box;"></textarea>
+                </div>
+                <div class="custom-modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid #334155; background: #0b1120;">
+                    <button type="button" class="btn btn-secondary small" onclick="window.closeTtsBatchPreviewModal()">Đóng</button>
+                    <button type="button" class="btn btn-primary small" id="btnTtsBatchSavePreview">Lưu thay đổi</button>
+                </div>
             </div>
         </div>
     </div>
@@ -7836,17 +8052,17 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
         </div>
     </div>
 
-    <!-- 👑 MODAL QUẢN LÝ BẢN QUYỀN & THANH TOÁN VIETQR SEPAY -->
+    <!-- 💎 MODAL QUẢN LÝ BẢN QUYỀN (PHIÊN BẢN MIỄN PHÍ HOÀN TOÀN) -->
     <div id="licenseModal" class="modal-backdrop" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px); z-index: 99999; align-items: center; justify-content: center; padding: 20px;">
-        <div class="modal-card license-modal-card" style="background: #0f172a; border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 16px; width: 100%; max-width: 960px; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 30px rgba(56, 189, 248, 0.15); display: flex; flex-direction: column;">
+        <div class="modal-card license-modal-card" style="background: #0f172a; border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 16px; width: 100%; max-width: 960px; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 30px rgba(16, 185, 129, 0.15); display: flex; flex-direction: column;">
             
             <!-- Modal Header -->
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #1e293b; background: #131d35; border-radius: 16px 16px 0 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #1e293b; background: linear-gradient(135deg, #132735, #0f172a); border-radius: 16px 16px 0 0;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 24px;">👑</span>
+                    <span style="font-size: 26px;">💎</span>
                     <div>
-                        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: #f8fafc;">BẢN QUYỀN & GÓI DỊCH VỤ</h3>
-                        <p style="margin: 0; font-size: 12px; color: #94a3b8;">Xác thực máy tính, nâng cấp gói cước và kích hoạt tự động qua VietQR SePay</p>
+                        <h3 style="margin: 0; font-size: 18px; font-weight: 800; color: #f8fafc; letter-spacing: 0.5px;">BẢN QUYỀN MIỄN PHÍ VĨNH VIỄN</h3>
+                        <p style="margin: 0; font-size: 12px; color: #10b981;">Toàn bộ tính năng cao cấp đã được mở khóa 100% không giới hạn</p>
                     </div>
                 </div>
                 <button type="button" id="btnCloseLicenseModal" style="background: none; border: none; color: #94a3b8; font-size: 24px; cursor: pointer; line-height: 1; transition: color 0.2s;">&times;</button>
@@ -7856,7 +8072,7 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
             <div style="padding: 24px; display: flex; flex-direction: column; gap: 20px;">
                 
                 <!-- 1. HWID & Current Status Card -->
-                <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9)); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+                <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9)); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 12px; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
                     <div style="display: flex; flex-direction: column; gap: 4px;">
                         <span style="font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #38bdf8; font-weight: 700;">MÃ PHẦN CỨNG MÁY TÍNH (HWID)</span>
                         <div style="display: flex; align-items: center; gap: 8px;">
@@ -7871,144 +8087,108 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <div style="display: flex; align-items: center; gap: 14px;">
                         <div style="text-align: right;">
                             <div style="font-size: 11px; color: #94a3b8;">Trạng thái hiện tại:</div>
-                            <div id="modalStatusBadge" style="font-size: 13.5px; font-weight: 700; color: #38bdf8;">Đang tải...</div>
-                            <div id="modalExpireDate" style="font-size: 11.5px; color: #64748b;">Hết hạn: --/--/----</div>
+                            <div id="modalStatusBadge" style="font-size: 14px; font-weight: 800; color: #10b981;">✅ Đã Kích Hoạt Vĩnh Viễn</div>
+                            <div id="modalExpireDate" style="font-size: 11.5px; color: #38bdf8;">Hạn dùng: Vĩnh viễn (Miễn phí)</div>
                         </div>
-                        <button id="btnSyncCloudLicense" class="btn secondary outline-border" style="padding: 6px 12px; font-size: 12px;" title="Đồng bộ lại từ máy chủ Google Sheets">
+                        <button id="btnSyncCloudLicense" class="btn secondary outline-border" style="padding: 6px 12px; font-size: 12px;" title="Làm mới trạng thái">
                             <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" style="vertical-align: middle;"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-                            <span>Đồng bộ</span>
+                            <span>Làm mới</span>
                         </button>
                     </div>
                 </div>
 
-                <!-- 2. PRICING TIERS GRID -->
-                <div>
-                    <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #cbd5e1; display: flex; align-items: center; gap: 6px;">
-                        <span>💎</span> <span>CHỌN GÓI BẢN QUYỀN NÂNG CẤP</span>
-                    </h4>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px;">
-                        
-                        <!-- Tier 1: Trial 24h -->
-                        <div class="pricing-card" data-tier="trial" style="background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; transition: all 0.25s; position: relative;">
-                            <div>
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <span style="font-size: 13px; font-weight: 700; color: #fbbf24;">⚡ DÙNG THỬ 24H</span>
-                                </div>
-                                <div style="font-size: 22px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">0đ <span style="font-size: 12px; font-weight: 400; color: #94a3b8;">/ 24 giờ</span></div>
-                                <ul style="margin: 0 0 16px 0; padding-left: 18px; font-size: 11.5px; color: #cbd5e1; line-height: 1.6;">
-                                    <li>Mở cả 2 Module làm phim</li>
-                                    <li>Test Clone Voice 2 lần</li>
-                                    <li>Xuất video giới hạn ≤ 60s</li>
-                                    <li>TTS Local không giới hạn</li>
-                                </ul>
-                            </div>
-                            <button id="btnSelectTierTrial" class="btn secondary outline-border" style="width: 100%; font-size: 12px; font-weight: 600; padding: 7px 0;">Kích hoạt Dùng Thử</button>
+                <!-- 2. FULL UNLOCKED FEATURES SHOWCASE -->
+                <div style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(56, 189, 248, 0.08)); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 14px; padding: 22px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+                        <span style="font-size: 24px;">🎉</span>
+                        <div>
+                            <h4 style="margin: 0; font-size: 15px; font-weight: 800; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px;">TẤT CẢ TÍNH NĂNG ĐÃ ĐƯỢC MỞ KHÓA MIỄN PHÍ HOÀN TOÀN</h4>
+                            <p style="margin: 2px 0 0 0; font-size: 12px; color: #94a3b8;">Toàn bộ công cụ và module cao cấp đều được sử dụng không giới hạn.</p>
                         </div>
-
-                        <!-- Tier 2: Pro 300k -->
-                        <div class="pricing-card" data-tier="pro" style="background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; transition: all 0.25s; position: relative;">
-                            <div>
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <span style="font-size: 13px; font-weight: 700; color: #38bdf8;">⭐ GÓI PRO</span>
-                                </div>
-                                <div style="font-size: 22px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">300.000đ <span style="font-size: 12px; font-weight: 400; color: #94a3b8;">/ tháng</span></div>
-                                <ul style="margin: 0 0 16px 0; padding-left: 18px; font-size: 11.5px; color: #cbd5e1; line-height: 1.6;">
-                                    <li>Chọn 1 trong 2 Module chính</li>
-                                    <li>Tối đa 1 giọng Clone Voice</li>
-                                    <li>Tối đa 299 video xuất/tháng</li>
-                                    <li>1M từ TTS Local</li>
-                                    <li>Tự túc OpenAI API Key</li>
-                                </ul>
-                            </div>
-                            <button class="btn btn-tier-select outline-border" data-tier="pro" style="width: 100%; font-size: 12px; font-weight: 600; padding: 7px 0; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">Chọn Gói Pro (300k)</button>
-                        </div>
-
-                        <!-- Tier 3: VIP 500k (Best Seller) -->
-                        <div class="pricing-card active-featured" data-tier="vip" style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 27, 75, 0.8)); border: 2px solid #a855f7; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; transition: all 0.25s; position: relative; box-shadow: 0 0 20px rgba(168, 85, 247, 0.25);">
-                            <div style="position: absolute; top: -11px; right: 12px; background: linear-gradient(135deg, #a855f7, #ec4899); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 10px; letter-spacing: 0.05em; text-transform: uppercase;">KHUYÊN DÙNG</div>
-                            <div>
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <span style="font-size: 13px; font-weight: 700; color: #c084fc;">👑 GÓI VIP TOÀN NĂNG</span>
-                                </div>
-                                <div style="font-size: 22px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">500.000đ <span style="font-size: 12px; font-weight: 400; color: #94a3b8;">/ tháng</span></div>
-                                <ul style="margin: 0 0 16px 0; padding-left: 18px; font-size: 11.5px; color: #e2e8f0; line-height: 1.6;">
-                                    <li><strong style="color: #c084fc;">Mở Full cả 2 Module</strong></li>
-                                    <li>5 Giọng Clone Voice lưu trữ</li>
-                                    <li>Unlimited xuất video & TTS Local</li>
-                                    <li>Full 1000+ Giọng đọc Online</li>
-                                    <li><strong style="color: #38bdf8;">Bao trọn Server GPT AI</strong></li>
-                                </ul>
-                            </div>
-                            <button class="btn btn-tier-select primary-cyan" data-tier="vip" style="width: 100%; font-size: 12px; font-weight: 700; padding: 8px 0; background: linear-gradient(135deg, #a855f7, #06b6d4); color: #fff; border: none;">⚡ Chọn Gói VIP (500k)</button>
-                        </div>
-
-                        <!-- Tier 4: 1 Year -->
-                        <div class="pricing-card" data-tier="yearly" style="background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; transition: all 0.25s; position: relative;">
-                            <div>
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <span style="font-size: 13px; font-weight: 700; color: #f59e0b;">💎 GÓI 1 NĂM (TIẾT KIỆM)</span>
-                                </div>
-                                <div style="font-size: 22px; font-weight: 800; color: #f8fafc; margin-bottom: 12px;">3.990.000đ <span style="font-size: 12px; font-weight: 400; color: #94a3b8;">/ 12 tháng</span></div>
-                                <ul style="margin: 0 0 16px 0; padding-left: 18px; font-size: 11.5px; color: #cbd5e1; line-height: 1.6;">
-                                    <li>Full toàn bộ đặc quyền Gói VIP</li>
-                                    <li>Tiết kiệm 33% chi phí (chỉ ~330k/th)</li>
-                                    <li>Tặng bộ Quy trình video YouTube AI</li>
-                                    <li>Hỗ trợ kỹ thuật 1 - 1 ưu tiên</li>
-                                </ul>
-                            </div>
-                            <button class="btn btn-tier-select outline-border" data-tier="yearly" style="width: 100%; font-size: 12px; font-weight: 600; padding: 7px 0; color: #f59e0b; border-color: rgba(245, 158, 11, 0.4);">Chọn Gói 1 Năm</button>
-                        </div>
-
-                    </div>
-                </div>
-
-                <!-- 3. VIETQR SEPAY PAYMENT SECTION -->
-                <div id="vietqrPaymentSection" style="background: #020617; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 14px; padding: 20px; display: flex; gap: 24px; align-items: center; flex-wrap: wrap; box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);">
-                    <div style="flex-shrink: 0; text-align: center; background: #fff; padding: 8px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
-                        <img id="vietqrImage" src="" alt="Mã VietQR" style="width: 190px; height: 190px; display: block; object-fit: contain;">
-                        <span style="font-size: 10.5px; font-weight: 700; color: #0f172a; margin-top: 4px; display: block;">QUÉT MÃ BẰNG APP NGÂN HÀNG</span>
                     </div>
 
-                    <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 10px;">
-                        <div style="display: flex; align-items: center; justify-content: space-between;">
-                            <span id="qrSelectedPlanTitle" style="font-size: 15px; font-weight: 700; color: #38bdf8;">👑 GÓI VIP (500.000đ / tháng)</span>
-                            <span class="live-pulse-badge" style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #10b981;">
-                                <span style="width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: pulse 1.5s infinite;"></span>
-                                <span>Tự động kích hoạt SePay</span>
-                            </span>
-                        </div>
-
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; background: rgba(15, 23, 42, 0.6); padding: 10px 14px; border-radius: 8px; border: 1px solid #1e293b;">
-                            <div><span style="color: #94a3b8;">Ngân hàng:</span> <strong id="qrBankName" style="color: #f8fafc;">MBBank</strong></div>
-                            <div><span style="color: #94a3b8;">Chủ TK:</span> <strong id="qrAccountName" style="color: #f8fafc;">NGUYEN HOANG</strong></div>
-                            <div><span style="color: #94a3b8;">Số tài khoản:</span> <strong id="qrAccountNumber" style="color: #38bdf8; font-family: monospace; font-size: 13px;">0383186888</strong></div>
-                            <div><span style="color: #94a3b8;">Số tiền:</span> <strong id="qrAmountDisplay" style="color: #fbbf24; font-size: 13px;">500,000đ</strong></div>
-                        </div>
-
-                        <div style="background: rgba(56, 189, 248, 0.08); border: 1px dashed rgba(56, 189, 248, 0.4); padding: 8px 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;">
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">🎬</span>
                             <div>
-                                <div style="font-size: 11px; color: #94a3b8;">Nội dung chuyển khoản (bắt buộc):</div>
-                                <div id="qrTransferContent" style="font-family: monospace; font-size: 14px; font-weight: 800; color: #38bdf8;">AMS A1B2C3 VIP</div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Biên Tập Phim</strong>
+                                <span style="font-size: 11.5px; color: #38bdf8;">Cắt ghép, xuất video không giới hạn</span>
                             </div>
-                            <button id="btnCopyTransferContent" class="btn secondary small outline-border" style="padding: 4px 10px; font-size: 11px;">Sao chép</button>
                         </div>
 
-                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px; flex-wrap: wrap;">
-                            <button id="btnCheckPaymentNow" class="btn primary-cyan" style="flex: 1; min-width: 200px; font-size: 12.5px; font-weight: 700; padding: 9px 0;">
-                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" style="vertical-align: middle;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                                <span>Tôi Đã Chuyển Khoản Xong</span>
-                            </button>
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">🍿</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Review Phim Tự Động</strong>
+                                <span style="font-size: 11.5px; color: #c084fc;">Kịch bản AI & lồng tiếng thông minh</span>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">🎙️</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Giọng Đọc AI TTS</strong>
+                                <span style="font-size: 11.5px; color: #fbbf24;">Local GPU & Online 1000+ giọng</span>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">🧬</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Clone Voice Studio</strong>
+                                <span style="font-size: 11.5px; color: #f472b6;">Nhân bản & lưu trữ giọng không giới hạn</span>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">⚡</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">OCR & ASR Whisper</strong>
+                                <span style="font-size: 11.5px; color: #34d399;">Trích xuất phụ đề tốc độ cao GPU</span>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">🤖</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Dịch & Soát Phụ Đề AI</strong>
+                                <span style="font-size: 11.5px; color: #818cf8;">Dịch thuật ngữ & bù phụ đề tự động</span>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">📥</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Tải Phim Hồng Quả & Douyin</strong>
+                                <span style="font-size: 11.5px; color: #f87171;">Tải video hàng loạt & xem offline</span>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(6, 182, 212, 0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 22px;">🔄</span>
+                            <div>
+                                <strong style="font-size: 13px; color: #f8fafc; display: block;">Xử Lý & Biên Tập Hàng Loạt</strong>
+                                <span style="font-size: 11.5px; color: #22d3ee;">Hàng đợi Batch Queue công suất lớn</span>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 4. MANUAL KEY ACTIVATION & ADMIN CONFIG TOGGLE -->
-                <div style="display: grid; grid-template-columns: 1fr; gap: 12px; border-top: 1px solid #1e293b; padding-top: 16px;">
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <span style="font-size: 12px; color: #94a3b8; white-space: nowrap;">Hoặc nhập License Key thủ công:</span>
-                        <input type="text" id="manualLicenseKeyInput" class="text-input" placeholder="AMS-KEY-VIP-30-XXXX" style="flex: 1; min-width: 200px; padding: 7px 12px; font-family: monospace; font-size: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #fff;">
-                        <button id="btnSubmitManualKey" class="btn secondary outline-border" style="padding: 7px 16px; font-size: 12px; font-weight: 600; white-space: nowrap;">Kích hoạt Key</button>
-                    </div>
+                <!-- Hidden inputs/elements for backward compatibility -->
+                <div style="display: none;">
+                    <div id="vietqrPaymentSection"></div>
+                    <img id="vietqrImage" src="" alt="">
+                    <span id="qrSelectedPlanTitle"></span>
+                    <strong id="qrBankName"></strong>
+                    <strong id="qrAccountName"></strong>
+                    <strong id="qrAccountNumber"></strong>
+                    <strong id="qrAmountDisplay"></strong>
+                    <div id="qrTransferContent"></div>
+                    <button id="btnCopyTransferContent"></button>
+                    <button id="btnCheckPaymentNow"></button>
+                    <button id="btnSelectTierTrial"></button>
+                    <input type="text" id="manualLicenseKeyInput">
+                    <button id="btnSubmitManualKey"></button>
                 </div>
 
             </div>
@@ -9064,6 +9244,93 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                     <span>🎙️</span><span>Nạp Sang Review Phim</span>
                 </button>
                 <button type="button" id="btnPreviewModalClose" class="btn secondary small" style="padding: 6px 16px; border: 1px solid #334155; border-radius: 6px;">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- MODAL ĐỐI SOÁT DÒNG THỜI GIAN VOICE TTS (SRT TIMELINE)     -->
+    <!-- ======================================================== -->
+    <div id="voiceTimelineModal" class="modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.88); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 99999; justify-content: center; align-items: center; padding: 15px;">
+        <div class="modal-content" style="background: #0f172a; width: 95%; max-width: 1200px; height: 92%; max-height: 880px; border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #334155; box-shadow: 0 20px 50px rgba(0,0,0,0.7);">
+            <!-- Modal Header -->
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 22px; border-bottom: 1px solid #1e293b; background: #0b1120;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 20px;">🎙️</span>
+                    <div>
+                        <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: #38bdf8;">BẢNG DÒNG THỜI GIAN VOICE TTS (SRT TIMELINE &amp; ĐỐI SOÁT TRÙNG LẶP)</h3>
+                        <p style="margin: 2px 0 0; font-size: 11.5px; color: #94a3b8;">Xác định chính xác thời gian từng câu thoại, kiểm tra khoảng cách và phát hiện câu trùng lặp trước khi xuất video.</p>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button type="button" id="btnDownloadVoiceTimelineSrt" class="btn secondary small" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 6px 14px; border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; background: rgba(56, 189, 248, 0.1); cursor: pointer;" title="Tải về file phụ đề SRT đồng bộ theo thời gian voice">
+                        <span>📥</span> <span>Tải file SRT Voice</span>
+                    </button>
+                    <button type="button" id="btnCloseVoiceTimelineModal" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 24px; line-height: 1; padding: 0 4px;" title="Đóng bảng timeline">&times;</button>
+                </div>
+            </div>
+
+            <!-- Master Track Player Bar -->
+            <div style="padding: 12px 22px; background: #131d31; border-bottom: 1px solid #1e293b; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button type="button" id="btnPlayMasterVoiceTrack" class="btn primary small" style="padding: 6px 14px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #10b981); border: none; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <span id="iconPlayMasterVoice">▶</span> <span id="textPlayMasterVoice">Nghe toàn bộ track voice</span>
+                    </button>
+                    <audio id="audioMasterVoicePlayer" style="display: none;"></audio>
+                </div>
+                <div style="flex: 1; min-width: 250px; display: flex; align-items: center; gap: 10px;">
+                    <span id="masterVoiceCurrentTime" style="font-family: monospace; font-size: 11.5px; color: #38bdf8;">00:00.0</span>
+                    <input type="range" id="masterVoiceSeekbar" class="cyan-slider" min="0" max="100" value="0" step="0.1" style="flex: 1;">
+                    <span id="masterVoiceTotalTime" style="font-family: monospace; font-size: 11.5px; color: #94a3b8;">00:00.0</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: #cbd5e1;">
+                    <span id="masterVoiceInfoBadge" style="background: #1e293b; padding: 4px 10px; border-radius: 6px; border: 1px solid #334155; font-size: 11px;">🗣️ Giọng: ...</span>
+                    <span style="color: #10b981; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px;">
+                        <span>⚡ Tự động tái sử dụng khi xuất video (0s)</span>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Overlap Detection Banner Container -->
+            <div id="voiceOverlapSummaryBanner" style="padding: 10px 22px; border-bottom: 1px solid #1e293b; background: rgba(15, 23, 42, 0.95);">
+                <!-- Dynamic Content via JS -->
+            </div>
+
+            <!-- Filter & Search Toolbar -->
+            <div style="padding: 10px 22px; background: #0b1120; border-bottom: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <button type="button" class="btn small voice-filter-btn active" data-filter="all" style="padding: 5px 12px; font-size: 11.5px; border-radius: 6px; background: #1e293b; color: #38bdf8; border: 1px solid #0ea5e9; font-weight: 600; cursor: pointer;">
+                        Tất cả (<span id="voiceCountAll">0</span>)
+                    </button>
+                    <button type="button" class="btn small voice-filter-btn" data-filter="overlap" style="padding: 5px 12px; font-size: 11.5px; border-radius: 6px; background: #1e293b; color: #f87171; border: 1px solid #334155; font-weight: 600; cursor: pointer;">
+                        ⚠️ Chỉ câu bị trùng đè (<span id="voiceCountOverlap">0</span>)
+                    </button>
+                    <button type="button" id="btnAutoShiftSrtModal" class="btn small" style="padding: 5px 14px; font-size: 11.5px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #ef4444); color: #fff; border: none; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.35);" title="Tự động dịch chuyển lùi mốc thời gian câu sau để không bị nói đè lên câu trước">
+                        <span>⚡ Tự động đẩy lùi SRT (Xóa đè)</span>
+                    </button>
+                </div>
+                <div style="width: 280px;">
+                    <input type="text" id="voiceTimelineSearch" placeholder="🔍 Lọc theo từ khóa câu thoại..." style="width: 100%; box-sizing: border-box; padding: 6px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; outline: none;">
+                </div>
+            </div>
+
+            <!-- SRT Timeline Table Container -->
+            <div style="flex: 1; overflow-y: auto; padding: 12px 22px; background: #0a0f1d;">
+                <table class="voice-timeline-table" style="width: 100%; border-collapse: separate; border-spacing: 0 6px; font-size: 12px;">
+                    <thead>
+                        <tr style="color: #64748b; font-size: 11px; text-transform: uppercase; text-align: left;">
+                            <th style="padding: 6px 10px; width: 45px;">#</th>
+                            <th style="padding: 6px 10px; width: 230px;">Dòng thời gian (SRT Timecode)</th>
+                            <th style="padding: 6px 10px; width: 95px; text-align: center;">Thời lượng Voice</th>
+                            <th style="padding: 6px 10px;">Nội dung câu thoại</th>
+                            <th style="padding: 6px 10px; width: 220px;">Đối soát trùng lặp</th>
+                            <th style="padding: 6px 10px; width: 60px; text-align: center;">Nghe</th>
+                        </tr>
+                    </thead>
+                    <tbody id="voiceTimelineTableBody">
+                        <!-- Dynamic rendered rows -->
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>

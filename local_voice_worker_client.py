@@ -230,7 +230,8 @@ class VieNeuWorkerClient:
             "ref_audio": ref_audio
         }
 
-        resp = self._send_command(req, timeout=300.0)
+        batch_timeout = max(300.0, float(len(items)) * 10.0)
+        resp = self._send_command(req, timeout=batch_timeout)
         if resp.get("status") == "ok":
             return resp.get("results", [])
         else:

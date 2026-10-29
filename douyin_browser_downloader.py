@@ -29,6 +29,28 @@ DEFAULT_USER_AGENT = (
     "Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"
 )
 
+# Cấu hình cờ trình duyệt stealth chống anti-bot (tham khảo patchright / persistent context)
+LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",
+    "--no-service-autorun",
+    "--password-store=basic",
+    "--no-sandbox",
+    "--disable-gpu"
+]
+
+
+def get_playwright():
+    """Tải Playwright Driver: Ưu tiên patchright (nếu có) hoặc fallback playwright chuẩn."""
+    try:
+        from patchright.sync_api import sync_playwright
+        return sync_playwright
+    except Exception:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+
 
 def sanitize_filename(name, max_len=80):
     """Làm sạch tên file để lưu trữ an toàn trên Windows."""
@@ -120,6 +142,15 @@ def extract_video_id(url_or_text):
     if m_note:
         return m_note.group(1), raw_url
 
+    # Dạng 4: vid=123456789... hoặc aweme_id=123456789... hoặc item_id=123456789...
+    m_param = re.search(r'(?:vid|aweme_id|item_id)=(\d+)', raw_url)
+    if m_param:
+        return m_param.group(1), raw_url
+
+    # Dạng 5: chuỗi số thuần 15-22 chữ số nếu không có ký tự URL khác
+    if re.fullmatch(r'\d{15,22}', raw_url):
+        return raw_url, raw_url
+
     return None, raw_url
 
 
@@ -128,6 +159,8 @@ def extract_mix_id(url_or_text):
     Trích xuất mix_id (ID bộ sưu tập / tuyển tập) từ liên kết Douyin hoặc chuỗi số thuần.
     Ví dụ:
     - https://www.douyin.com/collection/7412345678901234567
+    - https://www.douyin.com/collection/7412345678901234567/1
+    - https://www.iesdouyin.com/share/mix/detail/7412345678901234567/
     - https://www.douyin.com/user/...&mix_id=7412345678901234567
     - 7412345678901234567
     """
@@ -140,6 +173,12 @@ def extract_mix_id(url_or_text):
     if m:
         return m.group(1)
     m = re.search(r'mix_id=(\d+)', raw_url)
+    if m:
+        return m.group(1)
+    m = re.search(r'mix/detail/(\d+)', raw_url)
+    if m:
+        return m.group(1)
+    m = re.search(r'compilation/(\d+)', raw_url)
     if m:
         return m.group(1)
     if re.fullmatch(r'\d{15,22}', raw_url):
@@ -208,9 +247,9 @@ class DouyinBrowserDownloader:
         Mở cửa sổ trình duyệt Edge/Chromium (headless=False) để người dùng quét QR / đăng nhập Douyin 1 lần duy nhất.
         Phiên đăng nhập và Cookie sẽ được lưu vĩnh viễn trong thư mục temp/douyin_browser_profile và douyin_cookie.txt.
         """
-        from playwright.sync_api import sync_playwright
+        playwright_driver = get_playwright()
         import douyin_cookie_manager
-        with sync_playwright() as p:
+        with playwright_driver() as p:
             try:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=self.profile_dir,
@@ -218,7 +257,7 @@ class DouyinBrowserDownloader:
                     headless=False,
                     viewport={"width": 1280, "height": 850},
                     user_agent=DEFAULT_USER_AGENT,
-                    args=["--disable-blink-features=AutomationControlled"]
+                    args=LAUNCH_ARGS
                 )
             except Exception:
                 context = p.chromium.launch_persistent_context(
@@ -226,7 +265,7 @@ class DouyinBrowserDownloader:
                     headless=False,
                     viewport={"width": 1280, "height": 850},
                     user_agent=DEFAULT_USER_AGENT,
-                    args=["--disable-blink-features=AutomationControlled"]
+                    args=LAUNCH_ARGS
                 )
 
             # Nạp cookie đã có nếu có
@@ -240,14 +279,20 @@ class DouyinBrowserDownloader:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto("https://www.douyin.com/", wait_until="domcontentloaded")
             
-            # Giữ cửa sổ mở để người dùng đăng nhập
+            # Giữ cửa sổ mở để người dùng đăng nhập & tự động đồng bộ cookie ngay khi có sessionid
             for _ in range(180):
                 if context.pages:
+                    try:
+                        cookies = context.cookies()
+                        if any(c.get("name") in ["sessionid", "sessionid_ss"] and c.get("value") for c in cookies):
+                            douyin_cookie_manager.extract_and_save_cookies_from_playwright_context(context)
+                    except Exception:
+                        pass
                     time.sleep(1)
                 else:
                     break
 
-            # Tự động xuất cookie sang douyin_cookie.txt
+            # Tự động xuất cookie sang douyin_cookie.txt trước khi đóng
             try:
                 douyin_cookie_manager.extract_and_save_cookies_from_playwright_context(context)
             except Exception:
@@ -288,7 +333,7 @@ class DouyinBrowserDownloader:
 
         if progress_cb: progress_cb(5, "Đang xác thực liên kết & thông tin kênh...")
 
-        from playwright.sync_api import sync_playwright
+        playwright_driver = get_playwright()
 
         collected_videos = []
         seen_aweme_ids = set()
@@ -300,7 +345,7 @@ class DouyinBrowserDownloader:
             "total_videos_scanned": 0
         }
 
-        with sync_playwright() as p:
+        with playwright_driver() as p:
             if progress_cb: progress_cb(12, "Đang khởi tạo kết nối phân tích dữ liệu...")
             context = None
             browser = None
@@ -313,7 +358,7 @@ class DouyinBrowserDownloader:
                     headless=self.headless,
                     viewport={"width": 1280, "height": 900},
                     user_agent=DEFAULT_USER_AGENT,
-                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
+                    args=LAUNCH_ARGS
                 )
             except Exception:
                 try:
@@ -322,7 +367,7 @@ class DouyinBrowserDownloader:
                         headless=self.headless,
                         viewport={"width": 1280, "height": 900},
                         user_agent=DEFAULT_USER_AGENT,
-                        args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
+                        args=LAUNCH_ARGS
                     )
                 except Exception as e:
                     raise Exception(f"Không thể khởi tạo luồng phân tích dữ liệu: {str(e)}")
@@ -473,10 +518,11 @@ class DouyinBrowserDownloader:
                     if "/aweme/v1/web/aweme/post/" in response.url or ("post" in response.url and "aweme" in response.url):
                         res_json = response.json()
                         aweme_list = res_json.get("aweme_list", []) or []
-                        pagination_state["last_url"] = response.url
-                        pagination_state["max_cursor"] = res_json.get("max_cursor", 0)
-                        pagination_state["has_more"] = res_json.get("has_more", 0)
-                        process_aweme_list(aweme_list)
+                        if aweme_list:
+                            pagination_state["last_url"] = response.url
+                            pagination_state["max_cursor"] = res_json.get("max_cursor", 0)
+                            pagination_state["has_more"] = res_json.get("has_more", 0)
+                            process_aweme_list(aweme_list)
                 except Exception:
                     pass
 
@@ -488,12 +534,11 @@ class DouyinBrowserDownloader:
             except Exception:
                 pass
 
-            time.sleep(2)
+            time.sleep(2.5)
 
-            # Tự động đóng popup đăng nhập / QR nếu có
+            # Tự động đóng popup đăng nhập / QR ban đầu nếu có
             try:
                 page.keyboard.press("Escape")
-                page.mouse.click(962, 198)
                 page.evaluate("""() => {
                     const closeBtns = document.querySelectorAll('[class*="close"], [class*="login-mask"] svg, .YoNA2Hyj, .dy-account-close');
                     closeBtns.forEach(b => { try { b.click(); } catch(e){} });
@@ -503,12 +548,12 @@ class DouyinBrowserDownloader:
 
             # Đưa con trỏ chuột vào giữa vùng nội dung video
             try:
-                page.mouse.move(640, 450)
+                page.mouse.move(640, 500)
             except Exception:
                 pass
 
-            # Vòng lặp cuộn trang Human-like & trigger đa tầng
-            max_scrolls = 80 if limit is None or limit > 50 else math.ceil(limit / 8) + 12
+            # Vòng lặp cuộn trang Human-like & trigger tự nhiên (tham khảo patchright / dola-render-gateway)
+            max_scrolls = 60 if limit is None or limit > 50 else math.ceil(limit / 10) + 8
             no_new_count = 0
             prev_len = len(collected_videos)
 
@@ -517,41 +562,31 @@ class DouyinBrowserDownloader:
                 if limit and current_count >= limit:
                     break
 
-                pct = 25 + int((scroll_idx + 1) / max_scrolls * 65)
+                pct = 25 + int((scroll_idx + 1) / max_scrolls * 50)
                 if progress_cb:
                     channel_name_str = f" từ kênh [{channel_info['nickname']}]" if channel_info.get("nickname") and channel_info["nickname"] != "Kênh Douyin" else ""
-                    progress_cb(pct, f"Đang phân tích danh sách{channel_name_str}... Đã tìm thấy {current_count} video.")
+                    progress_cb(pct, f"Đang cuộn và phân tích danh sách{channel_name_str}... Đã tìm thấy {current_count} video.")
 
-                # Kích hoạt sự kiện cuộn đa tầng đồng bộ trên các container nội dung của Douyin & gỡ bỏ lớp chặn
+                # 1. Gỡ bỏ lớp mask chặn sự kiện chuột nếu có
                 try:
-                    # 1. Gỡ bỏ popup login/mask và cuộn DOM
                     page.evaluate("""() => {
-                        // Gỡ bỏ mọi modal login hoặc lớp mask làm chặn sự kiện cuộn
-                        const blockers = document.querySelectorAll('[class*="login-mask"], [class*="login-guide"], [class*="semi-modal"], [class*="YoNA2Hyj"], [class*="dy-account-close"]');
+                        const blockers = document.querySelectorAll('[class*="login-mask"], [class*="login-guide"], [class*="semi-modal"], .YoNA2Hyj, .dy-account-close');
                         blockers.forEach(b => {
                             try { b.click(); } catch(e){}
                             try { b.remove(); } catch(e){}
                         });
                         document.body.style.overflow = 'auto';
                         document.documentElement.style.overflow = 'auto';
-
-                        // Kích hoạt sự kiện cuộn trên toàn bộ các container tiềm năng
-                        const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"], #slidelist');
-                        containers.forEach(c => {
-                            c.scrollTop += 3200;
-                            c.dispatchEvent(new Event('scroll', { bubbles: true }));
-                        });
-                        window.scrollBy(0, 3200);
-                        window.dispatchEvent(new Event('scroll', { bubbles: true }));
                     }""")
-                    
-                    # 2. Giả lập chuột lăn tự nhiên tại nhiều vị trí
-                    jitter_x = 640 + random.randint(-60, 60)
-                    jitter_y = 520 + random.randint(-60, 60)
+                except Exception:
+                    pass
+
+                # 2. Giả lập cuộn chuột tự nhiên (Native Wheel Event + PageDown / End)
+                try:
+                    jitter_x = 640 + random.randint(-40, 40)
+                    jitter_y = 500 + random.randint(-40, 40)
                     page.mouse.move(jitter_x, jitter_y)
-                    page.mouse.wheel(0, 3200 + random.randint(-200, 500))
-                    
-                    # 3. Giả lập phím PageDown & End
+                    page.mouse.wheel(0, 3200 + random.randint(-200, 300))
                     if scroll_idx % 2 == 0:
                         page.keyboard.press("PageDown")
                     else:
@@ -559,89 +594,112 @@ class DouyinBrowserDownloader:
                 except Exception:
                     pass
 
-                time.sleep(1.3 + random.uniform(0.2, 0.4))
+                time.sleep(1.5 + random.uniform(0.1, 0.3))
 
-                # Kiểm tra nếu không có video nào sau 6 lượt cuộn đầu tiên -> Dừng sớm
-                if current_count == 0 and scroll_idx >= 6:
+                # Kiểm tra nếu chưa nhận được video nào sau 8 lượt cuộn đầu tiên -> Dừng sớm
+                if current_count == 0 and scroll_idx >= 8:
                     break
 
                 if len(collected_videos) == prev_len:
                     no_new_count += 1
-                    # Cuộn ngược nhẹ rồi cuộn mạnh xuống đáy để ép Douyin kích hoạt Infinite Pagination
-                    try:
-                        page.evaluate("""() => {
-                            const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
-                            containers.forEach(c => {
-                                c.scrollTop -= 1000;
-                                c.dispatchEvent(new Event('scroll', { bubbles: true }));
-                            });
-                            window.scrollBy(0, -1000);
-                        }""")
-                        time.sleep(0.3)
-                        page.evaluate("""() => {
-                            const containers = document.querySelectorAll('.route-scroll-container, [class*="route-scroll-container"], [class*="parent-route-container"], [data-e2e="user-post-list"]');
-                            containers.forEach(c => {
-                                c.scrollTop = c.scrollHeight;
-                                c.dispatchEvent(new Event('scroll', { bubbles: true }));
-                            });
-                            window.scrollTo(0, document.body.scrollHeight);
-                            window.dispatchEvent(new Event('scroll', { bubbles: true }));
-                        }""")
-                        page.mouse.click(640, 500)
-                        page.mouse.wheel(0, 4500)
-                        page.keyboard.press("End")
-                        time.sleep(0.8)
-                    except Exception:
-                        pass
-
-                    # HYBRID ENGINE: Nếu cuộn không ra video mới mà có URL Post API trước đó, tự fetch trực tiếp từ browser context
-                    if pagination_state.get("last_url") and pagination_state.get("has_more") and pagination_state.get("max_cursor"):
+                    # Cuộn ngược nhẹ rồi cuộn mạnh xuống đáy để kích hoạt trigger phân trang
+                    if no_new_count in [2, 4]:
                         try:
-                            next_cursor = pagination_state["max_cursor"]
-                            last_u = pagination_state["last_url"]
-                            import re as _re
-                            next_url = _re.sub(r'max_cursor=\d+', f'max_cursor={next_cursor}', last_u)
-                            if 'max_cursor=' not in next_url:
-                                next_url += f"&max_cursor={next_cursor}"
-
-                            post_json = page.evaluate(f"""async () => {{
-                                try {{
-                                    const res = await window.fetch({json.dumps(next_url)});
-                                    return await res.json();
-                                }} catch(e) {{ return null; }}
-                            }}""")
-                            if post_json and isinstance(post_json, dict):
-                                aweme_list = post_json.get("aweme_list") or []
-                                if aweme_list:
-                                    pagination_state["max_cursor"] = post_json.get("max_cursor", 0)
-                                    pagination_state["has_more"] = post_json.get("has_more", 0)
-                                    added = process_aweme_list(aweme_list)
-                                    if added > 0:
-                                        no_new_count = 0
-                                        prev_len = len(collected_videos)
+                            page.mouse.wheel(0, -800)
+                            time.sleep(0.3)
+                            page.mouse.wheel(0, 4200)
+                            page.keyboard.press("End")
+                            time.sleep(0.5)
                         except Exception:
                             pass
 
-                    # Nếu pagination_state báo đã hết video (has_more == 0) -> Dừng sớm
-                    if pagination_state.get("has_more") == 0 and len(collected_videos) > 0:
+                    # Nếu API thông báo đã hết video (has_more == 0) và đã cuộn thêm 2 lượt xác nhận
+                    if pagination_state.get("has_more") == 0 and no_new_count >= 2 and len(collected_videos) > 0:
                         break
 
-                    if len(collected_videos) == prev_len and no_new_count >= 8:
+                    # Nếu không có video mới sau 6 lượt cuộn liên tiếp -> Dừng vòng lặp cuộn
+                    if no_new_count >= 6:
                         break
                 else:
                     no_new_count = 0
                     prev_len = len(collected_videos)
 
-            # --- GIAI ĐOẠN 2: QUÉT CÁC BỘ SƯU TẬP (合集 - COLLECTIONS / MIXES) CỦA KÊNH ---
+            # --- TẦNG 2: VÉT TOÀN BỘ VIDEO ID TRỰC TIẾP TỪ DOM (DOM Scraping Fallback) ---
+            if limit is None or len(collected_videos) < limit:
+                if progress_cb: progress_cb(78, "Đang đối soát và quét bổ sung Video ID từ giao diện trang...")
+                try:
+                    dom_anchors = page.evaluate("""() => {
+                        const anchors = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/note/"]'));
+                        return anchors.map(a => ({
+                            href: a.href,
+                            title: (a.innerText || a.getAttribute('title') || '').trim()
+                        }));
+                    }""") or []
+
+                    dom_added = 0
+                    for anc in dom_anchors:
+                        href = anc.get("href", "")
+                        vid_match = re.search(r'/(?:video|note)/(\d+)', href)
+                        if not vid_match:
+                            continue
+                        vid = vid_match.group(1)
+                        if vid in seen_aweme_ids:
+                            continue
+                        if limit and len(collected_videos) >= limit:
+                            break
+
+                        raw_title = anc.get("title") or f"Video {vid}"
+                        title_lines = [l.strip() for l in raw_title.split("\n") if l.strip()]
+                        clean_desc = title_lines[0] if title_lines else f"Video {vid}"
+
+                        import downloader
+                        item_entry = {
+                            "aweme_id": vid,
+                            "title": clean_desc,
+                            "clean_title": downloader.sanitize_filename_windows(clean_desc),
+                            "url": f"https://www.douyin.com/video/{vid}",
+                            "download_url": "",
+                            "backup_urls": [],
+                            "is_clean": False,
+                            "variants": [],
+                            "mix_order": None,
+                            "mix_id": None,
+                            "cover_url": "",
+                            "is_images": False,
+                            "image_urls": [],
+                            "duration": 0,
+                            "duration_formatted": "00:00",
+                            "digg_count": 0,
+                            "comment_count": 0,
+                            "share_count": 0,
+                            "collect_count": 0,
+                            "author": channel_info["nickname"],
+                            "create_time": int(time.time())
+                        }
+                        seen_aweme_ids.add(vid)
+                        collected_videos.append(item_entry)
+                        dom_added += 1
+
+                    if dom_added > 0 and progress_cb:
+                        progress_cb(80, f"Đã quét bổ sung {dom_added} video từ DOM (Tổng: {len(collected_videos)} video).")
+                except Exception:
+                    pass
+
+            # --- GIAI ĐOẠN 3: QUÉT CÁC BỘ SƯU TẬP (合集 - COLLECTIONS / MIXES) CỦA KÊNH ---
             if (limit is None or len(collected_videos) < limit):
-                if progress_cb: progress_cb(75, "Đang quét thêm các Bộ sưu tập (合集) và Tuyển tập video của kênh...")
+                if progress_cb: progress_cb(82, "Đang quét thêm các Bộ sưu tập (合集) và Tuyển tập video của kênh...")
                 try:
                     # Chuyển sang tab 合集 và tìm danh sách ID bộ sưu tập
                     mix_ids = page.evaluate("""async () => {
-                        const allTabs = Array.from(document.querySelectorAll('div, span, button'));
-                        const hejiTab = allTabs.find(el => el.innerText && el.innerText.trim() === '合集' && el.className.includes('semi-tabs-tab'));
-                        if (hejiTab) hejiTab.click();
-                        await new Promise(r => setTimeout(r, 1800));
+                        const allTabs = Array.from(document.querySelectorAll('div, span, button, a, [role="tab"]'));
+                        const hejiTab = allTabs.find(el => {
+                            const t = (el.innerText || '').trim();
+                            return t === '合集' || t.startsWith('合集 ');
+                        });
+                        if (hejiTab) {
+                            try { hejiTab.click(); } catch(e){}
+                            await new Promise(r => setTimeout(r, 1800));
+                        }
 
                         const links = Array.from(document.querySelectorAll('a[href*="collection"], a[href*="mix"], [class*="mix"] a')).map(a => a.href);
                         const ids = [];
@@ -662,7 +720,7 @@ class DouyinBrowserDownloader:
                                 if limit and len(collected_videos) >= limit:
                                     break
                                 if progress_cb:
-                                    progress_cb(80 + int((m_idx + 1) / len(mix_ids) * 15), f"Đang trích xuất Bộ sưu tập {m_idx + 1}/{len(mix_ids)}... (Hiện có {len(collected_videos)} video)")
+                                    progress_cb(85 + int((m_idx + 1) / len(mix_ids) * 10), f"Đang trích xuất Bộ sưu tập {m_idx + 1}/{len(mix_ids)}... (Hiện có {len(collected_videos)} video)")
 
                                 mix_data = page.evaluate(f"""async () => {{
                                     try {{
@@ -681,6 +739,13 @@ class DouyinBrowserDownloader:
                                 time.sleep(0.3)
                 except Exception:
                     pass
+
+            # Tự động xuất và đồng bộ cookie mới nhất từ browser context
+            try:
+                import douyin_cookie_manager
+                douyin_cookie_manager.extract_and_save_cookies_from_playwright_context(context)
+            except Exception:
+                pass
 
             context.close()
 
@@ -706,29 +771,39 @@ class DouyinBrowserDownloader:
         Trích xuất toàn bộ video thuộc một Bộ sưu tập (合集 / Collection / Mix) cụ thể của Douyin.
         Phân trang liên tục bằng cursor và has_more == 1 cho tới khi has_more == 0.
         Bảo toàn thứ tự mix_order của các tập để phục vụ ghép video dài.
+        Hỗ trợ:
+        - Link collection trực tiếp: /collection/<mix_id>
+        - Link tập video thuộc bộ sưu tập: /video/<id>, ?vid=<id>, modal_id=<id>...
+        - Link tab Tuyển tập của kênh: ?showSubTab=compilation
+        - ID thuần của Mix
         """
-        mix_id = extract_mix_id(mix_id_or_url)
-        if not mix_id:
-            raise ValueError(f"Không nhận diện được mix_id từ liên kết: {mix_id_or_url}")
+        raw_input = clean_url_input(mix_id_or_url)
+        mix_id = extract_mix_id(raw_input)
+        resolved_vid, _ = extract_video_id(raw_input)
 
-        if progress_cb: progress_cb(10, f"Đang kết nối để phân tích Bộ sưu tập (Mix ID: {mix_id})...")
+        if progress_cb:
+            if mix_id:
+                progress_cb(10, f"Đang kết nối để phân tích Bộ sưu tập (Mix ID: {mix_id})...")
+            elif resolved_vid:
+                progress_cb(10, f"Đang kết nối để nhận diện Bộ sưu tập từ tập video (ID: {resolved_vid})...")
+            else:
+                progress_cb(10, "Đang kết nối để dò tìm Tuyển tập phim trên Douyin...")
 
-        target_url = f"https://www.douyin.com/collection/{mix_id}"
-        from playwright.sync_api import sync_playwright
+        playwright_driver = get_playwright()
 
         collected_videos = []
         seen_aweme_ids = set()
         channel_info = {
-            "nickname": f"Tuyển tập {mix_id}",
+            "nickname": f"Tuyển tập {mix_id or ''}".strip(),
             "avatar": "",
             "signature": "",
             "follower_count": 0,
             "total_favorited": 0,
-            "mix_id": mix_id,
+            "mix_id": mix_id or "",
             "is_collection": True
         }
 
-        with sync_playwright() as p:
+        with playwright_driver() as p:
             try:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=self.profile_dir,
@@ -736,7 +811,7 @@ class DouyinBrowserDownloader:
                     headless=self.headless,
                     viewport={"width": 1280, "height": 800},
                     user_agent=DEFAULT_USER_AGENT,
-                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                    args=LAUNCH_ARGS
                 )
             except Exception:
                 context = p.chromium.launch_persistent_context(
@@ -744,7 +819,7 @@ class DouyinBrowserDownloader:
                     headless=self.headless,
                     viewport={"width": 1280, "height": 800},
                     user_agent=DEFAULT_USER_AGENT,
-                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                    args=LAUNCH_ARGS
                 )
 
             # Nạp cookie Douyin nếu có
@@ -757,6 +832,83 @@ class DouyinBrowserDownloader:
                 pass
 
             page = context.pages[0] if context.pages else context.new_page()
+
+            # Bước 1: Nếu chưa có mix_id nhưng có resolved_vid, truy vấn mix_info từ video detail
+            if not mix_id and resolved_vid:
+                if progress_cb: progress_cb(15, f"Đang dò tìm Bộ sưu tập chứa video ID: {resolved_vid}...")
+                try:
+                    page.goto("https://www.douyin.com/", timeout=15000, wait_until="domcontentloaded")
+                    time.sleep(1.0)
+                except Exception:
+                    pass
+
+                vid_detail = page.evaluate(f"""async () => {{
+                    try {{
+                        const res = await window.fetch('/aweme/v1/web/aweme/detail/?aweme_id={resolved_vid}&aid=6383&device_platform=webapp&channel=channel_pc_web');
+                        const data = await res.json();
+                        const aweme = data?.aweme_detail;
+                        if (!aweme) return null;
+                        return {{
+                            mix_id: aweme?.mix_info?.mix_id,
+                            mix_name: aweme?.mix_info?.mix_name,
+                            author_nickname: aweme?.author?.nickname,
+                            author_avatar: (aweme?.author?.avatar_thumb?.url_list || [])[0] || '',
+                            author_sig: aweme?.author?.signature || '',
+                            total_episode: aweme?.mix_info?.statis?.total_episode || aweme?.mix_info?.total_episode || 0
+                        }};
+                    }} catch(e) {{
+                        return null;
+                    }}
+                }}""")
+
+                if vid_detail and vid_detail.get("mix_id"):
+                    mix_id = str(vid_detail["mix_id"])
+                    if vid_detail.get("mix_name"):
+                        channel_info["mix_name"] = vid_detail["mix_name"]
+                    if vid_detail.get("author_nickname"):
+                        channel_info["nickname"] = vid_detail["author_nickname"]
+                    if vid_detail.get("author_avatar"):
+                        channel_info["avatar"] = vid_detail["author_avatar"]
+                    if vid_detail.get("author_sig"):
+                        channel_info["signature"] = vid_detail["author_sig"]
+                else:
+                    context.close()
+                    raise ValueError(f"Video (ID: {resolved_vid}) không thuộc Bộ sưu tập / Tuyển tập phim nào trên Douyin. Để tải video này, vui lòng chuyển sang tab 'Tải 1 Video Đơn Lẻ'.")
+
+            # Bước 2: Nếu vẫn chưa có mix_id nhưng URL là trang kênh có tab compilation
+            if not mix_id and ("showsubtab=compilation" in raw_input.lower() or "/user/" in raw_input):
+                if progress_cb: progress_cb(15, "Đang quét danh sách Tuyển tập phim trên trang người dùng...")
+                try:
+                    page.goto(raw_input, timeout=15000, wait_until="domcontentloaded")
+                    time.sleep(2.0)
+                except Exception:
+                    pass
+
+                found_mixes = page.evaluate("""() => {
+                    const results = [];
+                    const anchors = Array.from(document.querySelectorAll('a[href]'));
+                    for (const a of anchors) {
+                        const m = a.href.match(/collection\\/(\\d+)/);
+                        if (m && !results.some(x => x.mix_id === m[1])) {
+                            results.push({ mix_id: m[1], title: a.innerText.trim() });
+                        }
+                    }
+                    return results;
+                }""")
+                if found_mixes:
+                    mix_id = found_mixes[0]["mix_id"]
+                    if found_mixes[0].get("title"):
+                        channel_info["mix_name"] = found_mixes[0]["title"].split('\\n')[0]
+                else:
+                    context.close()
+                    raise ValueError(f"Không tìm thấy Bộ sưu tập nào trên trang: {raw_input}. Vui lòng dán trực tiếp liên kết của một tập trong bộ sưu tập.")
+
+            if not mix_id:
+                context.close()
+                raise ValueError(f"Không nhận diện được Bộ sưu tập (Mix ID) từ liên kết: {raw_input}. Vui lòng dán link bộ sưu tập hoặc link một tập phim.")
+
+            channel_info["mix_id"] = mix_id
+            target_url = f"https://www.douyin.com/collection/{mix_id}"
 
             def process_mix_items(items):
                 import downloader
@@ -864,6 +1016,9 @@ class DouyinBrowserDownloader:
 
         collected_videos.sort(key=lambda x: int(x.get("mix_order") or 999999))
         channel_info["total_videos_scanned"] = len(collected_videos)
+        if channel_info.get("mix_name") and channel_info.get("nickname"):
+            if channel_info["mix_name"] not in channel_info["nickname"]:
+                channel_info["nickname"] = f"{channel_info['nickname']} - {channel_info['mix_name']}"
         if progress_cb:
             progress_cb(100, f"Hoàn tất! Đã trích xuất {len(collected_videos)} tập từ Bộ sưu tập.")
 
@@ -931,17 +1086,17 @@ class DouyinBrowserDownloader:
             pass
 
         # Tầng 2: Sử dụng Browser Worker bắt luồng video trực tiếp
-        from playwright.sync_api import sync_playwright
+        playwright_driver = get_playwright()
         captured_data = {}
 
-        with sync_playwright() as p:
+        with playwright_driver() as p:
             context = p.chromium.launch_persistent_context(
                 user_data_dir=self.profile_dir,
                 channel="msedge",
                 headless=self.headless,
                 viewport={"width": 1280, "height": 800},
                 user_agent=DEFAULT_USER_AGENT,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                args=LAUNCH_ARGS
             )
             page = context.pages[0] if context.pages else context.new_page()
 
@@ -1165,6 +1320,7 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
         title = video_info.get("title") or video_info.get("clean_title") or f"video_{vid_id}"
 
         try:
+            import downloader
             # Kiểm tra manifest đã thành công chưa
             if vid_id in manifest["items"] and manifest["items"][vid_id].get("status") == "success":
                 saved_f = manifest["items"][vid_id].get("file_path")
@@ -1246,6 +1402,14 @@ def download_channel_batch(video_list, output_dir=None, channel_name=None, max_w
                     backup_urls = single_info.get("backup_urls", [])
                 except Exception:
                     pass
+                if not dl_url:
+                    try:
+                        import downloader
+                        fast_res = downloader.resolve_douyin_media(video_info.get("url") or f"https://www.douyin.com/video/{vid_id}")
+                        if fast_res and fast_res.get("url"):
+                            dl_url = fast_res.get("url")
+                    except Exception:
+                        pass
 
             if not dl_url or BATCH_CANCEL_EVENT.is_set():
                 with lock:

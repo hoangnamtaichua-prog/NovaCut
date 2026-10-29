@@ -404,6 +404,28 @@ class TestDouyinDownloader(unittest.TestCase):
         sorted_series = douyin_browser_downloader.sort_videos_chronological(series_videos, order="oldest_first")
         self.assertEqual([v["mix_order"] for v in sorted_series], [1, 2, 3])
 
+    def test_11_launch_args_and_driver_fallback(self):
+        """Kiểm tra cờ khởi chạy anti-detection và get_playwright loader"""
+        self.assertIn("--disable-blink-features=AutomationControlled", douyin_browser_downloader.LAUNCH_ARGS)
+        self.assertIn("--no-first-run", douyin_browser_downloader.LAUNCH_ARGS)
+        self.assertIn("--password-store=basic", douyin_browser_downloader.LAUNCH_ARGS)
+        driver = douyin_browser_downloader.get_playwright()
+        self.assertIsNotNone(driver)
+
+    def test_12_dom_video_id_extraction_regex(self):
+        """Kiểm tra biểu thức chính quy trích xuất video ID và note ID từ liên kết DOM"""
+        import re
+        sample_links = [
+            "https://www.douyin.com/video/7412345678901234567",
+            "https://www.douyin.com/note/7412345678901234568?extra=1",
+            "//www.douyin.com/video/7412345678901234569",
+        ]
+        extracted = []
+        for l in sample_links:
+            m = re.search(r'/(?:video|note)/(\d+)', l)
+            if m: extracted.append(m.group(1))
+        self.assertEqual(extracted, ["7412345678901234567", "7412345678901234568", "7412345678901234569"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

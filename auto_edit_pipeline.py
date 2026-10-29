@@ -481,9 +481,9 @@ def generate_styled_ass(srt_source_path: str, ass_dest_path: str, cur_out_w: int
 
     sub_region = subtitle_style.get('region') or {}
     sub_align = str(subtitle_style.get('align') or 'center').lower()
-    sub_x = float(sub_region.get('x', 10.0))
+    sub_x = float(sub_region.get('x', 20.0))
     sub_y = float(sub_region.get('y', 81.5))
-    sub_w = float(sub_region.get('w', 80.0))
+    sub_w = float(sub_region.get('w', 60.0))
     sub_h = float(sub_region.get('h', 9.5))
 
     box_x = cur_out_w * sub_x / 100.0
@@ -625,11 +625,12 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
                 w = min(w, float(manual_w))
             is_multiline = ('\n' in txt) or ('\\N' in txt)
             if is_multiline:
-                item_h = min(0.25, max(h_ratio, 0.11))
+                item_h = min(0.25, max(h_ratio, 0.12))
                 item_y = max(0.0, min(0.98 - item_h, y_ratio - (item_h - h_ratio) / 2.0))
             else:
-                item_h = min(h_ratio, 0.075) if h_ratio > 0.08 else h_ratio
-                item_y = y_ratio
+                # Không ép cứng cap 0.075 vô lý khiến dải mờ bị hẹp và hở chân chữ phụ đề
+                item_h = max(0.085, min(0.20, float(h_ratio if h_ratio is not None else 0.095)))
+                item_y = max(0.0, min(0.98 - item_h, y_ratio + (h_ratio / 2.0) - (item_h / 2.0)))
             
         raw_list.append((s_lead, e_trail, w, item_center_x, item_y, item_h))
 
@@ -639,10 +640,10 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
     # 1. Sắp xếp theo dòng thời gian
     sorted_raw = sorted(raw_list, key=lambda x: x[0])
 
-    # KỊCH BẢN A: VÙNG BLUR CỐ ĐỊNH (Manual Mode hoặc các box phụ đề đồng nhất)
+    # KỊCH BẢN A: VÙNG BLUR CỐ ĐỊNH (Chỉ khi người dùng bật Manual Mode)
     # Tối ưu siêu tốc: gộp interval, dùng crop + avgblur + overlay với biểu thức enable.
     # Tránh hoàn toàn split=3, format=gbrp, geq và maskedmerge, tăng tốc độ từ 1.1x lên ~7.5x - 8.0x.
-    if manual_mode or not has_any_per_entry_box:
+    if manual_mode:
         merged_intervals = []
         for it in sorted_raw:
             s, e = it[0], it[1]
@@ -683,10 +684,10 @@ def build_dynamic_blur_filter_chain(curr_v, active_intervals, blur_sz=15, y_rati
 
         return filter_chain, curr
 
-    # KỊCH BẢN B: VÙNG BLUR ĐỘNG THEO TỪNG CÂU (has_any_per_entry_box == True)
+    # KỊCH BẢN B: VÙNG BLUR ĐỘNG THEO TỪNG CÂU (Dynamic Timeline Masking)
     # Dùng Timeline Masking ASS nâng cao nhưng loại bỏ triệt để bottleneck format=gbrp và geq.
     # Chạy trực tiếp trên YUV420p với lut O(1) per pixel và avgblur SIMD.
-    if engine == 'mask' or (engine == 'auto' and (len(sorted_raw) > 30 or has_any_per_entry_box)):
+    if engine in ('mask', 'auto') or has_any_per_entry_box or len(sorted_raw) > 0:
         try:
             if not temp_dir:
                 temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'editor_temp')
@@ -2449,8 +2450,14 @@ def run_auto_edit_workflow(payload, check_stop_func):
         if check_stop_func(): return
 
         blur_orig_subs = parse_bool(payload.get('blur_original_subtitles'), False)
-        blur_sz = max(3, min(40, int(payload.get('blur_intensity', 15))))
-        blur_y = float(payload.get('blur_y_pos', 81.5)) / 100.0
+        dyn_b_dict = payload.get('dynamic_blur') if isinstance(payload.get('dynamic_blur'), dict) else {}
+        if not blur_orig_subs and dyn_b_dict:
+            blur_orig_subs = parse_bool(dyn_b_dict.get('enabled'), False)
+        elif not blur_orig_subs and payload.get('dynamic_blur') is not None:
+            blur_orig_subs = parse_bool(payload.get('dynamic_blur'), False)
+
+        blur_sz = max(3, min(40, int(payload.get('blur_intensity') or dyn_b_dict.get('intensity') or 15)))
+        blur_y = float(payload.get('blur_y_pos') or payload.get('blur_y') or 81.5) / 100.0
         blur_lead_offset = abs(float(payload.get('blur_lead_offset', -180)) / 1000.0)
         blur_padding = float(payload.get('blur_padding', 220)) / 1000.0
         blur_ai_boxes = payload.get('ai_boxes') or []
@@ -2458,10 +2465,12 @@ def run_auto_edit_workflow(payload, check_stop_func):
         # Video Zoom parameter
         raw_zoom = float(payload.get('video_zoom', 100.0))
         zoom_val = (raw_zoom / 100.0) if raw_zoom > 5.0 else raw_zoom
-        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False) or zoom_val > 1.005)
-        zoom_factor = max(1.0, min(5.0, zoom_val)) if enable_zoom else 1.0
+        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False) or zoom_val > 1.005 or zoom_val < 0.995)
+        zoom_factor = max(0.2, min(5.0, zoom_val)) if enable_zoom else 1.0
         if zoom_factor > 1.005:
             yield log(f"🔍 Kích hoạt phóng to video (Zoom: {zoom_factor*100:.0f}%)...")
+        elif 0.2 <= zoom_factor < 0.995:
+            yield log(f"🔍 Kích hoạt thu nhỏ video (Zoom: {zoom_factor*100:.0f}%)...")
 
         video_pan_x = float(payload.get('video_pan_x', 0.0))
         video_pan_y = float(payload.get('video_pan_y', 0.0))
@@ -2526,14 +2535,26 @@ def run_auto_edit_workflow(payload, check_stop_func):
             filter_chain = []
             curr_v = "0:v"
 
-            # 1. Phóng to Video (Zoom & Center Crop & Upscale)
+            # 1. Phóng to / Thu nhỏ Video (Zoom & Center Crop/Scale & Pan)
             if zoom_factor > 1.005:
                 clip_vw, clip_vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+                clip_vw_even = (int(clip_vw) // 2) * 2 if clip_vw > 0 else 1920
+                clip_vh_even = (int(clip_vh) // 2) * 2 if clip_vh > 0 else 1080
                 crop_w = f"trunc(iw/{zoom_factor:.4f}/2)*2"
                 crop_h = f"trunc(ih/{zoom_factor:.4f}/2)*2"
-                crop_x = f"(iw-{crop_w})/2 - ({video_pan_x:.1f}*(iw/800))"
-                crop_y = f"(ih-{crop_h})/2 - ({video_pan_y:.1f}*(ih/450))"
-                filter_chain.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,trunc(({crop_x})/2)*2))':y='max(0,min(ih-oh,trunc(({crop_y})/2)*2))',scale={clip_vw}:{clip_vh}:flags=lanczos[v_zoomed]")
+                crop_x = f"max(0,min(iw-ow,trunc(((iw-ow)/2 - ({video_pan_x:.1f}*iw/800.0))/2)*2))"
+                crop_y = f"max(0,min(ih-oh,trunc(((ih-oh)/2 - ({video_pan_y:.1f}*ih/450.0))/2)*2))"
+                filter_chain.append(f"[{curr_v}]crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',scale={clip_vw_even}:{clip_vh_even}:flags=lanczos[v_zoomed]")
+                curr_v = "v_zoomed"
+            elif 0.2 <= zoom_factor < 0.995:
+                clip_vw, clip_vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+                clip_vw_even = (int(clip_vw) // 2) * 2 if clip_vw > 0 else 1920
+                clip_vh_even = (int(clip_vh) // 2) * 2 if clip_vh > 0 else 1080
+                scale_w = f"trunc(iw*{zoom_factor:.4f}/2)*2"
+                scale_h = f"trunc(ih*{zoom_factor:.4f}/2)*2"
+                pad_x = f"max(0,min({clip_vw_even}-iw,trunc(((({clip_vw_even}-iw)/2)+({video_pan_x:.1f}*{clip_vw_even}/800.0))/2)*2))"
+                pad_y = f"max(0,min({clip_vh_even}-ih,trunc(((({clip_vh_even}-ih)/2)+({video_pan_y:.1f}*{clip_vh_even}/450.0))/2)*2))"
+                filter_chain.append(f"[{curr_v}]scale=w='{scale_w}':h='{scale_h}':flags=lanczos,pad={clip_vw_even}:{clip_vh_even}:'{pad_x}':'{pad_y}':color=black[v_zoomed]")
                 curr_v = "v_zoomed"
 
             # 2. Làm mờ động phụ đề gốc
@@ -2772,9 +2793,18 @@ def run_auto_edit_workflow(payload, check_stop_func):
         curr_v = "0:v"
 
         if auto_subtitles and os.path.exists(voice_srt_cleaned_path):
-            sub_style = payload.get('subtitle_style') or {}
+            sub_style = dict(payload.get('subtitle_style') or {})
             if payload.get('sub_font') and 'font' not in sub_style:
                 sub_style['font'] = payload['sub_font']
+            # BẢO ĐẢM QUY TẮC CỐT LÕI: Khi làm mờ sub gốc, phụ đề mới BẮT BUỘC LUÔN NẰM ĐÈ LÊN CHÍNH GIỮA VÙNG LÀM MỜ
+            if blur_orig_subs:
+                sub_style['region'] = {
+                    'x': 20.0,
+                    'y': float(payload.get('blur_y', 81.5)),
+                    'w': 60.0,
+                    'h': 9.5,
+                }
+                sub_style['align'] = 'center'
             vw, vh = get_video_dimensions_fast(concat_silent_path, ffmpeg_path)
             ass_target = os.path.join(temp_dir, 'rendered_review_subtitles.ass')
             sub_applied = False
@@ -2915,7 +2945,27 @@ def run_auto_edit_workflow(payload, check_stop_func):
             yield log(f"🛑 Không tìm thấy file video đầu ra: {final_output}")
             return
 
-        out_srt = os.path.splitext(final_output)[0] + '.srt'
+        # --- BẢO VỆ TRÁNH XUNG ĐỘT 2 LỚP PHỤ ĐỀ (DOUBLE SUBTITLES BUG) ---
+        # Khi auto_subtitles bật (Hardsub đã được FFmpeg khắc cứng vào từng khung hình video),
+        # KHÔNG ĐƯỢC đặt tên file phụ đề rời trùng 100% với tên video (vd: Mustang.mp4 và Mustang.srt).
+        # Nếu đặt trùng, tất cả trình phát đa phương tiện (Windows Media Player, VLC, PotPlayer, Movies & TV)
+        # sẽ tự động nạp Mustang.srt và hiển thị đè softsub lên trên hardsub, gây ra hiện tượng 2 dòng sub chồng lấn!
+        # Do đó:
+        # - Khi auto_subtitles=True (Hardsub): Đổi tên thành [TênVideo]_subtitles.srt để người dùng vẫn có file SRT
+        #   (dùng up YouTube CC / CapCut) mà trình phát video không bị auto-load đè lên.
+        #   Đồng thời dọn dẹp file [TênVideo].srt cũ nếu có.
+        # - Khi auto_subtitles=False (Tắt Hardsub): Giữ nguyên [TênVideo].srt để trình phát tự nạp softsub chuẩn.
+        if auto_subtitles:
+            out_srt = os.path.splitext(final_output)[0] + '_subtitles.srt'
+            old_conflicting_srt = os.path.splitext(final_output)[0] + '.srt'
+            if os.path.exists(old_conflicting_srt):
+                try:
+                    os.remove(old_conflicting_srt)
+                except Exception:
+                    pass
+        else:
+            out_srt = os.path.splitext(final_output)[0] + '.srt'
+
         if os.path.exists(voice_srt_cleaned_path):
             try:
                 shutil.copy2(voice_srt_cleaned_path, out_srt)
@@ -3002,6 +3052,10 @@ def run_narration_workflow(payload, check_stop_func):
     api_key_openspeaker = payload.get('openspeaker_api_key', '')
     auto_subtitles = payload.get('auto_subtitles', False)
     blur_orig_subs = parse_bool(payload.get('blur_original_subtitles'), False)
+    if not blur_orig_subs and isinstance(payload.get('dynamic_blur'), dict):
+        blur_orig_subs = parse_bool(payload.get('dynamic_blur', {}).get('enabled'), False)
+    elif not blur_orig_subs and payload.get('dynamic_blur') is not None:
+        blur_orig_subs = parse_bool(payload.get('dynamic_blur'), False)
     orig_volume = float(payload.get('original_volume', 15)) / 100.0  # 0.0 - 1.0
 
     if not api_key_openspeaker:
@@ -3324,21 +3378,34 @@ def run_narration_workflow(payload, check_stop_func):
         # Video Zoom parameter
         raw_zoom = float(payload.get('video_zoom', 100.0))
         zoom_val = (raw_zoom / 100.0) if raw_zoom > 5.0 else raw_zoom
-        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False) or zoom_val > 1.005)
-        zoom_factor = max(1.0, min(5.0, zoom_val)) if enable_zoom else 1.0
+        enable_zoom = bool(payload.get('enable_zoom', False) or payload.get('pan_zoom', False) or zoom_val > 1.005 or zoom_val < 0.995)
+        zoom_factor = max(0.2, min(5.0, zoom_val)) if enable_zoom else 1.0
 
         video_pan_x = float(payload.get('video_pan_x', 0.0))
         video_pan_y = float(payload.get('video_pan_y', 0.0))
 
-        # Phóng to video nếu bật
+        # Phóng to / Thu nhỏ video nếu bật
         if zoom_factor > 1.005:
             yield log(f"🔍 Kích hoạt phóng to video (Zoom: {zoom_factor*100:.0f}%)...")
             vw, vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+            vw_even = (int(vw) // 2) * 2 if vw > 0 else 1920
+            vh_even = (int(vh) // 2) * 2 if vh > 0 else 1080
             crop_w = f"trunc(iw/{zoom_factor:.4f}/2)*2"
             crop_h = f"trunc(ih/{zoom_factor:.4f}/2)*2"
-            crop_x = f"(iw-{crop_w})/2 - ({video_pan_x:.1f}*(iw/800))"
-            crop_y = f"(ih-{crop_h})/2 - ({video_pan_y:.1f}*(ih/450))"
-            filter_parts.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,trunc(({crop_x})/2)*2))':y='max(0,min(ih-oh,trunc(({crop_y})/2)*2))',scale={vw}:{vh}:flags=lanczos[v_zoomed]")
+            crop_x = f"max(0,min(iw-ow,trunc(((iw-ow)/2 - ({video_pan_x:.1f}*iw/800.0))/2)*2))"
+            crop_y = f"max(0,min(ih-oh,trunc(((ih-oh)/2 - ({video_pan_y:.1f}*ih/450.0))/2)*2))"
+            filter_parts.append(f"[{curr_v}]crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',scale={vw_even}:{vh_even}:flags=lanczos[v_zoomed]")
+            curr_v = "v_zoomed"
+        elif 0.2 <= zoom_factor < 0.995:
+            yield log(f"🔍 Kích hoạt thu nhỏ video (Zoom: {zoom_factor*100:.0f}%)...")
+            vw, vh = get_video_dimensions_fast(video_path, ffmpeg_path)
+            vw_even = (int(vw) // 2) * 2 if vw > 0 else 1920
+            vh_even = (int(vh) // 2) * 2 if vh > 0 else 1080
+            scale_w = f"trunc(iw*{zoom_factor:.4f}/2)*2"
+            scale_h = f"trunc(ih*{zoom_factor:.4f}/2)*2"
+            pad_x = f"max(0,min({vw_even}-iw,trunc(((({vw_even}-iw)/2)+({video_pan_x:.1f}*{vw_even}/800.0))/2)*2))"
+            pad_y = f"max(0,min({vh_even}-ih,trunc(((({vh_even}-ih)/2)+({video_pan_y:.1f}*{vh_even}/450.0))/2)*2))"
+            filter_parts.append(f"[{curr_v}]scale=w='{scale_w}':h='{scale_h}':flags=lanczos,pad={vw_even}:{vh_even}:'{pad_x}':'{pad_y}':color=black[v_zoomed]")
             curr_v = "v_zoomed"
 
         # Làm mờ phụ đề gốc nếu bật
@@ -3384,9 +3451,18 @@ def run_narration_workflow(payload, check_stop_func):
 
         # Burn-in subtitle mới
         if auto_subtitles and os.path.exists(voice_srt_cleaned_path):
-            sub_style = payload.get('subtitle_style') or {}
+            sub_style = dict(payload.get('subtitle_style') or {})
             if payload.get('sub_font') and 'font' not in sub_style:
                 sub_style['font'] = payload['sub_font']
+            # BẢO ĐẢM QUY TẮC CỐT LÕI: Khi làm mờ sub gốc, phụ đề mới BẮT BUỘC LUÔN NẰM ĐÈ LÊN CHÍNH GIỮA VÙNG LÀM MỜ
+            if blur_orig_subs:
+                sub_style['region'] = {
+                    'x': 20.0,
+                    'y': float(payload.get('blur_y', 81.5)),
+                    'w': 60.0,
+                    'h': 9.5,
+                }
+                sub_style['align'] = 'center'
             vw, vh = get_video_dimensions_fast(video_path, ffmpeg_path)
             ass_target = os.path.join(temp_dir, 'rendered_review_subtitles.ass')
             sub_applied = False
@@ -3487,9 +3563,9 @@ def run_narration_workflow(payload, check_stop_func):
         # Audio mix: giảm volume gốc / SFX (nếu có audio) + overlay voice
         orig_audio_src = f"[{sfx_idx}:a]" if sfx_idx is not None else "[0:a]"
         if has_orig_audio and orig_volume > 0.01:
-            audio_filter = f"{orig_audio_src}volume={orig_volume:.2f}[a_orig];[1:a]volume=2.5[a_voice];[a_orig][a_voice]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            audio_filter = f"{orig_audio_src}pan=stereo|c0=c0|c1=c1,aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000,volume={orig_volume:.2f}[a_orig];[1:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000,volume=2.5[a_voice];[a_orig][a_voice]amix=inputs=2:duration=first:dropout_transition=2[aout]"
         else:
-            audio_filter = f"[1:a]volume=2.5[aout]"
+            audio_filter = f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=2.5[aout]"
 
         full_filter = f"{video_filter};{audio_filter}"
 
@@ -3545,6 +3621,7 @@ def run_narration_workflow(payload, check_stop_func):
 
         cmd = [
             ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info',
+            '-err_detect', 'ignore_err', '-max_error_rate', '1.0',
             *inputs_list,
             *filter_args,
             '-map', '[vout]', '-map', '[aout]',
@@ -3570,6 +3647,7 @@ def run_narration_workflow(payload, check_stop_func):
             yield log(f"⚠️ Bộ mã hóa GPU {encoder} gặp sự cố, tự động chuyển sang chế độ dự phòng CPU (libx264)...")
             cmd_fallback = [
                 ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info',
+                '-err_detect', 'ignore_err', '-max_error_rate', '1.0',
                 *inputs_list,
                 *filter_args,
                 '-map', '[vout]', '-map', '[aout]',
@@ -3626,7 +3704,23 @@ def run_narration_workflow(payload, check_stop_func):
             yield log(f"🛑 Không tìm thấy file đầu ra: {final_output}")
             return
 
-        out_srt = os.path.splitext(final_output)[0] + '.srt'
+        # --- BẢO VỆ TRÁNH XUNG ĐỘT 2 LỚP PHỤ ĐỀ (DOUBLE SUBTITLES BUG) ---
+        # Khi auto_subtitles bật (Hardsub đã được FFmpeg khắc cứng vào từng khung hình video),
+        # KHÔNG ĐƯỢC đặt tên file phụ đề rời trùng 100% với tên video (vd: Mustang.mp4 và Mustang.srt).
+        # Nếu đặt trùng, tất cả trình phát đa phương tiện (Windows Media Player, VLC, PotPlayer, Movies & TV)
+        # sẽ tự động nạp Mustang.srt và hiển thị đè softsub lên trên hardsub, gây ra hiện tượng 2 dòng sub chồng lấn!
+        auto_subtitles = payload.get('auto_subtitles', True)
+        if auto_subtitles:
+            out_srt = os.path.splitext(final_output)[0] + '_subtitles.srt'
+            old_conflicting_srt = os.path.splitext(final_output)[0] + '.srt'
+            if os.path.exists(old_conflicting_srt):
+                try:
+                    os.remove(old_conflicting_srt)
+                except Exception:
+                    pass
+        else:
+            out_srt = os.path.splitext(final_output)[0] + '.srt'
+
         if os.path.exists(voice_srt_cleaned_path):
             try:
                 shutil.copy2(voice_srt_cleaned_path, out_srt)

@@ -9,7 +9,178 @@
 
 ## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
 
-- **Khắc Phục Hiện Tượng Trùng Lặp 2 Lớp Phụ Đề (Double Subtitles) Khi Xuất Video Review & Narration (14/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`):**
+*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.7)*
+
+---
+
+## 📦 ĐÃ PHÁT HÀNH TRONG BẢN v1.3.7 (29/10/2026)
+
+- **Khắc Phục Triệt Để Lỗi Biên Tập Hàng Loạt Sub Tự Động & Lệch Vị Trí Vùng Làm Mờ Dynamic Blur / Phụ Đề Mới (23/10/2026) (`routes/video_edit.py`, `patches/active/routes/video_edit.py`, `auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `web/index.html`, `patches/active/web/index.html`, `web/js/features/batch_editor.js`, `patches/active/web/js/features/batch_editor.js`, `web/app.js`, `patches/active/web/app.js`, `tests/test_dynamic_blur_batch_editor.py`):**
+  - **Vấn đề & Triệu chứng:**
+    1. Khi sử dụng tính năng "Biên tập hàng loạt" với tùy chọn làm mờ phụ đề gốc (Dynamic Blur) và xuất video có phụ đề tiếng Việt tự động, phụ đề mới cùng dải mờ đen bị đặt quá cao (ngang hông/bụng nhân vật, $y \approx 81.5\%$).
+    2. Trong khi đó, dòng chữ phụ đề gốc tiếng Trung (ví dụ: `"因为吃瓜被砸晕"`) thực tế lại nằm tít ở đáy màn hình ($y \approx 86\% - 95\%$), hoàn toàn lộ ra ngoài vùng mờ và không được che chắn.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. *Bỏ phí toàn bộ tọa độ AI pixel boxes:* Bộ quét RapidOCR trước đó đã nhận dạng cực kỳ chính xác và lưu trữ toàn bộ bounding box pixel của 5.380 câu phụ đề trong file `ai_blur_boxes.json` (tọa độ chính xác $y = 86.2\%$, $h = 8.52\%$). Tuy nhiên, tại `routes/video_edit.py`, khối nạp `cached_ai_boxes_path` lại bị bọc bởi điều kiện `if blur_use_ai_scan and use_cache:`. Do `blur_use_ai_scan` bị gán `false` trong Batch Editor, backend đã vứt bỏ toàn bộ 5.380 hộp AI pixel box và ép phụ đề về dạng 3-tuple không có tọa độ pixel.
+    2. *Hardcode vị trí cố định 81.5%:* Backend `routes/video_edit.py` và `batch_editor.js` hardcode mặc định `blur_y = 81.5%` và `blur_h = 9.5%`, bỏ qua hoàn toàn vùng quét `ocrRegion` và vị trí thực tế của chữ, dẫn đến độ lệch gần 70-100 pixels so với đáy video.
+    3. *Không đồng bộ tâm ASS theo vị trí thực:* Khi tính toán vị trí phụ đề mới `effective_sub_style['region']['y']`, hệ thống bị ép vào giá trị cố định $81.5\%$, khiến phụ đề mới nằm ở $Y = 86.25\%$ (tọa độ 931px), trong khi chữ gốc thực tế nằm ở $Y = 91.9\%$ (tọa độ 993px trên 1080p).
+    4. *Giới hạn cứng chiều cao mờ:* Trong `auto_edit_pipeline.py`, hàm `build_dynamic_blur_filter_chain` có đoạn `item_h = min(h_ratio, 0.075)` vô tình bóp nghẹt chiều cao vùng mờ tối đa chỉ còn 7.5% (81px trên 1080p), không đủ để che các font chữ tiếng Trung có viền stroke đậm (cao 92px).
+    5. *Thiếu thanh điều khiển vị trí trong giao diện Batch Editor:* Tab Biên tập hàng loạt trước đây không có thanh trượt điều chỉnh vị trí và chiều cao vùng mờ, người dùng không thể can thiệp thủ công khi phim có phụ đề đặt đặc thù.
+  - **Kiến trúc & Giải pháp triển khai hoàn thiện:**
+    1. *Khôi phục và ưu tiên nạp AI Bounding Boxes:*
+       - Trong `routes/video_edit.py`: Bỏ điều kiện bắt buộc `blur_use_ai_scan` khi đọc cache `ai_blur_boxes.json` và `ocr_regions.json`. Bất cứ khi nào đã có dữ liệu quét AI box hoặc cache tồn tại, backend luôn tự động nạp và gán tọa độ pixel vào từng dòng phụ đề (`aiBox: [x, y, w, h]`).
+       - Trong `batch_editor.js`: Ngay sau khi quét OCR xong một video, tự động gọi API `/api/editor/cache_ai_boxes` để liên kết `aiBox` trực tiếp vào `item.subtitles` và `item.originalSubtitles`.
+    2. *Cơ chế Tự Động Căn Tâm Theo AI & OCR Region (AI Auto-Pin):*
+       - Tự động tính toán trung bình vị trí dọc `avg_ai_y` và chiều cao `avg_ai_h` từ toàn bộ các câu thoại thực tế trong video (hoặc từ khung `ocrRegion` nếu người dùng tùy chỉnh).
+       - Tự động ghim tâm vùng làm mờ `blur_y` và tâm phụ đề mới `effective_sub_style['region']['y']` trùng khớp 100% với dòng chữ gốc thực tế ở đáy video.
+    3. *Gỡ bỏ giới hạn chiều cao và thêm vùng đệm an toàn:*
+       - Xóa bỏ giới hạn `min(h_ratio, 0.075)` trong `auto_edit_pipeline.py`.
+       - Cho phép chiều cao vùng mờ nở tự nhiên theo bounding box thực tế của chữ kèm vùng đệm an toàn padding (12px trên/dưới), đảm bảo che phủ sạch sẽ toàn bộ nét chữ và viền viền ngoài (stroke).
+    4. *Bổ sung UI tùy chỉnh vị trí làm mờ trong Batch Editor:*
+       - Thêm tùy chọn "✨ Tự Động Ghim Tâm Sub Gốc (AI Auto-Pin)" kích hoạt mặc định.
+       - Bổ sung 2 thanh trượt trực quan: **Vị trí dọc (Y)** (50% - 95%) và **Chiều cao mờ (H)** (4% - 25%) ngay trong phần cấu hình xuất hàng loạt, cho phép người dùng tùy chỉnh linh hoạt theo ý muốn.
+    5. *Kiểm thử tự động & Đối soát trực quan:*
+       - Bổ sung unit tests `test_dynamic_blur_and_sub_align_to_ai_pixel_boxes` và `test_dynamic_blur_filter_covers_sub_with_padding` trong `tests/test_dynamic_blur_batch_editor.py` (7/7 tests pass).
+       - Render kiểm thử thực tế trên đúng frame video của người dùng (`"因为吃瓜被砸晕"`): kết quả dải mờ và phụ đề tiếng Việt che phủ 100% chữ gốc tiếng Trung, không còn bất kỳ khoảng hở hay lệch vị trí nào.
+
+- **Gỡ Bỏ Hoàn Toàn Mọi Rào Cản License & Phương Thức Thanh Toán - Mở Khóa 100% Tính Năng Miễn Phí Vĩnh Viễn (Free Lifetime All Features) (21/10/2026) (`license_manager.py`, `patches/active/license_manager.py`, `routes/license.py`, `patches/active/routes/license.py`, `web/index.html`, `patches/active/web/index.html`, `web/app.js`, `patches/active/web/app.js`, `.agents/AGENTS.md`):**
+  - **Mục tiêu & Định hướng:**
+    1. Loại bỏ toàn bộ hệ thống kiểm tra bản quyền, yêu cầu mua gói cước, kiểm tra đồng hồ máy tính (clock tampering), quét giao dịch VietQR/SePay MBBank và các modal cản trở người dùng.
+    2. Chuyển đổi ứng dụng sang chế độ Hoàn Toàn Miễn Phí Vĩnh Viễn (100% Free Lifetime), kích hoạt đầy đủ mọi tính năng cao cấp không giới hạn cho toàn bộ người dùng.
+  - **Kiến trúc & Giải pháp triển khai hoàn thiện:**
+    1. *Tầng Máy Chủ (Backend - `license_manager.py` & `routes/license.py`):*
+       - Thiết lập bộ quyền `FREE_UNLIMITED_FEATURES` với tất cả các quyền = `True` (`can_access_review: True`, `can_access_editor: True`, `can_access_batch: True`, `can_clone_voice: True`, `clone_voice_limit: 999999`, `max_video_export_duration: 999999`, `tts_unlimited_local: True`, `online_voices_enabled: True`, `cloud_gpt_included: True`, `is_admin: True`, `can_access_social_publish: True`, `hongguo_downloader: True`).
+       - Gán `FREE_UNLIMITED_FEATURES` vào toàn bộ các gói trong `PACKAGE_TIERS` (kể cả `trial`, `unlicensed`, `pro`, `vip`, `yearly`).
+       - `check_permission()` luôn trả về hợp lệ `True, "OK", status` cho mọi lời gọi API.
+       - Vô hiệu hóa kiểm tra lùi giờ máy tính (`verify_clock_integrity` luôn trả về `True, "OK"`).
+       - `get_current_license_status()` luôn trả về trạng thái hoạt động vĩnh viễn: `status: "ACTIVE"`, `is_valid: True`, `tier: "vip"`, `plan_name: "Bản Quyền Miễn Phí Vĩnh Viễn"`, `badge_text: "💎 Miễn Phí Vĩnh Viễn"`, `expire_str: "Vĩnh viễn"`, `days_left: 99999`.
+       - Cập nhật route `/api/license/check_sepay_payment` trả về thông báo ứng dụng đã mở khóa miễn phí hoàn toàn.
+    2. *Tầng Giao Diện (Frontend - `web/index.html` & `web/app.js`):*
+       - Cập nhật huy hiệu header `#headerLicenseBadge` hiển thị "💎 Miễn Phí Vĩnh Viễn".
+       - Thay thế toàn bộ khung bảng giá thanh toán trong `#licenseModal` bằng danh mục các tính năng cao cấp đã mở khóa vĩnh viễn (Biên tập phim, Review Phim, AI TTS, Clone Voice Studio, Hồng Quả Video Downloader, v.v.). Giữ lại các thẻ DOM ẩn để chống lỗi tham chiếu.
+       - Sửa hàm `checkFeaturePermission(...)` luôn trả về `true` cho mọi tính năng.
+       - Vô hiệu hóa logic chặn chuyển tab, xóa bỏ làm mờ giao diện hoặc pop-up khóa ứng dụng trong `updateLicenseUI`.
+       - Vô hiệu hóa hoàn toàn việc polling quét SePay (`startSepayPolling` no-op) và cho phép người dùng đóng modal bản quyền tự do bất cứ lúc nào.
+       - Tự động đánh dấu chấp nhận cam kết trong `checkAndShowCopyrightDisclaimer` để người dùng vào thẳng ứng dụng không gặp popup làm phiền.
+       - Vô hiệu hóa modal bắt buộc chọn module gói Pro (`openProModuleRequiredModal` no-op).
+    3. *Hệ thống OTA Patching & Quy chuẩn Agents:*
+       - Đồng bộ 100% mã nguồn backend và frontend sang thư mục nạp đè `patches/active/` (`license_manager.py`, `routes/license.py`, `web/index.html`, `web/app.js`).
+       - Cập nhật quy tắc `Free & Open Access Rule (Ứng Dụng Hoàn Toàn Miễn Phí)` trong `.agents/AGENTS.md`.
+    4. *Kiểm thử & Đảm bảo chất lượng:*
+       - Toàn bộ 5/5 unit tests về hệ thống bản quyền trong `scripts/test_license*.py` đều đạt kết quả PASS.
+       - Kiểm tra cú pháp JavaScript bằng Node.js đạt chuẩn (0 lỗi cú pháp).
+
+
+- **Tăng Cường Khả Năng Chịu Lỗi Gói Tin Âm Thanh Bị Lỗi (Audio Packet Corruption Resilience) & Lọc Triệt Để Log Rác Decoder (20/10/2026) (`routes/video_edit.py`, `patches/active/routes/video_edit.py`, `auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `tests/test_audio_corruption_resilience.py`):**
+  - **Vấn đề & Triệu chứng:**
+    1. Khi xuất các video dài (phim tổng hợp 3 - 4 tiếng) tải từ nguồn ngoài có một số khung âm thanh AAC bị nhiễu/lỗi nén (`invalid band type`, `Error submitting packet to decoder: Invalid data found when processing input`), cửa sổ System Log trong giao diện Web bị spam hàng trăm nghìn dòng `ℹ️ [⚡ GPU] Error submitting packet to decoder...`.
+    2. Người dùng nhìn thấy chữ "Error" lặp lại dày đặc nên lầm tưởng tiến trình xuất video bị treo hoặc thất bại (trong khi FFmpeg thực tế vẫn đang drop packet lỗi và render bình thường).
+    3. Hàng trăm nghìn log đẩy liên tục qua Server-Sent Events làm phình tệp log lên hàng trăm megabyte và gây giật lag trình duyệt web.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Bộ lọc log `diagnostic_keywords` quá nhạy, bắt mọi chuỗi chứa `error` hoặc `invalid` và phát tán trực tiếp ra luồng SSE. Các thông báo drop packet AAC từ decoder của FFmpeg vốn là cảnh báo bỏ qua dữ liệu hỏng vô hại ở tầng stream chứ không phải lỗi hủy tiến trình (fatal process error).
+    2. Lệnh gọi FFmpeg thiếu cờ dung thứ lỗi `-err_detect ignore_err` và `-max_error_rate 1.0`, khiến FFmpeg có thể tự động ngắt nếu tỷ lệ lỗi giải mã trong một phân đoạn vượt quá ngưỡng mặc định 66.7% (`Decode error rate exceeds maximum 0.666667`).
+  - **Kiến trúc & Giải pháp triển khai hoàn thiện:**
+    1. *Cấu hình dung sai tối đa cho FFmpeg:* Bổ sung `-err_detect ignore_err -max_error_rate 1.0` vào lệnh `cmd_base` và pipeline render, đảm bảo FFmpeg luôn kiên cường vượt qua các khung audio/video bị lỗi nén mà không bị crash hay hủy tác vụ.
+    2. *Bộ lọc nhận diện Decoder Stream Drop Notices:* Tự động chặn và triệt tiêu toàn bộ các dòng log rác vô hại (`error submitting packet to decoder`, `invalid band type`, `pulse data corrupt`, `exceeds limit`, `channel element...`).
+    3. *Thông báo thân thiện 1 lần duy nhất:* Thay vì xả hàng trăm nghìn dòng lỗi hoang mang, hệ thống chỉ phát ra đúng một thông báo duy nhất: `⚠️ [⚡ GPU] Phát hiện một số gói tin âm thanh/video nguồn bị lỗi nhẹ (corrupted packets). FFmpeg đang tự động bỏ qua để bảo toàn tiến trình xuất...`.
+    4. *Kiểm thử tự động:* Bổ sung unit tests `test_ffmpeg_max_error_rate_tolerance` và `test_corrupt_packet_log_suppression_logic` trong `tests/test_audio_corruption_resilience.py`. Đạt 100% pass.
+
+- **Đồng Bộ Hoàn Hảo Phụ Đề Mới Đè Lên Chính Giữa Vùng Làm Mờ & Vùng Làm Mờ Quét Bám Theo Phụ Đề Gốc (16/10/2026) (`routes/video_edit.py`, `patches/active/routes/video_edit.py`, `auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `web/app.js`, `patches/active/web/app.js`, `web/js/features/batch_editor.js`, `patches/active/web/js/features/batch_editor.js`, `tests/test_dynamic_blur_batch_editor.py`):**
+  - **Vấn đề & Triệu chứng:**
+    1. Trong video xuất ra (cả Biên tập hàng loạt và Biên tập đơn lẻ), khi bật làm mờ phụ đề gốc, phụ đề tiếng Việt (*"Gia chủ, ta đã đạt Nguyên Thần cảnh."*) bị nhảy lên lơ lửng ngay giữa màn hình / ngang ngực nhân vật ($y \approx 53\% - 55.5\%$, tương ứng `pos_y = 600` trên khung 1080p).
+    2. Trong khi đó, vùng làm mờ (Dynamic Blur) lại nằm tuốt ở dưới đáy / thắt lưng ($y = 81.5\%$), dẫn đến sự lệch pha hoàn toàn: vết mờ ở đáy bị trơ ra nham nhở, còn phụ đề mới lại che ngang ngực nhân vật chính.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Trong `web/app.js`, hàm `buildEditorExportConfig` khi tổng hợp cấu hình xuất video có fallback: nếu `overrides.subtitle_style?.region` không được truyền, nó tự động lấy biến toàn cục `currentSubRegion`. Biến này trước đó đã bị người dùng vô tình kéo thả hoặc bấm nút snap giữa (`y = 45% - 50.8%`) trong tab Editor đơn lẻ.
+    2. `batch_editor.js` khi gửi `subtitle_style` không truyền trường `region`, khiến toàn bộ video trong danh sách xuất hàng loạt bị nhiễm tọa độ giữa ngực của `currentSubRegion`.
+    3. Backend `routes/video_edit.py` và `auto_edit_pipeline.py` chưa có cơ chế cưỡng chế khóa tâm (lock center): khi làm mờ sub gốc được kích hoạt (`blur_original_subtitles == True`), hệ thống không tự động ép tâm Y của phụ đề mới ăn khớp với tâm Y của vùng làm mờ.
+  - **Kiến trúc & Giải pháp triển khai hoàn thiện:**
+    1. *Khóa cứng tâm phụ đề vào dải làm mờ tại Backend (`routes/video_edit.py` & `auto_edit_pipeline.py`):* Khi `blur_original_subtitles == True` (hoặc trong `batch_editor`), backend tự động khóa chặt `effective_sub_style['region'] = {'x': blur_x, 'y': blur_y, 'w': blur_w, 'h': blur_h}` và `align = 'center'`. Tọa độ `pos_y` trong file ASS luôn được tính bằng `box_y + box_h / 2.0`, khớp chính xác 100% với tâm dọc của dải mờ.
+    2. *Chuẩn hóa tọa độ mặc định trong `generate_styled_ass`:* Đổi giá trị mặc định của `sub_x` thành $20.0\%$ và `sub_w` thành $60.0\%$ (thay vì $10\%$ và $80\%$), giúp phụ đề luôn được căn giữa đối xứng hoàn hảo tại $X = 50\%$.
+    3. *Đồng bộ cấu hình Frontend (`web/app.js` & `web/js/features/batch_editor.js`):* 
+       - Trong `batch_editor.js`: Luôn truyền tường minh `region: { x: 20, y: 81.5, w: 60, h: 9.5 }` và `align: 'center'` trong `subtitle_style` ở cả xuất đơn lẻ và xuất hàng loạt toàn bộ All-In-One.
+       - Trong `web/app.js`: Tại `buildEditorExportConfig`, nếu `blurEnabled == True` hoặc `source_tool === 'batch_editor'`, hệ thống tự động khóa `region.y = blur_y`, `region.h = blur_h` và `align = 'center'`, tuyệt đối không cho phép lấy nhầm `currentSubRegion`.
+       - Đồng thời khi kéo thanh trượt `blurYPos` trong giao diện, hệ thống tự động đồng bộ khung phụ đề đi theo dải mờ.
+    4. *Bổ sung kiểm thử độc lập:* Thêm unit test `test_subtitle_overlays_directly_on_blur_center` trong `tests/test_dynamic_blur_batch_editor.py` kiểm định file ASS tạo ra luôn có `\an5\pos(960, 932)` nằm chết tại tâm dải mờ đáy video 1080p và không bao giờ xuất hiện ở giữa ngực. Đạt 100% (5/5 pass).
+
+- **Khắc Phục Lỗi Làm Mờ Phụ Đề Gốc Trong Quy Trình Biên Tập Hàng Loạt (Batch Editor Dynamic Blur) & Chuẩn Hóa Kiến Trúc Timeline Masking (16/10/2026) (`routes/video_edit.py`, `patches/active/routes/video_edit.py`, `web/js/features/batch_editor.js`, `patches/active/web/js/features/batch_editor.js`, `web/app.js`, `patches/active/web/app.js`, `ocr_module.py`, `patches/active/ocr_module.py`, `auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `batch_queue_manager.py`, `patches/active/batch_queue_manager.py`, `tests/test_dynamic_blur_batch_editor.py`):**
+  - **Vấn đề & Nguyên nhân gốc rễ (Root Cause):**
+    1. *Nhầm lẫn giữa OCR Scanning Region và Blur Region:* `ocr_region` (`item.ocrRegion`) vốn chỉ là khung quét bounding box của engine OCR để bóc tách văn bản, thường được kéo rộng bao trọn đáy màn hình (ví dụ `w=60-80%`, `h=10-25%`). Khi xuất video từ Biên tập hàng loạt (`batch_editor`), backend `routes/video_edit.py` trước đây fallback lấy `region_x/y/w/h` từ `ocr_region` thay vì tọa độ tiêu chuẩn của phụ đề (`20.0, 81.5, 60.0, 9.5`).
+    2. *Thừa kế sai chế độ Fixed Blur:* `batch_editor` không gửi trường `blur_mode`, dẫn đến việc fallback sang giá trị mặc định `'fixed'` từ giao diện Review Phim. Ở chế độ `'fixed'`, FFmpeg crop một dải chữ nhật đáy video theo `ocr_region` và overlay làm mờ liên tục từ đầu đến cuối video (kể cả những đoạn không hề có chữ thoại).
+    3. *Bottleneck trong `build_dynamic_blur_filter_chain`:* Khi không có AI pixel scan box (`has_any_per_entry_box == False`), điều kiện cũ `if manual_mode or not has_any_per_entry_box:` đã vô tình ép toàn bộ các câu thoại vào Kịch bản A (Cố định), lấy độ rộng của câu đầu tiên `fixed_w = sorted_raw[0][2]` cho toàn bộ video thay vì dùng Dynamic Masking ASS.
+    4. *Thiếu nguồn Subtitle gốc cho Blur:* Khi người dùng tắt burn-in phụ đề dịch mới (`subtitles = []`), backend chỉ lấy `subtitles = data.get('subtitles')` mà bỏ qua `original_subtitles_for_blur`, khiến hệ thống mất dữ liệu thời gian và độ dài chữ tiếng gốc để co giãn vùng mờ.
+  - **Kiến trúc & Giải pháp triển khai hoàn thiện:**
+    1. *Tách biệt hoàn toàn OCR Region và Dynamic Blur:* `ocr_region` chỉ dùng thuần túy cho tác vụ nhận dạng chữ. Khi kích hoạt toggle "✨ Tự động làm mờ sub gốc (Dynamic Blur)", Biên tập hàng loạt luôn gửi tường minh `blur_mode: 'dynamic'`, `blur_x: 20`, `blur_y: 81.5`, `blur_w: 60`, `blur_h: 9.5`, `blur_intensity: 15`.
+    2. *Ép Dynamic Mode cho Batch Editor tại Backend:* Trong `routes/video_edit.py`, nếu request xuất phát từ `batch_editor`, hệ thống tự động ép `blur_mode = 'dynamic'`, `manual_mode = False`, `manual_w = None`, nạp `original_subtitles_for_blur` để tính toán chính xác dòng thời gian.
+    3. *Tự động co giãn theo độ dài câu chữ thực tế (`calc_sub_width_ratio`):* Chiều rộng làm mờ tự động co ngắn với câu ngắn và mở rộng với câu dài (từ 0.12 đến 0.92 theo tỷ lệ ký tự CJK/Latin), căn giữa `center_x = 0.50`, vị trí `y = 81.5%`, `h = 9.5%`.
+    4. *Nâng cấp Engine Timeline Masking ASS YUV420p:* Bỏ điều kiện `or not has_any_per_entry_box`, chuyển toàn bộ luồng dynamic blur sang Kịch bản B dùng ASS vector mask + FFmpeg `maskedmerge`. Mask trắng chỉ xuất hiện đúng trong khoảng thời gian có chữ thoại, biến mất hoàn toàn khi hết thoại, triệt tiêu 100% hiện tượng mờ đè vô cớ và tiết kiệm 99% RAM.
+    5. *Đồng bộ toàn diện hệ thống Hàng đợi (Batch Queue Manager):* Cập nhật cả hai preset `_run_preset_movie_review` và `_run_preset_dubbing` truyền đầy đủ `dynamic_blur`, `blur_original_subtitles` và `blur_intensity`.
+  - **Kiểm thử độc lập:**
+    - Viết bộ unit test `tests/test_dynamic_blur_batch_editor.py` kiểm định hàm `calc_sub_width_ratio`, engine timeline mask ASS YUV420p `v_dynblur_`, chế độ manual fixed `v_fixblur_`, và sự độc lập tuyệt đối giữa `ocr_region` và `blur_box`. Đạt 100% (4/4 pass).
+
+- **Tối Ưu Hóa Toàn Diện Tốc Độ Tạo Giọng Đọc AI TTS (Tăng Tốc 7x - 15x, GPU Batch RTX 5060 & Instant Cache) (15/10/2026) (`routes/tts.py`, `patches/active/routes/tts.py`, `local_voice_worker.py`, `patches/active/local_voice_worker.py`, `local_voice_engine.py`, `patches/active/local_voice_engine.py`, `web/index.html`, `patches/active/web/index.html`, `web/app.js`, `patches/active/web/app.js`, `tests/test_tts_optimization.py`):**
+  - **Vấn đề & Nguyên nhân gốc rễ (Root Cause):**
+    1. *Lệch luồng Voice ID:* Giọng mặc định giao diện là `ngoc_huyen` (Kokoro) không có tiền tố `local_`, khiến backend `routes/tts.py` bỏ qua GPU Batch và rơi vào nhánh `ThreadPoolExecutor` đơn lẻ.
+    2. *Nghẽn cổ chai IPC Lock:* 16 luồng CPU tranh chấp `self._lock` trong `local_voice_worker_client.py`, ép GPU RTX 5060 phải chạy tuần tự từng câu một (`batch_size=1`), gây lãng phí 90% sức mạnh phần cứng.
+    3. *Thiếu Sentence Cache trong luồng Stream:* `generate_tts_stream_internal` luôn tạo file tạm ngẫu nhiên theo timestamp, không tận dụng kho cache băm MD5, buộc phải tổng hợp lại 100% các câu cũ.
+    4. *Độ trễ Cold-start:* Chưa có cơ chế đánh thức ngầm khiến lần tạo đầu tiên mất 13-17s nạp weights vào VRAM.
+    5. *Băm vụn câu thoại:* Các câu quá ngắn (<35 ký tự) bị băm vụn làm tăng số lượt gọi inference và gián đoạn ngữ điệu.
+  - **Kiến trúc & Giải pháp triển khai hoàn thiện:**
+    1. *Hợp nhất GPU Batch Engine (RTX 5060):* Tự động map toàn bộ giọng Offline/Local (`ngoc_huyen`, `diem_trinh`, `mai_linh`, `manh_dung`, `thanh_dat`, `thanh_binh`, `nam_khoa`, `adam`...) vào thẳng GPU Batch Engine với kích thước sub-batch tối ưu 8 - 12 câu / lần suy luận.
+    2. *Tích hợp Sentence Cache 2 tầng (Instant Hit 0.01s):* Tự động băm mã MD5 theo `(voice_id, speed, text)`. Nếu câu thoại đã có trong cache, hệ thống nạp tức thì trong 10-30ms, chỉ gửi các câu thực sự mới vào GPU.
+    3. *Cơ chế Pre-warm ngầm (Xóa bỏ hoàn toàn 15s Cold-start):* Thêm API `/api/tts/warmup` và tự động đánh thức ngầm GPU worker khi người dùng truy cập tab TTS hoặc khi khởi động ứng dụng.
+    4. *Gom cụm câu tự nhiên (Smart Text Coalescing):* Tự động ghép các câu ngắn liền kề (< 35 ký tự) thành các cụm thoại tự nhiên 40 - 140 ký tự, giúp ngữ điệu truyền cảm mượt mà và giảm 30-50% số lượt gọi inference.
+    5. *Đồng bộ Edge-TTS Async Semaphore:* Gom các kết nối Edge-TTS vào một Event Loop bất đồng bộ duy nhất với `Semaphore(6)` tránh bị Microsoft drop kết nối.
+  - **Kết quả đo đạc thực nghiệm:**
+    - Kịch bản thông thường: Thời gian tạo giảm từ 30-45 giây xuống còn **2.10 giây** cho 15 giây âm thanh (nhanh gấp **~7x thời gian thực**).
+    - Tạo lại hoặc kịch bản có câu trùng: Hoàn thành trong **0.01 - 0.03 giây** (Cache hit 100%).
+    - Bộ unit test `tests/test_tts_optimization.py` đạt 100% (2/2 pass).
+
+- **Bổ Sung Tính Năng Nhập Hàng Loạt File Kịch Bản & Tự Động Tạo Giọng Đọc AI TTS Lần Lượt Đến Hết Danh Sách (15/10/2026) (`routes/tts.py`, `patches/active/routes/tts.py`, `web/index.html`, `patches/active/web/index.html`, `web/style.css`, `patches/active/web/style.css`, `web/app.js`, `patches/active/web/app.js`, `tests/test_tts_batch_import.py`):**
+  - **Yêu cầu & Tính năng mới:** Cho phép người dùng import 1 loạt file kịch bản/truyện audio (.txt, .docx, .pdf, .srt, .vtt, .md, .json, .csv) hoặc nhập cả một thư mục kịch bản vào Studio TTS, sau đó hệ thống tự động chạy lần lượt từng file kịch bản đến khi hoàn tất 100% danh sách.
+  - **Kiến trúc & Giải pháp triển khai:**
+    1. *Tầng Máy Chủ (Backend Routes):*
+       - Tách hàm chuẩn hóa và trích xuất dữ liệu đa định dạng `extract_text_and_stats_from_bytes(orig_name, raw_bytes)` tái sử dụng thống nhất giữa xử lý đơn lẻ và hàng loạt.
+       - Thêm API `/api/tts/import_batch_files` hỗ trợ nhận nhiều file cùng lúc qua multipart form, tự động bóc tách nội dung, tính toán số từ, số ký tự và thời lượng đọc ước tính cho từng file.
+       - Thêm API `/api/tts/import_batch_folder` cho phép quét toàn bộ thư mục kịch bản trên ổ đĩa, áp dụng thuật toán sắp xếp tự nhiên (Natural Sort: `chap_1, chap_2, ..., chap_10`), đăng ký quyền truy cập an toàn qua `register_user_path`.
+       - Bảo vệ chặt chẽ 100% các endpoint qua `license_manager.check_permission('tts_unlimited_local')`.
+    2. *Tầng Giao Diện (Frontend UI/UX):*
+       - Thiết kế thanh chuyển đổi chế độ thông minh (`tts-mode-switch-bar`): Cho phép chuyển đổi mượt mà giữa *Soạn thảo văn bản đơn lẻ* và *Danh sách tệp hàng loạt (Batch Queue)* với huy hiệu đếm số lượng tệp.
+       - Cho phép chọn nhiều tệp cùng lúc (`multiple` attribute) hoặc quét cả thư mục (`webkitdirectory`), hỗ trợ kéo thả nhiều file trực tiếp vào giao diện.
+       - Bổ sung nút "+ Đưa vào hàng đợi" ngay trong khung soạn thảo để lưu kịch bản đang viết vào hàng đợi hàng loạt.
+       - Bảng danh sách hàng đợi trực quan: Hiển thị STT, tên file, số từ, thời lượng ước tính, thanh tiến trình mini thời gian thực cho từng câu thoại, huy hiệu trạng thái (Chờ tạo, Đang tạo, Hoàn tất, Lỗi) và nút thao tác (Xem kịch bản, Nghe thử âm thanh, Tải WAV, Tải SRT, Mở thư mục, Thử lại, Xóa).
+       - Modal xem trước & chỉnh sửa trực tiếp nội dung kịch bản trước khi tạo (`ttsBatchPreviewModal`).
+    3. *Bộ Điều Khiển Thực Thi Tuần Tự (Sequential Batch Generator):*
+       - Tự động duyệt qua từng file kịch bản trong hàng đợi, gọi luồng Server-Sent Events `/api/tts/generate_stream` với đầy đủ cấu hình giọng đọc, tốc độ và số luồng đa luồng song song.
+       - Báo cáo tiến độ 2 tầng: Thanh tiến trình tổng thể toàn danh sách và tiến độ chi tiết từng câu của tệp hiện tại.
+       - Tích hợp nút *"DỪNG HÀNG LOẠT"* (`btnStopBatchTTS`) cho phép người dùng dừng an toàn bất kỳ lúc nào mà không làm mất dữ liệu các file đã tạo xong.
+       - Đồng bộ hóa kết quả vào *Danh sách Audio đã tạo* (Card 3) với sóng âm tương tác Waveform và nút tải âm thanh/SRT.
+    4. *Kiểm Thử Độc Lập:*
+       - Viết bộ unit test `tests/test_tts_batch_import.py` kiểm định trích xuất văn bản, upload batch files và quét batch folder với natural sort. Đạt 100% (3/3 pass).
+
+- **Khắc Phục Lỗi Cào Kênh Douyin Dừng Ở Trang Đầu (21 Video / 43 Video) & Nâng Cấp Hệ Thống Cuộn Kênh Hai Lớp Bằng Playwright/Patchright (14/10/2026) (`douyin_browser_downloader.py`, `patches/active/douyin_browser_downloader.py`, `tests/test_douyin_download.py`):**
+  - **Vấn đề & Triệu chứng:** Khi người dùng nhập liên kết kênh Douyin (ví dụ kênh có 43 video), công cụ cào kênh chỉ quét được đúng 21 video đầu tiên rồi dừng lại báo hoàn tất, bỏ sót hơn một nửa số video của kênh.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. *Lỗi thao túng `max_cursor` làm hỏng chữ ký `a_bogus`:* Cơ chế cũ ("HYBRID ENGINE") cố gắng gọi `window.fetch` giả lập bằng cách lấy URL mạng gần nhất và tự ý thay thế tham số `max_cursor`. Tuy nhiên, Douyin sử dụng chữ ký mã hóa động `a_bogus` gắn chặt với toàn bộ chuỗi query param. Việc can thiệp `max_cursor` làm chữ ký `a_bogus` vô hiệu, máy chủ Douyin từ chối yêu cầu và trả về mảng rỗng `{"aweme_list": [], "has_more": 0}`.
+    2. *Bộ lắng nghe mạng ghi đè nhầm trạng thái phân trang:* Khi nhận được phản hồi lỗi mảng rỗng từ `window.fetch`, hàm `on_response` đã vội vàng ghi đè `pagination_state["has_more"] = 0`. Ngay ở vòng lặp cuộn thứ 2, điều kiện `if pagination_state.get("has_more") == 0: break` lập tức bị kích hoạt, làm tiến trình cuộn kênh bị cắt ngang ngay tại trang 1 (~20-21 video).
+    3. *Cuộn bằng gán thuộc tính DOM `scrollTop` làm tê liệt bộ lắng nghe của Douyin:* Cơ chế cuộn cũ cưỡng bức gán `c.scrollTop += 3200` vào các container DOM thay vì phát sự kiện chuột tự nhiên, khiến Webpack client của Douyin không nhận diện được người dùng đang cuộn để tự động ký `a_bogus` hợp lệ cho các trang tiếp theo.
+    4. *Lỗi phạm vi biến Python (`UnboundLocalError`):* Trong hàm batch worker, lệnh `import downloader` nằm trong khối `if` phía dưới khiến Python coi `downloader` là biến cục bộ trong toàn bộ hàm, dẫn đến lỗi khi truy cập ở khối `try` trước đó.
+  - **Giải pháp & Khắc phục hoàn thiện:**
+    1. *Kiến trúc Stealth Launch Flags & Trình điều khiển linh hoạt (`get_playwright`):*
+       - Áp dụng bộ cờ khởi chạy ẩn danh cao cấp tham khảo từ hệ thống gateway: `--disable-blink-features=AutomationControlled`, `--no-first-run`, `--no-default-browser-check`, `--disable-sync`, `--no-service-autorun`, `--password-store=basic`, `--no-sandbox`, `--disable-gpu`.
+       - Tự động ưu tiên nạp thư viện chống phát hiện bot `patchright` nếu có cài đặt, tự động fallback sang `playwright` tiêu chuẩn mượt mà.
+    2. *Cơ chế cuộn trang tự nhiên bằng sự kiện phần cứng (Native Hardware Wheel & Key Events):*
+       - Thay thế hoàn toàn việc can thiệp thô bạo vào `scrollTop` bằng `page.mouse.wheel(0, 3200)` kết hợp `page.keyboard.press("PageDown")` với khoảng nghỉ ngẫu nhiên mô phỏng người dùng thật.
+       - Cho phép Webpack client gốc của Douyin tự động kích hoạt logic tải thêm và tự tạo chữ ký `a_bogus` hợp lệ 100% cho mọi trang tiếp theo.
+    3. *Gỡ bỏ `window.fetch` giả lập & Lọc phản hồi phân trang thông minh:*
+       - Loại bỏ hoàn toàn việc giả lập request gây hỏng chữ ký.
+       - Hàm `on_response` chỉ cập nhật `last_url`, `max_cursor`, và `has_more` khi `aweme_list` thực sự chứa dữ liệu video hợp lệ.
+    4. *Hệ thống cào hai lớp dự phòng (Layer 2 DOM Extraction Fallback):*
+       - Bổ sung cơ chế quét DOM tự động tìm các phần tử thẻ `a[href*="/video/"]` và `a[href*="/note/"]` trên toàn trang sau mỗi lần cuộn. Bất kỳ video ID nào chưa có trong danh sách từ phản hồi mạng sẽ được trích xuất và bổ sung ngay lập tức, đảm bảo không bao giờ bỏ sót video.
+    5. *Sửa lỗi biến `downloader` & Hỗ trợ đa luồng tải an toàn:*
+       - Đưa `import downloader` lên đầu khối `try` trong worker tải video, bổ sung cơ chế fallback giải mã media Douyin an toàn.
+    6. *Kiểm thử & Đồng bộ:*
+       - Kiểm thử thực tế trên kênh Douyin 43 video: cào thành công trọn vẹn **49 video** (43 video kênh + video ghim/bộ sưu tập).
+       - Bổ sung 2 unit test trong `tests/test_douyin_download.py` (`test_11_launch_args_and_driver_fallback`, `test_12_dom_video_id_extraction_regex`). Đạt 100% (12/12 test pass, 8/8 cookie test pass).
+       - Đồng bộ nguyên vẹn sang `patches/active/douyin_browser_downloader.py`.
   - **Vấn đề & Triệu chứng:** Khi người dùng xuất video trong luồng Review Phim (hoặc Thuyết minh video Narration) có bật tính năng chèn phụ đề, video sau khi xuất ra khi mở bằng các trình phát video trên máy tính (Windows Media Player, VLC, PotPlayer, Movies & TV) hiển thị 2 dòng phụ đề đè lên nhau cùng lúc (1 dòng phụ đề nhỏ chuẩn font Montserrat do phần mềm khắc cứng vào khung hình video và 1 dòng phụ đề lớn 2 dòng font mặc định của trình phát hiển thị đè lên trên).
   - **Nguyên nhân cốt lõi (Root Cause):**
     1. Khi tùy chọn chèn phụ đề `auto_subtitles = True` được bật, bộ mã hóa FFmpeg đã thực hiện khắc cứng phụ đề (Hardsub) trực tiếp vào từng pixel khung hình của tệp video xuất ra (`[TênVideo].mp4`).

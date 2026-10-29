@@ -816,7 +816,10 @@ class BatchQueueManager:
             stem_config = {
                 'enabled': bool(stem_config),
                 'remove_vocals': bool(config.get('stem_remove_vocals', True)),
-                'keep_sfx': bool(config.get('stem_keep_sfx', True))
+                'keep_sfx': bool(config.get('stem_keep_sfx', True)),
+                'separate_bgm': bool(config.get('stem_separate_bgm', True)),
+                'keep_bgm': bool(config.get('stem_keep_bgm', True)),
+                'remove_bgm': bool(config.get('stem_remove_bgm', False))
             }
 
         blur_config = config.get('dynamic_blur')
@@ -861,6 +864,8 @@ class BatchQueueManager:
             'stem_separation': stem_config,
             'remove_original_vocals': bool(stem_config.get('remove_vocals', False)),
             'dynamic_blur': blur_config,
+            'blur_original_subtitles': bool(blur_config.get('enabled', True)),
+            'blur_intensity': int(blur_config.get('intensity', 15)),
             'logo': logo_config,
             'temp_dir': job_temp_dir,
             'skip_history_recording': True
@@ -919,6 +924,14 @@ class BatchQueueManager:
         voice_speed = float(config.get('voice_speed') or 1.0)
         orig_vol = float(config.get('original_volume') if config.get('original_volume') is not None else 15)
 
+        blur_config = config.get('dynamic_blur')
+        if not isinstance(blur_config, dict):
+            blur_config = {
+                'enabled': bool(blur_config if blur_config is not None else False),
+                'intensity': int(config.get('blur_intensity', 15)),
+                'use_ai_scan': bool(config.get('blur_use_ai_scan', True))
+            }
+
         payload = {
             'video_path': video_path,
             'srt_path': srt_path,
@@ -930,6 +943,9 @@ class BatchQueueManager:
             'aspect_ratio': config.get('aspect_ratio', 'original'),
             'auto_subtitles': bool(config.get('auto_subtitles', True)),
             'remove_original_vocals': bool(config.get('remove_original_vocals', False)),
+            'dynamic_blur': blur_config,
+            'blur_original_subtitles': bool(blur_config.get('enabled', False)),
+            'blur_intensity': int(blur_config.get('intensity', 15)),
             'bgm': config.get('bgm', {'enabled': False}),
             'temp_dir': job_temp_dir,
             'skip_history_recording': True

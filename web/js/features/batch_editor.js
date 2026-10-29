@@ -1575,6 +1575,32 @@ function setupBatchGlobalPresetEvents() {
         fontSelect.addEventListener('change', updateBatchSubLivePreview);
     }
 
+    // Dynamic blur position & auto align controls
+    const blurAutoAlign = document.getElementById('batch_blurAutoAlign');
+    const blurManualGroup = document.getElementById('batch_blurManualGroup');
+    const blurYSlider = document.getElementById('batch_blurYPos');
+    const blurYVal = document.getElementById('batch_blurYPosVal');
+    const blurHSlider = document.getElementById('batch_blurHeight');
+    const blurHVal = document.getElementById('batch_blurHeightVal');
+
+    if (blurAutoAlign && blurManualGroup) {
+        blurAutoAlign.addEventListener('change', () => {
+            blurManualGroup.style.display = blurAutoAlign.checked ? 'none' : 'grid';
+        });
+    }
+
+    if (blurYSlider && blurYVal) {
+        blurYSlider.addEventListener('input', () => {
+            blurYVal.textContent = blurYSlider.value + '%';
+        });
+    }
+
+    if (blurHSlider && blurHVal) {
+        blurHSlider.addEventListener('input', () => {
+            blurHVal.textContent = blurHSlider.value + '%';
+        });
+    }
+
     // 5. Video Editor Speed Slider
     const vidSpeedSlider = document.getElementById('batch_editToolSpeedSlider');
     const vidSpeedVal = document.getElementById('batch_editToolSpeedVal');
@@ -2410,7 +2436,11 @@ function collectBatchGlobalConfig() {
     const effectiveDucking = dubbingEnabled ? ducking : false;
     const effectiveStemEnabled = dubbingEnabled && stemEnabled;
 
-    return {
+        const blurAutoAlign = Boolean(document.getElementById('batch_blurAutoAlign')?.checked ?? true);
+        const blurY = parseFloat(document.getElementById('batch_blurYPos')?.value ?? 81.5);
+        const blurH = parseFloat(document.getElementById('batch_blurHeight')?.value ?? 9.5);
+
+        return {
         mode: dubbingEnabled ? 'tts' : 'none',
         fresh_run: freshRun,
         use_cache: !freshRun,
@@ -2450,9 +2480,19 @@ function collectBatchGlobalConfig() {
             outline: outline,
             bold: true,
             italic: false,
-            uppercase: false
+            uppercase: false,
+            region: { x: 20, y: blurY, w: 60, h: blurH },
+            align: 'center'
         },
         blur_original_subtitles: blurSubOriginal,
+        blur_mode: 'dynamic',
+        blur_intensity: 15,
+        blur_x: 20,
+        blur_y: blurY,
+        blur_w: 60,
+        blur_h: blurH,
+        blur_auto_align: blurAutoAlign,
+        blur_use_ai_scan: true,
         enable_subtitle_inspector: enableSubtitleInspector,
         inspector_speed_mode: inspectorSpeedMode,
         translation_clean_mode: translationCleanMode,
@@ -2609,6 +2649,19 @@ export async function startBatchExport() {
 
             const exportTargetLang = (globalConfig && (globalConfig.target_lang || globalConfig.voiceLang)) || 'vi';
             const validSubs = (itemSubs && itemSubs.length > 0) ? itemSubs : (item.subtitles || []);
+            const itemBlurY = (item.ocrRegion && typeof item.ocrRegion.y === 'number' && Math.abs(item.ocrRegion.y - 81.5) > 0.01)
+                ? item.ocrRegion.y
+                : (globalConfig.blur_y ?? 81.5);
+            const itemBlurH = (item.ocrRegion && typeof item.ocrRegion.h === 'number' && Math.abs(item.ocrRegion.h - 9.5) > 0.01)
+                ? item.ocrRegion.h
+                : (globalConfig.blur_h ?? 9.5);
+            const itemBlurX = (item.ocrRegion && typeof item.ocrRegion.x === 'number')
+                ? item.ocrRegion.x
+                : (globalConfig.blur_x ?? 20);
+            const itemBlurW = (item.ocrRegion && typeof item.ocrRegion.w === 'number')
+                ? item.ocrRegion.w
+                : (globalConfig.blur_w ?? 60);
+
             const itemOverrides = {
                 ...globalConfig,
                 target_lang: exportTargetLang,
@@ -2626,6 +2679,20 @@ export async function startBatchExport() {
                 subtitles_for_dubbing: validSubs,
                 original_subtitles_for_blur: item.originalSubtitles || validSubs,
                 ocr_region: item.ocrRegion,
+                subtitle_style: {
+                    ...(globalConfig.subtitle_style || {}),
+                    region: { x: itemBlurX, y: itemBlurY, w: itemBlurW, h: itemBlurH },
+                    align: 'center'
+                },
+                blur_original_subtitles: Boolean(globalConfig.blur_original_subtitles),
+                blur_mode: 'dynamic',
+                blur_x: itemBlurX,
+                blur_y: itemBlurY,
+                blur_w: itemBlurW,
+                blur_h: itemBlurH,
+                blur_auto_align: Boolean(globalConfig.blur_auto_align ?? true),
+                blur_intensity: globalConfig.blur_intensity || 15,
+                blur_use_ai_scan: true,
                 custom_overlay_layers: (Array.isArray(window.batchCustomOverlayLayers) && window.batchCustomOverlayLayers.length > 0)
                     ? window.batchCustomOverlayLayers.filter(l => l.visible !== false)
                     : (globalConfig.custom_overlay_layers || [])
@@ -3561,6 +3628,42 @@ export async function runOcrScanOnItem(item, signal, onProgress) {
 
     item.subtitles = subs;
     item.originalSubtitles = subs;
+
+    // Tự động nạp tọa độ quét AI Pixel boxes (ai_blur_boxes.json) nếu có
+    try {
+        const boxesRes = await fetch(`/api/editor/cache_ai_boxes?video_path=${encodeURIComponent(item.videoPath)}`);
+        if (boxesRes.ok) {
+            const boxesData = await boxesRes.json();
+            if (boxesData.success && Array.isArray(boxesData.boxes) && boxesData.boxes.length > 0) {
+                let boxApplied = 0;
+                boxesData.boxes.forEach(bItem => {
+                    const idx = bItem.index;
+                    const b = bItem.box || (Array.isArray(bItem) && bItem.length >= 5 ? {
+                        x_pct: (bItem[3] * 100),
+                        w_pct: (bItem[4] * 100),
+                        y_pct: bItem.length >= 7 && bItem[5] != null ? (bItem[5] * 100) : undefined,
+                        h_pct: bItem.length >= 7 && bItem[6] != null ? (bItem[6] * 100) : undefined,
+                        visual_start: bItem.length >= 9 ? bItem[7] : (bItem.length >= 7 ? bItem[5] : undefined),
+                        visual_end: bItem.length >= 9 ? bItem[8] : (bItem.length >= 7 ? bItem[6] : undefined)
+                    } : null);
+                    if (subs[idx] && b) {
+                        subs[idx].aiBox = b;
+                        if (b.visual_start !== undefined) subs[idx].visual_start = b.visual_start;
+                        if (b.visual_end !== undefined) subs[idx].visual_end = b.visual_end;
+                        boxApplied++;
+                    }
+                });
+                if (boxApplied > 0) {
+                    appendLog(`[${timeNow()}] > 🎯 [Dynamic Blur] Đã tự động nạp tọa độ AI Pixel (${boxApplied} câu) cho: ${item.videoName}`, 'info');
+                }
+            }
+        }
+    } catch(e) {
+        console.warn('[Batch Editor] Không thể nạp cache AI boxes:', e);
+    }
+
+    item.subtitles = subs;
+    item.originalSubtitles = JSON.parse(JSON.stringify(subs));
 
     // Tự động rà soát & bù câu thoại bị sót bằng AI Subtitle Inspector Bot nếu bật
     const enableInspector = Boolean(document.getElementById('batch_enableSubtitleInspector')?.checked ?? true);
@@ -4590,6 +4693,19 @@ export async function startBatchAllInOnePipeline() {
             const outName = `[Subbed] ${item.videoName.replace(/\.[^/.]+$/, '')}.mp4`;
 
             const subtitlesEnabled = Boolean(globalConfig.subtitles_enabled);
+            const itemBlurY = (item.ocrRegion && typeof item.ocrRegion.y === 'number' && Math.abs(item.ocrRegion.y - 81.5) > 0.01)
+                ? item.ocrRegion.y
+                : (globalConfig.blur_y ?? 81.5);
+            const itemBlurH = (item.ocrRegion && typeof item.ocrRegion.h === 'number' && Math.abs(item.ocrRegion.h - 9.5) > 0.01)
+                ? item.ocrRegion.h
+                : (globalConfig.blur_h ?? 9.5);
+            const itemBlurX = (item.ocrRegion && typeof item.ocrRegion.x === 'number')
+                ? item.ocrRegion.x
+                : (globalConfig.blur_x ?? 20);
+            const itemBlurW = (item.ocrRegion && typeof item.ocrRegion.w === 'number')
+                ? item.ocrRegion.w
+                : (globalConfig.blur_w ?? 60);
+
             const itemOverrides = {
                 ...globalConfig,
                 target_lang: targetLang,
@@ -4607,6 +4723,20 @@ export async function startBatchAllInOnePipeline() {
                 subtitles_for_dubbing: (subs && subs.length > 0) ? subs : undefined,
                 original_subtitles_for_blur: item.originalSubtitles || subs,
                 ocr_region: item.ocrRegion,
+                subtitle_style: {
+                    ...(globalConfig.subtitle_style || {}),
+                    region: { x: itemBlurX, y: itemBlurY, w: itemBlurW, h: itemBlurH },
+                    align: 'center'
+                },
+                blur_original_subtitles: Boolean(globalConfig.blur_original_subtitles),
+                blur_mode: 'dynamic',
+                blur_x: itemBlurX,
+                blur_y: itemBlurY,
+                blur_w: itemBlurW,
+                blur_h: itemBlurH,
+                blur_auto_align: Boolean(globalConfig.blur_auto_align ?? true),
+                blur_intensity: globalConfig.blur_intensity || 15,
+                blur_use_ai_scan: true,
                 custom_overlay_layers: (Array.isArray(window.batchCustomOverlayLayers) && window.batchCustomOverlayLayers.length > 0)
                     ? window.batchCustomOverlayLayers.filter(l => l.visible !== false)
                     : (globalConfig.custom_overlay_layers || [])

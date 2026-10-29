@@ -135,7 +135,13 @@ export class VideoStudioSuite {
 
         // Xóa toolbar cũ nếu có
         let oldToolbar = card ? card.querySelector(`.studio-docked-toolbar[data-player="${this.type}"]`) : null;
-        if (oldToolbar) oldToolbar.remove();
+        if (oldToolbar) {
+            const badge = oldToolbar.querySelector('#previewVoiceBadge');
+            if (badge && card) {
+                card.appendChild(badge);
+            }
+            oldToolbar.remove();
+        }
         let oldFloating = this.container.querySelector('.studio-floating-toolbar');
         if (oldFloating) oldFloating.remove();
 
@@ -173,35 +179,47 @@ export class VideoStudioSuite {
                 </button>
             </div>
 
-            <!-- Right: Visual Quick Toggles -->
-            <div class="studio-tool-group studio-action-group">
-                <button type="button" class="studio-btn icon-btn ${this.state.flipH ? 'active' : ''}" id="${this.type}_btnFlipH" title="Lật gương ngang (Flip Horizontal - Chống bản quyền)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-                </button>
-                <button type="button" class="studio-btn icon-btn" id="${this.type}_btnRotate" title="Xoay 90 độ (Rotate)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-                </button>
-                <button type="button" class="studio-btn icon-btn ${this.state.safeZone ? 'active' : ''}" id="${this.type}_btnSafeZone" title="Bật/Tắt Lưới vùng an toàn TikTok/Reels Safe Zone">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                </button>
-                <button type="button" class="studio-btn icon-btn ${this.state.grid3x3 ? 'active' : ''}" id="${this.type}_btnGrid" title="Bật/Tắt Lưới 3x3 Tỷ lệ vàng (Rule of Thirds)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg>
-                </button>
-                <button type="button" class="studio-btn icon-btn" id="${this.type}_btnSnapshot" title="📸 Chụp ảnh khung hình hiện tại (Snapshot Thumbnail)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                </button>
+            <!-- Right: Voice AI & Visual Quick Toggles -->
+            <div class="studio-tool-group studio-right-group" style="display: flex; align-items: center; gap: 6px;">
+                <div id="studioVoiceBadgeSlot_${this.type}" class="studio-voice-slot" style="display: inline-flex; align-items: center;"></div>
+                <div class="studio-tool-group studio-action-group">
+                    <button type="button" class="studio-btn icon-btn ${this.state.flipH ? 'active' : ''}" id="${this.type}_btnFlipH" title="Lật gương ngang (Flip Horizontal - Chống bản quyền)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                    </button>
+                    <button type="button" class="studio-btn icon-btn" id="${this.type}_btnRotate" title="Xoay 90 độ (Rotate)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                    </button>
+                    <button type="button" class="studio-btn icon-btn ${this.state.safeZone ? 'active' : ''}" id="${this.type}_btnSafeZone" title="Bật/Tắt Lưới vùng an toàn TikTok/Reels Safe Zone">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    </button>
+                    <button type="button" class="studio-btn icon-btn ${this.state.grid3x3 ? 'active' : ''}" id="${this.type}_btnGrid" title="Bật/Tắt Lưới 3x3 Tỷ lệ vàng (Rule of Thirds)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg>
+                    </button>
+                    <button type="button" class="studio-btn icon-btn" id="${this.type}_btnSnapshot" title="📸 Chụp ảnh khung hình hiện tại (Snapshot Thumbnail)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    </button>
+                </div>
             </div>
         `;
 
         // Đặt cố định ngay trên player-controls (trên thanh điều chỉnh thời gian)
-        if (this.playerControls && card) {
-            card.insertBefore(toolbar, this.playerControls);
+        if (this.playerControls && this.playerControls.parentNode) {
+            this.playerControls.parentNode.insertBefore(toolbar, this.playerControls);
         } else if (card) {
             card.appendChild(toolbar);
-        } else {
-            this.container.after(toolbar);
+        } else if (this.container && this.container.parentNode) {
+            this.container.parentNode.insertBefore(toolbar, this.container.nextSibling);
         }
         this.toolbarEl = toolbar;
+
+        // Nếu là player editor, đưa nút Voice AI lên slot ở hàng trên
+        if (this.type === 'editor') {
+            const slot = toolbar.querySelector(`#studioVoiceBadgeSlot_${this.type}`);
+            const voiceBadge = document.getElementById('previewVoiceBadge');
+            if (slot && voiceBadge) {
+                slot.appendChild(voiceBadge);
+            }
+        }
     }
 
     enhancePlayerControls() {
@@ -1222,8 +1240,14 @@ export const videoStudioInstances = {
     editor: null,
     review: null
 };
+if (typeof window !== 'undefined') {
+    window.videoStudioInstances = videoStudioInstances;
+}
 
 export function initVideoStudioSuite() {
+    if (typeof window !== 'undefined') {
+        window.videoStudioInstances = videoStudioInstances;
+    }
     // 1. Initialize for Editor Tab
     const editorContainer = document.getElementById('videoContainer');
     const editorVideo = document.getElementById('videoPlayer');
@@ -1247,6 +1271,12 @@ export function initVideoStudioSuite() {
                 if (editMirror && typeof config.flipH === 'boolean') {
                     editMirror.checked = config.flipH;
                 }
+                if (typeof config.panX === 'number' && typeof window !== 'undefined') {
+                    window.videoPanX = config.panX;
+                }
+                if (typeof config.panY === 'number' && typeof window !== 'undefined') {
+                    window.videoPanY = config.panY;
+                }
                 if (typeof window !== 'undefined' && typeof config.zoom === 'number') {
                     window.currentVideoZoom = config.zoom;
                     const zPct = Math.round(config.zoom * 100);
@@ -1255,6 +1285,14 @@ export function initVideoStudioSuite() {
                     if (editZoomSlider) editZoomSlider.value = zPct;
                     if (editZoomVal) {
                         editZoomVal.textContent = (Math.abs(config.zoom - 1.0) < 0.01) ? '100% (Gốc)' : `${zPct}%`;
+                    }
+                    const fZoomVal = document.getElementById('floatingZoomValue');
+                    if (fZoomVal) {
+                        fZoomVal.textContent = (Math.abs(config.zoom - 1.0) < 0.01) ? '100% (Fit)' : `${zPct}%`;
+                    }
+                    const pzSelect = document.getElementById('playerZoomSelect');
+                    if (pzSelect) {
+                        pzSelect.value = config.zoom.toString();
                     }
                     document.querySelectorAll('.edit-zoom-preset-btn').forEach(btn => {
                         const pz = parseInt(btn.dataset.zoom);
@@ -1292,7 +1330,16 @@ export function initVideoStudioSuite() {
                     window.reviewAspectRatio = config.aspectRatio;
                 }
 
+                if (typeof config.panX === 'number' && typeof window !== 'undefined') {
+                    window.reviewVideoPanX = config.panX;
+                }
+                if (typeof config.panY === 'number' && typeof window !== 'undefined') {
+                    window.reviewVideoPanY = config.panY;
+                }
                 if (typeof config.zoom === 'number') {
+                    if (typeof window !== 'undefined') {
+                        window.reviewVideoZoom = config.zoom;
+                    }
                     const zPct = Math.round(config.zoom * 100);
                     const rZoomSlider = document.getElementById('reviewVideoZoom');
                     const rZoomVal = document.getElementById('reviewVideoZoomVal');

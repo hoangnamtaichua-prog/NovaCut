@@ -1540,8 +1540,8 @@ def scan_subtitles_pixel_boxes_generator(video_path, region, subtitle_entries):
             b = boxes_by_idx[idx]
             x_ratio = float(b.get('x_pct', 20.0)) / 100.0
             w_ratio = float(b.get('w_pct', 60.0)) / 100.0
-            y_ratio = float(b.get('y_pct', region.get('y', 81.5))) / 100.0
-            h_ratio = float(b.get('h_pct', region.get('h', 9.5))) / 100.0
+            y_ratio = float(b.get('y_pct', 81.5)) / 100.0
+            h_ratio = float(b.get('h_pct', 9.5)) / 100.0
             vis_s = float(b.get('visual_start', s))
             vis_e = float(b.get('visual_end', e))
             refined.append((s, e, txt, x_ratio, w_ratio, y_ratio, h_ratio, vis_s, vis_e))

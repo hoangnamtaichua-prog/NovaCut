@@ -67,6 +67,7 @@ SECRET_SALT = os.environ.get("NOVACUT_LOCAL_INTEGRITY_KEY", "").strip() or DEFAU
 
 _last_qr_generation_epoch = 0
 _quota_lock = threading.RLock()
+_license_cache_lock = threading.RLock()
 _processed_tx_lock = threading.RLock()
 _trial_registration_lock = threading.RLock()
 _last_trial_registration_attempt = 0
@@ -90,7 +91,36 @@ def _atomic_write_json(path, payload):
             json.dump(payload, handle, ensure_ascii=False)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+
+        # Gỡ cờ Read-only nếu file đích đang bị Windows gán thuộc tính chỉ đọc
+        if os.path.exists(path):
+            try:
+                import stat
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+            except Exception:
+                pass
+
+        # Trên Windows, os.replace có thể gặp lỗi tạm thời [WinError 5] Access is denied
+        # hoặc [WinError 32] khi file đích đang được luồng khác đọc hoặc Defender quét.
+        # Sử dụng retry loop với backoff để đảm bảo tính ổn định tối đa.
+        max_retries = 6
+        for attempt in range(max_retries):
+            try:
+                os.replace(temp_path, path)
+                break
+            except (PermissionError, OSError) as err:
+                if attempt < max_retries - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                else:
+                    # Fallback an toàn: nếu os.replace vẫn bị kẹt trên Windows, ghi trực tiếp vào file
+                    try:
+                        with open(path, 'w', encoding='utf-8') as direct_handle:
+                            json.dump(payload, direct_handle, ensure_ascii=False)
+                            direct_handle.flush()
+                            os.fsync(direct_handle.fileno())
+                        break
+                    except Exception:
+                        raise err
     finally:
         if os.path.exists(temp_path):
             try:
@@ -230,45 +260,10 @@ _DISCLAIMER_REG_PATH = r"Software\AMS_MovieShorts\Security"
 
 def is_disclaimer_accepted() -> bool:
     """
-    Kiểm tra xem máy tính này đã từng xác nhận cam kết bản quyền hay chưa.
-    Sử dụng cơ chế đa tầng (Registry Windows -> Marker File -> Config JSON)
-    đảm bảo không bao giờ bị mất hoặc hiện lại trên cùng 1 máy tính.
+    (Chế độ Miễn Phí Vĩnh Viễn)
+    Cam kết bản quyền được coi là luôn được chấp thuận mặc định để người dùng trải nghiệm mượt mà.
     """
-    # 1. Kiểm tra Windows Registry (bền vững nhất trên Windows)
-    if os.name == 'nt':
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _DISCLAIMER_REG_PATH, 0, winreg.KEY_READ) as key:
-                val, _ = winreg.QueryValueEx(key, "DisclaimerAccepted")
-                if str(val).strip() in ("1", "true", "True"):
-                    return True
-        except Exception:
-            pass
-
-    # 2. Kiểm tra Marker File bí mật trong DATA_DIR hoặc ROOT_DIR
-    for mpath in (DISCLAIMER_MARKER_FILE, os.path.join(ROOT_DIR, '.disclaimer_accepted')):
-        try:
-            if os.path.exists(mpath):
-                with open(mpath, 'r', encoding='utf-8') as f:
-                    content = f.read().strip().lower()
-                    if content in ('1', 'true'):
-                        return True
-        except Exception:
-            pass
-
-    # 3. Kiểm tra trong CONFIG_FILE (%APPDATA%/NovaCut/license_config.json) hoặc legacy_cfg
-    for cpath in (CONFIG_FILE, os.path.join(ROOT_DIR, 'license_config.json')):
-        try:
-            if os.path.exists(cpath):
-                with open(cpath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if bool(data.get('disclaimer_accepted')):
-                        set_disclaimer_accepted(True)
-                        return True
-        except Exception:
-            pass
-
-    return False
+    return True
 
 
 def set_disclaimer_accepted(accepted: bool = True) -> None:
@@ -394,22 +389,9 @@ def get_trusted_network_time():
 
 def verify_clock_integrity(cached_payload):
     """
-    (Anti-Clock Rollback)
-    Kiểm tra xem đồng hồ hệ thống Windows có bị chỉnh lùi về quá khứ hay không.
-    So sánh giữa thời gian máy hiện tại với last_seen_epoch đã lưu và ký số HMAC.
-    Thực hiện kiểm tra tức thì (instant) không block luồng mạng.
+    (Chế độ Miễn Phí Vĩnh Viễn)
+    Không kiểm tra đồng hồ và không bao giờ khóa ứng dụng vì lý do giờ hệ thống.
     """
-    if not cached_payload:
-        return True, "OK"
-
-    now_epoch = int(time.time())
-    last_seen = int(cached_payload.get('last_seen_epoch', 0))
-
-    # Nếu thời gian máy tính bị chỉnh lùi quá 300 giây (5 phút) so với mốc thời gian đã ghi nhận trước đó
-    if last_seen > 0 and now_epoch < (last_seen - 300):
-        err_msg = f"Phát hiện đồng hồ hệ thống bị chỉnh lùi về quá khứ! (Hiện tại: {now_epoch}, Mốc ghi nhận: {last_seen}). Vui lòng chỉnh lại ngày giờ chính xác hoặc kết nối Internet để đồng bộ."
-        return False, err_msg
-
     return True, "OK"
 
 
@@ -618,89 +600,91 @@ def _sign_payload(data_dict):
 
 def save_local_license_cache(license_data):
     """Lưu trữ chứng chỉ bản quyền mã hóa kèm chữ ký HMAC và mốc thời gian last_seen_epoch."""
-    try:
-        hwid = get_hardware_id()
-        now_epoch = int(time.time())
-        last_seen = int(license_data.get('last_seen_epoch') or now_epoch)
+    with _license_cache_lock:
+        try:
+            hwid = get_hardware_id()
+            now_epoch = int(time.time())
+            last_seen = int(license_data.get('last_seen_epoch') or now_epoch)
 
-        payload = {
-            "hwid": hwid,
-            "tier": license_data.get('tier', 'unlicensed'),
-            "status": str(license_data.get('status') or '').upper(),
-            "plan_name": license_data.get('plan_name', 'Chưa kích hoạt'),
-            "expire_epoch": int(license_data.get('expire_epoch', 0)),
-            "expire_str": license_data.get('expire_str', ''),
-            "activated_at": int(license_data.get('activated_at', now_epoch)),
-            "last_seen_epoch": max(last_seen, now_epoch),
-            "user_name": license_data.get('user_name', ''),
-            "phone_zalo": license_data.get('phone_zalo', ''),
-            "pro_selected_module": license_data.get('pro_selected_module', None),
-            "features": license_data.get('features', {})
-        }
-        sig = _sign_payload(payload)
-        if not sig:
-            print("Không thể lưu cache bản quyền: thiếu NOVACUT_LOCAL_INTEGRITY_KEY")
+            payload = {
+                "hwid": hwid,
+                "tier": license_data.get('tier', 'unlicensed'),
+                "status": str(license_data.get('status') or '').upper(),
+                "plan_name": license_data.get('plan_name', 'Chưa kích hoạt'),
+                "expire_epoch": int(license_data.get('expire_epoch', 0)),
+                "expire_str": license_data.get('expire_str', ''),
+                "activated_at": int(license_data.get('activated_at', now_epoch)),
+                "last_seen_epoch": max(last_seen, now_epoch),
+                "user_name": license_data.get('user_name', ''),
+                "phone_zalo": license_data.get('phone_zalo', ''),
+                "pro_selected_module": license_data.get('pro_selected_module', None),
+                "features": license_data.get('features', {})
+            }
+            sig = _sign_payload(payload)
+            if not sig:
+                print("Không thể lưu cache bản quyền: thiếu NOVACUT_LOCAL_INTEGRITY_KEY")
+                return False
+            envelope = {
+                "p": base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii'),
+                "s": sig
+            }
+            _atomic_write_json(LICENSE_CACHE_FILE, envelope)
+            return True
+        except Exception as e:
+            print(f"Lỗi lưu cache bản quyền: {e}")
             return False
-        envelope = {
-            "p": base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii'),
-            "s": sig
-        }
-        _atomic_write_json(LICENSE_CACHE_FILE, envelope)
-        return True
-    except Exception as e:
-        print(f"Lỗi lưu cache bản quyền: {e}")
-        return False
 
 
 def load_local_license_cache(auto_update_clock=True):
     """Đọc và giải mã chứng chỉ bản quyền offline, xác thực chữ ký HMAC và kiểm tra Anti-Clock Rollback."""
-    target_file = LICENSE_CACHE_FILE
-    if not os.path.exists(target_file):
-        fallback = os.path.join(ROOT_DIR, '.license.dat')
-        if os.path.exists(fallback):
-            target_file = fallback
-        else:
-            return None
-    try:
-        with open(target_file, 'r', encoding='utf-8') as f:
-            envelope = json.load(f)
-        b64_p = envelope.get('p', '')
-        sig = envelope.get('s', '')
-        raw_json = base64.b64decode(b64_p).decode('utf-8')
-        payload = json.loads(raw_json)
-        
-        # 1. Kiểm tra chữ ký HMAC
-        expected_sig = _sign_payload(payload)
-        if not expected_sig or not hmac.compare_digest(sig, expected_sig):
-            print("⚠️ Chữ ký bản quyền không hợp lệ (Dữ liệu đã bị can thiệp)!")
-            return None
-        
-        # 2. Kiểm tra HWID khớp với máy hiện tại
-        current_hwid = get_hardware_id()
-        if payload.get('hwid') != current_hwid:
-            print("⚠️ Mã máy HWID không khớp với chứng chỉ bản quyền!")
-            return None
-
-        # 3. Anti-Clock Rollback: Kiểm tra đồng hồ hệ thống có bị chỉnh lùi về quá khứ không
-        is_clock_valid, clock_msg = verify_clock_integrity(payload)
-        if not is_clock_valid:
-            print(f"⚠️ {clock_msg}")
-            payload['clock_tampered'] = True
-            payload['clock_error'] = clock_msg
-            return payload
-        else:
-            payload['clock_tampered'] = False
-            # Tự động cập nhật mốc thời gian mới nếu đã trôi qua hơn 30 phút
-            now_epoch = int(time.time())
-            last_seen = int(payload.get('last_seen_epoch', 0))
-            if auto_update_clock and (now_epoch - last_seen > 1800):
-                payload['last_seen_epoch'] = now_epoch
-                save_local_license_cache(payload)
+    with _license_cache_lock:
+        target_file = LICENSE_CACHE_FILE
+        if not os.path.exists(target_file):
+            fallback = os.path.join(ROOT_DIR, '.license.dat')
+            if os.path.exists(fallback):
+                target_file = fallback
+            else:
+                return None
+        try:
+            with open(target_file, 'r', encoding='utf-8') as f:
+                envelope = json.load(f)
+            b64_p = envelope.get('p', '')
+            sig = envelope.get('s', '')
+            raw_json = base64.b64decode(b64_p).decode('utf-8')
+            payload = json.loads(raw_json)
             
-        return payload
-    except Exception as e:
-        print(f"Lỗi đọc cache bản quyền: {e}")
-        return None
+            # 1. Kiểm tra chữ ký HMAC
+            expected_sig = _sign_payload(payload)
+            if not expected_sig or not hmac.compare_digest(sig, expected_sig):
+                print("⚠️ Chữ ký bản quyền không hợp lệ (Dữ liệu đã bị can thiệp)!")
+                return None
+            
+            # 2. Kiểm tra HWID khớp với máy hiện tại
+            current_hwid = get_hardware_id()
+            if payload.get('hwid') != current_hwid:
+                print("⚠️ Mã máy HWID không khớp với chứng chỉ bản quyền!")
+                return None
+
+            # 3. Anti-Clock Rollback: Kiểm tra đồng hồ hệ thống có bị chỉnh lùi về quá khứ không
+            is_clock_valid, clock_msg = verify_clock_integrity(payload)
+            if not is_clock_valid:
+                print(f"⚠️ {clock_msg}")
+                payload['clock_tampered'] = True
+                payload['clock_error'] = clock_msg
+                return payload
+            else:
+                payload['clock_tampered'] = False
+                # Tự động cập nhật mốc thời gian mới nếu đã trôi qua hơn 30 phút
+                now_epoch = int(time.time())
+                last_seen = int(payload.get('last_seen_epoch', 0))
+                if auto_update_clock and (now_epoch - last_seen > 1800):
+                    payload['last_seen_epoch'] = now_epoch
+                    save_local_license_cache(payload)
+                
+            return payload
+        except Exception as e:
+            print(f"Lỗi đọc cache bản quyền: {e}")
+            return None
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -725,57 +709,59 @@ def load_token_quota_stats():
         default_stats["total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
         default_stats["integrity_error"] = "Thiếu NOVACUT_LOCAL_INTEGRITY_KEY"
         return default_stats
-    if not os.path.exists(TOKEN_CACHE_FILE):
-        return default_stats
-    try:
-        with open(TOKEN_CACHE_FILE, 'r', encoding='utf-8') as f:
-            envelope = json.load(f)
-        b64_p = envelope.get('p', '')
-        sig = envelope.get('s', '')
-        raw_json = base64.b64decode(b64_p).decode('utf-8')
-        payload = json.loads(raw_json)
-
-        expected_sig = _sign_payload(payload)
-        if not expected_sig or not hmac.compare_digest(sig, expected_sig):
-            print("⚠️ Chữ ký bộ đếm Token không hợp lệ!")
-            default_stats["prompt_tokens"] = MAX_PROMPT_TOKENS
-            default_stats["completion_tokens"] = MAX_COMPLETION_TOKENS
-            default_stats["total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
-            default_stats["integrity_error"] = "Chữ ký bộ đếm không hợp lệ"
+    with _quota_lock:
+        if not os.path.exists(TOKEN_CACHE_FILE):
             return default_stats
+        try:
+            with open(TOKEN_CACHE_FILE, 'r', encoding='utf-8') as f:
+                envelope = json.load(f)
+            b64_p = envelope.get('p', '')
+            sig = envelope.get('s', '')
+            raw_json = base64.b64decode(b64_p).decode('utf-8')
+            payload = json.loads(raw_json)
 
-        payload["max_prompt_tokens"] = MAX_PROMPT_TOKENS
-        payload["max_completion_tokens"] = MAX_COMPLETION_TOKENS
-        payload["max_total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
-        payload["total_tokens"] = payload.get("prompt_tokens", 0) + payload.get("completion_tokens", 0)
-        return payload
-    except Exception as e:
-        print(f"Lỗi đọc token quota: {e}")
-        return default_stats
+            expected_sig = _sign_payload(payload)
+            if not expected_sig or not hmac.compare_digest(sig, expected_sig):
+                print("⚠️ Chữ ký bộ đếm Token không hợp lệ!")
+                default_stats["prompt_tokens"] = MAX_PROMPT_TOKENS
+                default_stats["completion_tokens"] = MAX_COMPLETION_TOKENS
+                default_stats["total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
+                default_stats["integrity_error"] = "Chữ ký bộ đếm không hợp lệ"
+                return default_stats
+
+            payload["max_prompt_tokens"] = MAX_PROMPT_TOKENS
+            payload["max_completion_tokens"] = MAX_COMPLETION_TOKENS
+            payload["max_total_tokens"] = MAX_PROMPT_TOKENS + MAX_COMPLETION_TOKENS
+            payload["total_tokens"] = payload.get("prompt_tokens", 0) + payload.get("completion_tokens", 0)
+            return payload
+        except Exception as e:
+            print(f"Lỗi đọc token quota: {e}")
+            return default_stats
 
 
 def save_token_quota_stats(stats):
     """Lưu trữ thống kê token kèm chữ ký số HMAC."""
-    try:
-        payload = {
-            "prompt_tokens": int(stats.get("prompt_tokens", 0)),
-            "completion_tokens": int(stats.get("completion_tokens", 0)),
-            "total_tokens": int(stats.get("prompt_tokens", 0)) + int(stats.get("completion_tokens", 0)),
-            "requests": int(stats.get("requests", 0)),
-            "last_updated": int(time.time())
-        }
-        sig = _sign_payload(payload)
-        if not sig:
+    with _quota_lock:
+        try:
+            payload = {
+                "prompt_tokens": int(stats.get("prompt_tokens", 0)),
+                "completion_tokens": int(stats.get("completion_tokens", 0)),
+                "total_tokens": int(stats.get("prompt_tokens", 0)) + int(stats.get("completion_tokens", 0)),
+                "requests": int(stats.get("requests", 0)),
+                "last_updated": int(time.time())
+            }
+            sig = _sign_payload(payload)
+            if not sig:
+                return False
+            envelope = {
+                "p": base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii'),
+                "s": sig
+            }
+            _atomic_write_json(TOKEN_CACHE_FILE, envelope)
+            return True
+        except Exception as e:
+            print(f"Lỗi lưu token quota: {e}")
             return False
-        envelope = {
-            "p": base64.b64encode(json.dumps(payload).encode('utf-8')).decode('ascii'),
-            "s": sig
-        }
-        _atomic_write_json(TOKEN_CACHE_FILE, envelope)
-        return True
-    except Exception as e:
-        print(f"Lỗi lưu token quota: {e}")
-        return False
 
 
 def check_token_quota():
@@ -811,128 +797,65 @@ def reset_token_quota_stats():
         return save_token_quota_stats(stats)
 
 
-# --- PHÂN QUYỀN TÍNH NĂNG TỪNG GÓI ---
+# --- PHÂN QUYỀN TÍNH NĂNG TỪNG GÓI (CHẾ ĐỘ MIỄN PHÍ VĨNH VIỄN) ---
+FREE_UNLIMITED_FEATURES = {
+    "can_access_review": True,
+    "can_access_editor": True,
+    "can_access_batch": True,
+    "can_clone_voice": True,
+    "clone_voice_limit": 999999,
+    "allow_save_cloned_voice": True,
+    "max_video_export_duration": 999999,
+    "tts_unlimited_local": True,
+    "online_voices_enabled": True,
+    "cloud_gpt_included": True,
+    "is_admin": True,
+    "can_access_social_publish": True,
+    "hongguo_downloader": True
+}
+
 PACKAGE_TIERS = {
     "trial": {
         "tier": "trial",
-        "plan_name": "Dùng Thử 24h",
-        "badge_class": "badge-trial",
-        "badge_text": "⚡ Dùng Thử",
-        "features": {
-            "can_access_review": True,
-            "can_access_editor": True,
-            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
-            "can_clone_voice": True,
-            "clone_voice_limit": 2,
-            "allow_save_cloned_voice": False,
-            "max_video_export_duration": 60, # Tối đa 60s
-            "tts_unlimited_local": True,
-            "online_voices_enabled": False,
-            "cloud_gpt_included": True,
-            "can_access_social_publish": True,
-            "hongguo_downloader": True
-        }
+        "plan_name": "Bản Quyền Miễn Phí Vĩnh Viễn",
+        "badge_class": "badge-vip",
+        "badge_text": "💎 Miễn Phí Vĩnh Viễn",
+        "features": dict(FREE_UNLIMITED_FEATURES)
     },
     "pro": {
         "tier": "pro",
-        "plan_name": "Gói Pro (300k/tháng)",
-        "badge_class": "badge-pro",
-        "badge_text": "⭐ Gói Pro",
-        "features": {
-            "can_access_review": True,
-            "can_access_editor": True,
-            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
-            "can_clone_voice": True,
-            "clone_voice_limit": 1,
-            "allow_save_cloned_voice": True,
-            "max_video_export_duration": 99999,
-            "tts_unlimited_local": True,
-            "online_voices_enabled": False,
-            "cloud_gpt_included": False, # Tự túc API key
-            "can_access_social_publish": True,
-            "hongguo_downloader": True
-        }
+        "plan_name": "Bản Quyền Miễn Phí Vĩnh Viễn",
+        "badge_class": "badge-vip",
+        "badge_text": "💎 Miễn Phí Vĩnh Viễn",
+        "features": dict(FREE_UNLIMITED_FEATURES)
     },
     "vip": {
         "tier": "vip",
-        "plan_name": "Gói VIP (500k/tháng)",
+        "plan_name": "Bản Quyền Miễn Phí Vĩnh Viễn",
         "badge_class": "badge-vip",
-        "badge_text": "👑 Gói VIP",
-        "features": {
-            "can_access_review": True,
-            "can_access_editor": True,
-            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
-            "can_clone_voice": True,
-            "clone_voice_limit": 5,
-            "allow_save_cloned_voice": True,
-            "max_video_export_duration": 99999,
-            "tts_unlimited_local": True,
-            "online_voices_enabled": True, # Full 1000+ giọng
-            "cloud_gpt_included": True,      # Bao server GPT
-            "can_access_social_publish": True,
-            "hongguo_downloader": True
-        }
+        "badge_text": "💎 Miễn Phí Vĩnh Viễn",
+        "features": dict(FREE_UNLIMITED_FEATURES)
     },
     "yearly": {
         "tier": "yearly",
-        "plan_name": "Gói 1 Năm (3.990k)",
-        "badge_class": "badge-yearly",
-        "badge_text": "💎 Gói 1 Năm",
-        "features": {
-            "can_access_review": True,
-            "can_access_editor": True,
-            "can_access_batch": False, # Chỉ dành riêng cho Admin Quản Trị
-            "can_clone_voice": True,
-            "clone_voice_limit": 99,
-            "allow_save_cloned_voice": True,
-            "max_video_export_duration": 99999,
-            "tts_unlimited_local": True,
-            "online_voices_enabled": True,
-            "cloud_gpt_included": True,
-            "can_access_social_publish": True,
-            "hongguo_downloader": True
-        }
+        "plan_name": "Bản Quyền Miễn Phí Vĩnh Viễn",
+        "badge_class": "badge-vip",
+        "badge_text": "💎 Miễn Phí Vĩnh Viễn",
+        "features": dict(FREE_UNLIMITED_FEATURES)
     },
     "admin": {
         "tier": "admin",
         "plan_name": "Tài Khoản Quản Trị (Admin)",
         "badge_class": "badge-admin",
         "badge_text": "🛡️ Admin Quản Trị",
-        "features": {
-            "can_access_review": True,
-            "can_access_editor": True,
-            "can_access_batch": True,
-            "can_clone_voice": True,
-            "clone_voice_limit": 9999,
-            "allow_save_cloned_voice": True,
-            "max_video_export_duration": 999999,
-            "tts_unlimited_local": True,
-            "online_voices_enabled": True,
-            "cloud_gpt_included": True,
-            "is_admin": True,
-            "can_access_social_publish": True,
-            "hongguo_downloader": True
-        }
+        "features": dict(FREE_UNLIMITED_FEATURES)
     },
     "unlicensed": {
-        "tier": "unlicensed",
-        "plan_name": "Chưa Kích Hoạt",
-        "badge_class": "badge-unlicensed",
-        "badge_text": "🔒 Chưa Kích Hoạt",
-        "features": {
-            "can_access_review": False,
-            "can_access_editor": False,
-            "can_access_batch": False,
-            "can_clone_voice": False,
-            "clone_voice_limit": 0,
-            "allow_save_cloned_voice": False,
-            "max_video_export_duration": 0,
-            "tts_unlimited_local": False,
-            "online_voices_enabled": False,
-            "cloud_gpt_included": False,
-            "can_access_social_publish": False,
-            "hongguo_downloader": False
-        }
+        "tier": "vip",
+        "plan_name": "Bản Quyền Miễn Phí Vĩnh Viễn",
+        "badge_class": "badge-vip",
+        "badge_text": "💎 Miễn Phí Vĩnh Viễn",
+        "features": dict(FREE_UNLIMITED_FEATURES)
     }
 }
 
@@ -972,228 +895,36 @@ def schedule_background_cloud_sync():
 def _get_current_license_status_raw(force_cloud_sync=False):
     """
     Trả về thông tin bản quyền hiện tại của máy tính trong < 1ms.
-    Tự động tính toán số ngày / giờ còn lại và trạng thái hợp lệ.
+    Ứng dụng hoạt động ở chế độ Miễn Phí Vĩnh Viễn (Free Lifetime Mode) - Toàn bộ tính năng mở khóa 100%.
     """
     hwid = get_hardware_id()
     short_hwid = get_short_hwid(hwid)
-    cached = load_local_license_cache()
+    cached = load_local_license_cache() or {}
 
-    if force_cloud_sync:
-        sync_with_cloud(force=True)
-        cached = load_local_license_cache()
-    else:
-        schedule_background_cloud_sync()
+    full_features = dict(FREE_UNLIMITED_FEATURES)
+    vip_api_keys = cached.get('vip_api_keys', {}) if isinstance(cached, dict) else {}
 
-    now_epoch = int(time.time())
-
-    # Nếu chưa có file .license.dat:
-    if not cached:
-        # 1. Kiểm tra mốc dùng thử từ Registry Windows (Chống ngắt mạng & xóa file dùng chùa)
-        trial_anchor_epoch = _get_machine_trial_anchor()
-
-        if trial_anchor_epoch:
-            # Máy này ĐÃ TỪNG DÙNG THỬ trước đó
-            if trial_anchor_epoch <= now_epoch:
-                # Đã hết 24h -> EXPIRED ngay lập tức, tuyệt đối không cấp thêm trial
-                unlic_tier = PACKAGE_TIERS["unlicensed"]
-                expired_cache = {
-                    "hwid": hwid,
-                    "tier": "unlicensed",
-                    "plan_name": "Gói Dùng Thử (Đã hết hạn)",
-                    "expire_epoch": trial_anchor_epoch,
-                    "expire_str": datetime.fromtimestamp(trial_anchor_epoch).strftime('%d/%m/%Y %H:%M'),
-                    "activated_at": trial_anchor_epoch - 86400,
-                    "features": unlic_tier["features"]
-                }
-                save_local_license_cache(expired_cache)
-                cached = expired_cache
-            else:
-                # Vẫn còn thời gian của lần dùng thử trước
-                plan_info = PACKAGE_TIERS["trial"]
-                cached = {
-                    "hwid": hwid,
-                    "tier": "trial",
-                    "plan_name": plan_info["plan_name"],
-                    "expire_epoch": trial_anchor_epoch,
-                    "expire_str": datetime.fromtimestamp(trial_anchor_epoch).strftime('%d/%m/%Y %H:%M'),
-                    "activated_at": trial_anchor_epoch - 86400,
-                    "user_name": "Khách Dùng Thử 24h",
-                    "features": plan_info["features"]
-                }
-                save_local_license_cache(cached)
-        else:
-            # 2. Máy mới cài đặt lần đầu 100%: Tự động cấp 24h Dùng Thử
-            now = datetime.now()
-            expire_dt = now + timedelta(hours=24)
-            expire_epoch = int(expire_dt.timestamp())
-            expire_str = expire_dt.strftime('%d/%m/%Y %H:%M')
-            plan_info = PACKAGE_TIERS["trial"]
-
-            # Ghi mốc vào Registry Windows
-            _set_machine_trial_anchor(expire_epoch)
-
-            cached = {
-                "hwid": hwid,
-                "tier": "trial",
-                "plan_name": plan_info["plan_name"],
-                "expire_epoch": expire_epoch,
-                "expire_str": expire_str,
-                "activated_at": int(now.timestamp()),
-                "user_name": "Khách Dùng Thử 24h",
-                "phone_zalo": "",
-                "features": plan_info["features"],
-                "is_first_launch": True
-            }
-            save_local_license_cache(cached)
-
-    # Máy đã có cache dùng thử từ một lần gửi hỏng trước đó cũng được tự đồng
-    # bộ lại theo nhịp giới hạn. Đây là phần còn thiếu khiến khách không xuất
-    # hiện trên Sheet dù vẫn dùng thử bình thường trên máy.
-    schedule_trial_cloud_registration(cached)
-
-    # Anti-Clock Rollback: Nếu phát hiện đồng hồ bị lùi giờ
-    if cached.get('clock_tampered'):
-        return {
-            "hwid": hwid,
-            "short_hwid": short_hwid,
-            "status": "CLOCK_TAMPERED",
-            "is_valid": False,
-            "tier": "unlicensed",
-            "plan_name": "Lỗi Đồng Hồ Hệ Thống",
-            "badge_class": "badge-expired",
-            "badge_text": "⚠️ Lỗi Đồng Hồ",
-            "expire_str": cached.get('expire_str', ''),
-            "expire_epoch": 0,
-            "days_left": 0,
-            "hours_left": 0,
-            "clock_error": cached.get('clock_error', 'Phát hiện đồng hồ hệ thống bị chỉnh lùi về quá khứ! Vui lòng chỉnh lại đúng giờ hoặc kết nối Internet để đồng bộ.'),
-            "features": PACKAGE_TIERS["unlicensed"]["features"],
-            "can_activate_trial": False
-        }
-
-    expire_epoch = int(cached.get('expire_epoch', 0))
-    tier = cached.get('tier', 'unlicensed')
-    base_tier_info = PACKAGE_TIERS.get(tier, PACKAGE_TIERS["unlicensed"])
-    cached_status = str(cached.get('status') or '').upper()
-
-    # Trạng thái bị khóa/hết hạn từ cloud phải được ưu tiên hơn cache cũ để
-    # quản trị viên có thể vô hiệu hóa hoặc hết hạn bản quyền ngay lập tức.
-    if cached_status == 'BLOCKED':
-        return {
-            "hwid": hwid,
-            "short_hwid": short_hwid,
-            "status": "BLOCKED",
-            "is_valid": False,
-            "tier": "unlicensed",
-            "plan_name": cached.get('plan_name') or "Bản quyền đã bị khóa",
-            "badge_class": "badge-expired",
-            "badge_text": "🔒 Bản quyền bị khóa",
-            "expire_str": cached.get('expire_str', ''),
-            "expire_epoch": 0,
-            "days_left": 0,
-            "hours_left": 0,
-            "user_name": cached.get('user_name', ''),
-            "phone_zalo": cached.get('phone_zalo', ''),
-            "features": PACKAGE_TIERS["unlicensed"]["features"],
-            "can_activate_trial": False
-        }
-
-    if cached_status == 'EXPIRED':
-        return {
-            "hwid": hwid,
-            "short_hwid": short_hwid,
-            "status": "EXPIRED",
-            "is_valid": False,
-            "tier": "expired",
-            "plan_name": f"Hết hạn ({base_tier_info['plan_name']})",
-            "badge_class": "badge-expired",
-            "badge_text": "🔒 Đã hết hạn",
-            "expire_str": cached.get('expire_str') or (datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M') if expire_epoch else ''),
-            "expire_epoch": expire_epoch,
-            "days_left": 0,
-            "hours_left": 0,
-            "user_name": cached.get('user_name', ''),
-            "phone_zalo": cached.get('phone_zalo', ''),
-            "features": PACKAGE_TIERS["unlicensed"]["features"],
-            "can_activate_trial": False
-        }
-
-    machine_has_used_trial = _get_machine_trial_anchor() is not None
-
-    if expire_epoch > now_epoch:
-        # Còn hạn sử dụng
-        seconds_left = expire_epoch - now_epoch
-        days_left = seconds_left // 86400
-        hours_left = (seconds_left % 86400) // 3600
-        
-        if days_left > 0:
-            badge_text = f"{base_tier_info['badge_text']} ({days_left} ngày)"
-        else:
-            badge_text = f"{base_tier_info['badge_text']} ({hours_left}h)"
-
-        features = dict(base_tier_info["features"])
-        # Tự động đồng bộ các tính năng mới được cập nhật vào cache cục bộ
-        cached_features = cached.get('features', {})
-        if not all(k in cached_features for k in base_tier_info["features"]):
-            cached['features'] = dict(base_tier_info["features"])
-            try:
-                save_local_license_cache(cached)
-            except Exception:
-                pass
-        pro_selected_module = cached.get('pro_selected_module', None)
-        if tier == 'pro':
-            if pro_selected_module == 'review':
-                features['can_access_review'] = True
-                features['can_access_editor'] = False
-            elif pro_selected_module == 'editor':
-                features['can_access_editor'] = True
-                features['can_access_review'] = False
-            else:
-                # Chưa chọn Module: Khóa cả 2 module cho đến khi người dùng chọn trong modal
-                features['can_access_editor'] = False
-                features['can_access_review'] = False
-
-        return {
-            "hwid": hwid,
-            "short_hwid": short_hwid,
-            "status": "ACTIVE",
-            "is_valid": True,
-            "tier": tier,
-            "plan_name": base_tier_info["plan_name"],
-            "badge_class": base_tier_info["badge_class"],
-            "badge_text": badge_text,
-            "expire_str": cached.get('expire_str') or datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M'),
-            "expire_epoch": expire_epoch,
-            "days_left": int(days_left),
-            "hours_left": int(hours_left),
-            "user_name": cached.get('user_name', ''),
-            "phone_zalo": cached.get('phone_zalo', ''),
-            "pro_selected_module": pro_selected_module,
-            "vip_api_keys": cached.get('vip_api_keys', {}),
-            "features": features,
-            "can_activate_trial": False
-        }
-    else:
-        # Đã hết hạn hoặc chưa kích hoạt
-        can_trial = not machine_has_used_trial
-        return {
-            "hwid": hwid,
-            "short_hwid": short_hwid,
-            "status": "EXPIRED" if machine_has_used_trial else "UNLICENSED",
-            "is_valid": False,
-            "tier": "expired" if machine_has_used_trial else "unlicensed",
-            "plan_name": f"Hết hạn ({base_tier_info['plan_name']})" if machine_has_used_trial else "Chưa Kích Hoạt",
-            "badge_class": "badge-expired" if machine_has_used_trial else "badge-unlicensed",
-            "badge_text": "🔒 Đã hết hạn" if machine_has_used_trial else "🔒 Chưa Kích Hoạt",
-            "expire_str": cached.get('expire_str') or (datetime.fromtimestamp(expire_epoch).strftime('%d/%m/%Y %H:%M') if expire_epoch else ''),
-            "expire_epoch": expire_epoch,
-            "days_left": 0,
-            "hours_left": 0,
-            "user_name": cached.get('user_name', ''),
-            "phone_zalo": cached.get('phone_zalo', ''),
-            "features": PACKAGE_TIERS["unlicensed"]["features"],
-            "can_activate_trial": can_trial
-        }
+    return {
+        "hwid": hwid,
+        "short_hwid": short_hwid,
+        "status": "ACTIVE",
+        "is_valid": True,
+        "tier": "vip",
+        "plan_name": "Bản Quyền Miễn Phí Vĩnh Viễn",
+        "badge_class": "badge-vip",
+        "badge_text": "💎 Miễn Phí Vĩnh Viễn",
+        "expire_str": "Vĩnh viễn",
+        "expire_epoch": 4102444800,
+        "days_left": 99999,
+        "hours_left": 23,
+        "user_name": cached.get('user_name', 'Người Dùng NovaCut') if isinstance(cached, dict) else 'Người Dùng NovaCut',
+        "phone_zalo": cached.get('phone_zalo', '') if isinstance(cached, dict) else '',
+        "pro_selected_module": "all",
+        "vip_api_keys": vip_api_keys,
+        "features": full_features,
+        "can_activate_trial": False,
+        "free_mode": True
+    }
 
 
 def get_current_license_status(force_cloud_sync=False):
@@ -1201,7 +932,7 @@ def get_current_license_status(force_cloud_sync=False):
     Trả về thông tin bản quyền và trạng thái cam kết bản quyền đa tầng.
     """
     status = _get_current_license_status_raw(force_cloud_sync=force_cloud_sync)
-    status["disclaimer_accepted"] = is_disclaimer_accepted()
+    status["disclaimer_accepted"] = True
     return status
 
 
@@ -1209,21 +940,9 @@ def check_permission(feature_name):
     """
     (Bảo Mật & Phân Quyền)
     Kiểm tra xem máy tính hiện tại có quyền sử dụng tính năng feature_name hay không.
-    Trả về: (is_allowed: bool, reason_message: str, status_dict: dict)
+    Ở chế độ Miễn Phí Vĩnh Viễn, tất cả các tính năng đều được mở khóa 100%.
     """
     status = get_current_license_status()
-    if not status.get('is_valid', False):
-        if status.get('status') == 'EXPIRED':
-            return False, f"⚠️ Bản quyền {status.get('plan_name', '')} của bạn đã hết hạn (Hạn dùng: {status.get('expire_str', '')}). Vui lòng gia hạn gói để tiếp tục sử dụng tính năng này!", status
-        elif status.get('status') == 'CLOCK_TAMPERED':
-            return False, f"⚠️ Phát hiện đồng hồ hệ thống bị chỉnh lùi về quá khứ! Vui lòng chỉnh lại đúng ngày giờ chuẩn hoặc kết nối mạng để đồng bộ.", status
-        else:
-            return False, "⚠️ Ứng dụng chưa được kích hoạt bản quyền! Vui lòng kích hoạt Dùng Thử 24h hoặc nâng cấp gói để sử dụng tính năng này.", status
-
-    features = status.get('features', {})
-    if not features.get(feature_name, False):
-        return False, f"⚠️ Tính năng này không thuộc phạm vi gói {status.get('plan_name', '')}. Vui lòng nâng cấp lên gói cao hơn để sử dụng!", status
-
     return True, "OK", status
 
 

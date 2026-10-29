@@ -648,6 +648,25 @@ def select_preset_for_voice(voice_id=None, gender=None, lang=None) -> str:
     if any(w in v_id_low for w in ['adam', 'kokoro_am_adam', 'en_adam', 'local_adam']):
         return "Adam"
 
+    direct_preset_map = {
+        'diem_trinh': 'Thục Đoan',
+        'mai_linh': 'Ngọc Trân',
+        'manh_dung': 'Thanh Bình',
+        'thanh_dat': 'Thái Sơn',
+        'nam_khoa': 'Minh Đức',
+        'minh_duc': 'Minh Đức',
+        'ngoc_huyen': 'Ngọc Huyền',
+        'thanh_binh': 'Thanh Bình',
+        'truc_ly': 'Trúc Ly',
+        'thai_son': 'Thái Sơn',
+        'thuc_doan': 'Thục Đoan',
+        'quang_son': 'Quang Sơn',
+        'ngoc_tran': 'Ngọc Trân',
+    }
+    clean_key = v_id_low.replace('local_', '')
+    if clean_key in direct_preset_map:
+        return direct_preset_map[clean_key]
+
     g = (gender or profile.get('gender') or '').strip().lower()
     l = (lang or profile.get('lang') or '').strip().lower()
 

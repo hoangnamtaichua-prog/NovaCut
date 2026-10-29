@@ -279,9 +279,9 @@ def generate_styled_ass(srt_source_path: str, ass_dest_path: str, cur_out_w: int
 
     sub_region = subtitle_style.get('region') or {}
     sub_align = str(subtitle_style.get('align') or 'center').lower()
-    sub_x = float(sub_region.get('x', 10.0))
+    sub_x = float(sub_region.get('x', 20.0))
     sub_y = float(sub_region.get('y', 81.5))
-    sub_w = float(sub_region.get('w', 80.0))
+    sub_w = float(sub_region.get('w', 60.0))
     sub_h = float(sub_region.get('h', 9.5))
 
     box_x = geometry.content_x + geometry.content_w * sub_x / 100.0
@@ -521,6 +521,11 @@ def execute_export_pipeline(job: ExportJob, data: dict):
     video_zoom = float(data.get('video_zoom', 1.0))
     if video_zoom > 5.0:
         video_zoom = video_zoom / 100.0
+    delogo_cfg = data.get('delogo') or {}
+    if parse_bool(delogo_cfg.get('enabled'), False):
+        delogo_method = str(delogo_cfg.get('method', 'delogo')).lower()
+        if delogo_method == 'smart_crop' and video_zoom <= 1.005:
+            video_zoom = 1.05
     video_pan_x = float(data.get('video_pan_x', 0.0))
     video_pan_y = float(data.get('video_pan_y', 0.0))
     rotation = int(data.get('rotation', 0)) % 360
@@ -647,11 +652,12 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             has_aud = True
             vw = 1920
             vh = 1080
+            audio_ch = 2
             try:
                 ffprobe_path = ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe') if 'ffmpeg.exe' in ffmpeg_path else 'ffprobe'
                 if os.path.exists(ffprobe_path) or ffprobe_path == 'ffprobe':
                     cmd_probe = [
-                        ffprobe_path, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height',
+                        ffprobe_path, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,channels',
                         '-of', 'json', v_path
                     ]
                     res_p = subprocess.run(cmd_probe, capture_output=True, text=True, timeout=30, **ffmpeg_installer.get_stealth_subprocess_kwargs())
@@ -661,6 +667,10 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                         streams = info_p.get('streams', [])
                         has_aud = any(s.get('codec_type') == 'audio' for s in streams)
                         for s in streams:
+                            if s.get('codec_type') == 'audio':
+                                audio_ch = int(s.get('channels', 2) or 2)
+                                break
+                        for s in streams:
                             if s.get('codec_type') == 'video':
                                 w_val = int(s.get('width', 0) or 0)
                                 h_val = int(s.get('height', 0) or 0)
@@ -668,7 +678,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                                     vw, vh = w_val, h_val
                                     break
                         if d_sec > 0:
-                            return d_sec, has_aud, vw, vh
+                            return d_sec, has_aud, vw, vh, audio_ch
             except Exception:
                 pass
 
@@ -681,11 +691,12 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     h, mins, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
                     d_sec = h * 3600 + mins * 60 + s
                 has_aud = 'Audio:' in proc.stderr
+                audio_ch = 1 if (has_aud and 'mono' in proc.stderr.lower()) else 2
                 m_dim = re.search(r'Stream.*Video:.*?(\d{2,5})x(\d{2,5})', proc.stderr)
                 if m_dim:
                     vw, vh = int(m_dim.group(1)), int(m_dim.group(2))
                 if d_sec > 0:
-                    return d_sec, has_aud, vw, vh
+                    return d_sec, has_aud, vw, vh, audio_ch
             except Exception:
                 pass
 
@@ -706,9 +717,9 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             except Exception:
                 pass
 
-            return d_sec, has_aud, vw, vh
+            return d_sec, has_aud, vw, vh, audio_ch
 
-        video_duration, has_orig_audio, src_vw, src_vh = probe_video_info(input_video)
+        video_duration, has_orig_audio, src_vw, src_vh, src_audio_channels = probe_video_info(input_video)
 
         # --- Generate temp SRT from subtitles array for Burn-In (ƯU TIÊN CHỮ DỊCH TIẾNG VIỆT) ---
         temp_srt_path = None
@@ -782,23 +793,28 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             else:
                 # 1.1 Tạo danh sách câu phụ đề làm mờ ưu tiên CHỮ GỐC của phim
                 has_live_preview_boxes = False
+                blur_subs_source = data.get('original_subtitles_for_blur') or subtitles
+                blur_y_def = float(data.get('blur_y', 81.5))
+                blur_h_def = float(data.get('blur_h', 9.5))
                 
-                if subtitles and isinstance(subtitles, list) and len(subtitles) > 0:
-                    for sub in subtitles:
-                        s_start = float(sub.get('startSeconds', 0))
-                        s_end = float(sub.get('endSeconds', 0))
+                if blur_subs_source and isinstance(blur_subs_source, list) and len(blur_subs_source) > 0:
+                    for sub in blur_subs_source:
+                        raw_st = sub.get('startSeconds') if sub.get('startSeconds') is not None else sub.get('start_sec', sub.get('start', 0))
+                        raw_et = sub.get('endSeconds') if sub.get('endSeconds') is not None else sub.get('end_sec', sub.get('end', 0))
+                        s_start = float(raw_st)
+                        s_end = float(raw_et)
                         # ƯU TIÊN CHỮ GỐC: original_text -> text -> translation
                         orig_txt = str(sub.get('original_text') or sub.get('text') or '').strip()
                         if not orig_txt:
                             orig_txt = str(sub.get('translation') or '').strip()
                         ai_box = sub.get('aiBox')
                         if s_end > s_start:
-                            if blur_use_ai_scan and ai_box and isinstance(ai_box, dict) and 'x_pct' in ai_box and 'w_pct' in ai_box:
+                            if ai_box and isinstance(ai_box, dict) and 'x_pct' in ai_box and 'w_pct' in ai_box:
                                 has_live_preview_boxes = True
                                 box_x_r = float(ai_box['x_pct']) / 100.0
                                 box_w_r = float(ai_box['w_pct']) / 100.0
-                                box_y_r = float(ai_box.get('y_pct', ocr_region.get('y', 81.5))) / 100.0
-                                box_h_r = float(ai_box.get('h_pct', ocr_region.get('h', 9.5))) / 100.0
+                                box_y_r = float(ai_box.get('y_pct', blur_y_def)) / 100.0
+                                box_h_r = float(ai_box.get('h_pct', blur_h_def)) / 100.0
                                 vis_s = ai_box.get('visual_start') or sub.get('visual_start')
                                 vis_e = ai_box.get('visual_end') or sub.get('visual_end')
                                 if vis_s is not None and vis_e is not None:
@@ -818,10 +834,16 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     orig_blur_entries = parse_srt_entries(temp_srt_path)
 
                 cached_ai_boxes_path = os.path.join(editor_temp_dir, 'ai_blur_boxes.json')
+                if (not os.path.exists(cached_ai_boxes_path) or os.path.getsize(cached_ai_boxes_path) <= 10) and input_video:
+                    vid_base = os.path.splitext(input_video)[0]
+                    for alt_p in [vid_base + '_ai_blur_boxes.json', vid_base + '_ocr_regions.json']:
+                        if os.path.exists(alt_p) and os.path.getsize(alt_p) > 10:
+                            cached_ai_boxes_path = alt_p
+                            break
+
                 loaded_blur_cache = False
-                # Box đang hiển thị trong preview là nguồn dữ liệu mới nhất; cache chỉ
-                # được dùng khi request không mang theo box nào.
-                if blur_use_ai_scan and use_cache and not has_live_preview_boxes and os.path.exists(cached_ai_boxes_path) and os.path.getsize(cached_ai_boxes_path) > 10:
+                # Tự động tái sử dụng toạ độ quét AI Pixel nếu đã có sẵn từ lần quét trước
+                if use_cache and not has_live_preview_boxes and os.path.exists(cached_ai_boxes_path) and os.path.getsize(cached_ai_boxes_path) > 10:
                     try:
                         with open(cached_ai_boxes_path, 'r', encoding='utf-8') as f:
                             raw_boxes = json.load(f)
@@ -838,8 +860,8 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                                     if b and isinstance(b, dict) and 'x_pct' in b and 'w_pct' in b:
                                         b_x = float(b['x_pct']) / 100.0
                                         b_w = float(b['w_pct']) / 100.0
-                                        b_y = float(b.get('y_pct', ocr_region.get('y', 81.5))) / 100.0
-                                        b_h = float(b.get('h_pct', ocr_region.get('h', 9.5))) / 100.0
+                                        b_y = float(b.get('y_pct', blur_y_def)) / 100.0
+                                        b_h = float(b.get('h_pct', blur_h_def)) / 100.0
                                         v_s = b.get('visual_start')
                                         v_e = b.get('visual_end')
                                         if v_s is not None and v_e is not None:
@@ -946,15 +968,23 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                 voice_id = dubbing.get('voice_id') or 'local_minh_duc'
                 speed_dub = float(dubbing.get('speed', 1.1))
                 tts_fingerprint = compute_tts_fingerprint(subs_for_dubbing, voice_id, speed_dub, video_duration)
-                is_manifest_match = False if (fresh_run or not use_cache) else is_tts_manifest_valid(editor_temp_dir, tts_fingerprint)
+                manifest_valid = is_tts_manifest_valid(editor_temp_dir, tts_fingerprint)
+                has_cached_audio = os.path.exists(cached_dub_file) and os.path.getsize(cached_dub_file) > 1000
+                explicit_reuse = bool(data.get('reuse_pregenerated_voice') or dubbing.get('precomputed_audio_path'))
 
-                if not subs_for_dubbing:
+                can_reuse_audio = (
+                    not fresh_run and 
+                    has_cached_audio and 
+                    (explicit_reuse or manifest_valid or (use_cache and manifest_valid))
+                )
+
+                if not subs_for_dubbing and not can_reuse_audio:
                     emit("🛑 [LỖI LỒNG TIẾNG] Danh sách phụ đề trống! Vui lòng nạp hoặc dịch phụ đề trước khi xuất video có lồng tiếng.")
                     job.set_failed("Danh sách phụ đề trống, không thể tạo lồng tiếng AI", {})
                     return
-                elif not fresh_run and use_cache and is_manifest_match:
+                elif can_reuse_audio:
                     dub_track = cached_dub_file
-                    emit(f"💚 [AI Dubbing] Đã tìm thấy track lồng tiếng AI hoàn chỉnh từ lần chạy trước ({os.path.basename(dub_track)}) khớp kịch bản, tái sử dụng ngay lập tức (0s)!")
+                    emit(f"💚 [AI Dubbing] Tự động tái sử dụng 100% bản voice TTS đã tạo trước ({os.path.basename(dub_track)}) mà không cần tạo lại (0s)!")
                     job.set_stage(JobStage.TTS_GENERATING, 100, "Đã tái sử dụng track lồng tiếng AI")
                 else:
                     voice_id = dubbing.get('voice_id') or 'local_minh_duc'
@@ -1067,9 +1097,9 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             and not has_logo
             and not custom_layers
             and abs(video_speed - 1.0) < 0.001
-            and abs(video_zoom - 1.0) < 0.001
-            and video_pan_x == 0
-            and video_pan_y == 0
+            and abs(video_zoom - 1.0) < 0.005
+            and abs(video_pan_x) < 0.5
+            and abs(video_pan_y) < 0.5
             and rotation == 0
             and fit_mode == 'contain'
             and not mirror_flip
@@ -1170,14 +1200,25 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         v_filters = []
         curr_v = "0:v"
 
-        # 3.0 Video Zoom & Crop
-        if video_zoom > 1.01:
+        # 3.0 Video Zoom & Crop / Pan
+        src_vw_even = (int(src_vw) // 2) * 2 if src_vw > 0 else 1920
+        src_vh_even = (int(src_vh) // 2) * 2 if src_vh > 0 else 1080
+        if video_zoom > 1.005:
             crop_w = f"trunc(iw/{video_zoom:.4f}/2)*2"
             crop_h = f"trunc(ih/{video_zoom:.4f}/2)*2"
-            crop_x = f"(iw-{crop_w})/2 - ({video_pan_x:.1f}*(iw/800))"
-            crop_y = f"(ih-{crop_h})/2 - ({video_pan_y:.1f}*(ih/450))"
-            v_filters.append(f"[{curr_v}]crop=w={crop_w}:h={crop_h}:x='max(0,min(iw-ow,trunc(({crop_x})/2)*2))':y='max(0,min(ih-oh,trunc(({crop_y})/2)*2))',scale={src_vw}:{src_vh}:flags=lanczos[v_cropped]")
+            crop_x = f"max(0,min(iw-ow,trunc(((iw-ow)/2 - ({video_pan_x:.1f}*iw/800.0))/2)*2))"
+            crop_y = f"max(0,min(ih-oh,trunc(((ih-oh)/2 - ({video_pan_y:.1f}*ih/450.0))/2)*2))"
+            v_filters.append(f"[{curr_v}]crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',scale={src_vw_even}:{src_vh_even}:flags=lanczos[v_cropped]")
             curr_v = "v_cropped"
+            emit(f"🔍 [Zoom In] Áp dụng phóng to {video_zoom:.2f}x (Pan X: {video_pan_x:.1f}, Pan Y: {video_pan_y:.1f})")
+        elif 0.2 <= video_zoom < 0.995:
+            scale_w = f"trunc(iw*{video_zoom:.4f}/2)*2"
+            scale_h = f"trunc(ih*{video_zoom:.4f}/2)*2"
+            pad_x = f"max(0,min({src_vw_even}-iw,trunc(((({src_vw_even}-iw)/2)+({video_pan_x:.1f}*{src_vw_even}/800.0))/2)*2))"
+            pad_y = f"max(0,min({src_vh_even}-ih,trunc(((({src_vh_even}-ih)/2)+({video_pan_y:.1f}*{src_vh_even}/450.0))/2)*2))"
+            v_filters.append(f"[{curr_v}]scale=w='{scale_w}':h='{scale_h}':flags=lanczos,pad={src_vw_even}:{src_vh_even}:'{pad_x}':'{pad_y}':color=black[v_cropped]")
+            curr_v = "v_cropped"
+            emit(f"🔍 [Zoom Out] Áp dụng thu nhỏ {video_zoom:.2f}x (Pan X: {video_pan_x:.1f}, Pan Y: {video_pan_y:.1f})")
 
         # 3.1 Speed
         if abs(video_speed - 1.0) > 0.01:
@@ -1244,22 +1285,71 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     orig_blur_entries, output_geometry, cur_out_w, cur_out_h,
                     video_speed=video_speed, mirror=mirror_flip,
                 )
-                blur_mode = str(data.get('blur_mode', 'fixed')).lower()
-                region_x = float(data.get('blur_x', ocr_region.get('x', 20.0))) / 100.0
-                region_y = float(data.get('blur_y', ocr_region.get('y', 81.5))) / 100.0
-                region_w = float(data.get('blur_w', ocr_region.get('w', 60.0))) / 100.0
-                region_h = float(data.get('blur_h', ocr_region.get('h', 9.5))) / 100.0
-                if mirror_flip:
-                    region_x = 1.0 - region_x - region_w
-                mapped_x = (output_geometry.content_x + output_geometry.content_w * region_x) / cur_out_w
-                mapped_y = (output_geometry.content_y + output_geometry.content_h * region_y) / cur_out_h
-                mapped_w = (output_geometry.content_w * region_w) / cur_out_w
-                mapped_h = (output_geometry.content_h * region_h) / cur_out_h
+                source_tool = str(data.get('source_tool') or '').strip()
+                is_batch_editor = (source_tool == 'batch_editor')
 
-                if blur_mode == 'fixed':
+                # Trong biên tập hàng loạt (batch_editor), chế độ làm mờ BẮT BUỘC là Dynamic Blur (co giãn bám sát từng câu chữ và thời gian phụ đề)
+                # Tuyệt đối không lấy ocr_region (vùng quét nhận dạng chữ) làm vùng làm mờ!
+                if is_batch_editor:
+                    blur_mode = 'dynamic'
+                else:
+                    blur_mode = str(data.get('blur_mode', 'dynamic')).lower()
+
+                # 1. Thu thập tọa độ Y và H thực tế từ AI Pixel boxes (nếu có trong orig_blur_entries)
+                detected_box_ys = []
+                detected_box_hs = []
+                for entry in orig_blur_entries:
+                    if isinstance(entry, dict):
+                        b = entry.get('box') or entry
+                        if isinstance(b, dict) and 'y_pct' in b and 'h_pct' in b:
+                            detected_box_ys.append(float(b['y_pct']) / 100.0)
+                            detected_box_hs.append(float(b['h_pct']) / 100.0)
+                    elif isinstance(entry, (list, tuple)) and len(entry) >= 7:
+                        if entry[5] is not None and entry[6] is not None and float(entry[6]) > 0:
+                            detected_box_ys.append(float(entry[5]))
+                            detected_box_hs.append(float(entry[6]))
+
+                # Tọa độ mặc định: x=20%, w=60%, y=81.5%, h=9.5%
+                blur_x_val = float(data.get('blur_x', 20.0)) / 100.0
+                blur_y_val = float(data.get('blur_y', 81.5)) / 100.0
+                blur_w_val = float(data.get('blur_w', 60.0)) / 100.0
+                blur_h_val = float(data.get('blur_h', 9.5)) / 100.0
+
+                # Kiểm tra xem người dùng có chủ động tắt tự động bám AI hoặc điều chỉnh thanh trượt Y thủ công không
+                has_explicit_manual_blur_y = (
+                    data.get('blur_y') is not None
+                    and not bool(data.get('blur_auto_align', True) if is_batch_editor else False)
+                    and (abs(float(data.get('blur_y')) - 81.5) > 0.01 or not is_batch_editor)
+                )
+
+                if detected_box_ys and not has_explicit_manual_blur_y:
+                    # Tự động đồng bộ vị trí dọc (Y, H) bám sát tuyệt đối theo tọa độ chữ gốc từ OCR/AI Scan!
+                    avg_ai_y = sum(detected_box_ys) / len(detected_box_ys)
+                    avg_ai_h = max(0.085, min(0.22, (sum(detected_box_hs) / len(detected_box_hs)) + 0.015))
+                    blur_y_val = avg_ai_y
+                    blur_h_val = avg_ai_h
+                    emit(f"🎯 [Dynamic Blur] Tự động định vị phụ đề & làm mờ bám tọa độ AI chữ gốc: Y = {blur_y_val*100.0:.1f}%, H = {blur_h_val*100.0:.1f}%")
+                elif not has_explicit_manual_blur_y:
+                    # Nếu chưa có AI box từng câu nhưng có khung quét OCR được vẽ/cấu hình:
+                    ocr_reg = data.get('ocr_region')
+                    if isinstance(ocr_reg, dict):
+                        reg_y = float(ocr_reg.get('y', 81.5)) / 100.0
+                        reg_h = float(ocr_reg.get('h', 9.5)) / 100.0
+                        if abs(reg_y - 0.815) > 0.005 or abs(reg_h - 0.095) > 0.005:
+                            blur_y_val = reg_y
+                            blur_h_val = max(0.085, min(0.25, reg_h))
+                            emit(f"🎯 [Dynamic Blur] Căn chỉnh vị trí mờ & phụ đề theo khung quét OCR: Y = {blur_y_val*100.0:.1f}%, H = {blur_h_val*100.0:.1f}%")
+
+                if mirror_flip:
+                    blur_x_val = 1.0 - blur_x_val - blur_w_val
+                mapped_x = (output_geometry.content_x + output_geometry.content_w * blur_x_val) / cur_out_w
+                mapped_y = (output_geometry.content_y + output_geometry.content_h * blur_y_val) / cur_out_h
+                mapped_w = (output_geometry.content_w * blur_w_val) / cur_out_w
+                mapped_h = (output_geometry.content_h * blur_h_val) / cur_out_h
+
+                if blur_mode == 'fixed' and not is_batch_editor:
                     # Chế độ làm mờ cố định siêu tốc 10x - 14x:
-                    # Chỉ crop đúng dải phụ đề đáy (mapped_x, mapped_y, mapped_w, mapped_h), blur và overlay.
-                    # Hoàn toàn tránh maskedmerge và split=3 trên toàn bộ 1080p frame!
+                    # Chỉ áp dụng khi người dùng tab Editor đơn lẻ chủ động chọn kiểu Cố Định
                     fw = max(0.05, min(1.0, mapped_w))
                     fh = max(0.02, min(0.40, mapped_h))
                     fx = max(0.0, min(1.0 - fw, mapped_x))
@@ -1280,15 +1370,21 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     curr_v = next_v
                     emit(f"⚡ [Làm Mờ Cố Định] Kích hoạt dải mờ cố định siêu tốc ({fw*100:.1f}% x {fh*100:.1f}%), bứt phá tốc độ xuất 10x – 14x!")
                 else:
+                    # Chế độ Dynamic Blur (Tự động làm mờ sub gốc):
+                    # - manual_mode = False: Độ rộng w tự động co giãn theo từng câu chữ (calc_sub_width_ratio)
+                    # - manual_w = None: Không ép cứng một kích thước cho toàn bộ câu chữ
+                    # - center_x_ratio: Căn giữa khung hình (0.50), trừ khi người dùng Editor đơn lẻ chủ động điều chỉnh blur_x
+                    has_custom_blur_x = bool(data.get('blur_x') is not None and not is_batch_editor)
+                    center_x = (mapped_x + mapped_w / 2.0) if has_custom_blur_x else 0.50
                     dyn_blur_filters, curr_v = build_dynamic_blur_filter_chain(
                         curr_v, remapped_blur_entries,
                         blur_sz=max(5, min(30, blur_intensity)),
                         y_ratio=mapped_y, h_ratio=mapped_h,
-                        center_x_ratio=mapped_x + mapped_w / 2.0,
+                        center_x_ratio=center_x,
                         lead_sec=abs(blur_lead_offset) / max(video_speed, 0.01),
                         pad_sec=blur_padding / max(video_speed, 0.01),
-                        manual_mode=not blur_use_ai_scan, manual_w=mapped_w,
-                        engine='auto' if not blur_use_ai_scan else 'mask', temp_dir=editor_temp_dir,
+                        manual_mode=False, manual_w=None,
+                        engine='auto', temp_dir=editor_temp_dir,
                         frame_w=cur_out_w, frame_h=cur_out_h, content_h=output_geometry.content_h,
                     )
                     v_filters.extend(dyn_blur_filters)
@@ -1302,9 +1398,23 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             srt_target = temp_srt_path or manual_srt or original_srt_path
             if srt_target and os.path.exists(srt_target):
                 try:
+                    # BẢO ĐẢM QUY TẮC CỐT LÕI:
+                    # Khi làm mờ sub gốc (blur_original_subtitles == True) hoặc trong biên tập hàng loạt:
+                    # Phần phụ đề mới (dịch/thuyết minh) BẮT BUỘC LUÔN NẰM ĐÈ LÊN CHÍNH GIỮA VÙNG LÀM MỜ!
+                    effective_sub_style = dict(subtitle_style) if isinstance(subtitle_style, dict) else {}
+                    if blur_original_subtitles or is_batch_editor:
+                        # Tự động khóa tâm Y và H của sub trùng khớp 100% với vùng làm mờ (center_y = blur_center_y)
+                        effective_sub_style['region'] = {
+                            'x': blur_x_val * 100.0,
+                            'y': blur_y_val * 100.0,
+                            'w': blur_w_val * 100.0,
+                            'h': blur_h_val * 100.0,
+                        }
+                        effective_sub_style['align'] = 'center'
+
                     # Sinh file ASS chuẩn xác 1:1 với tọa độ video đầu ra cur_out_w x cur_out_h
                     ass_target = os.path.join(editor_temp_dir, 'rendered_subtitles.ass')
-                    generate_styled_ass(srt_target, ass_target, cur_out_w, cur_out_h, subtitle_style, geometry=output_geometry, speed=video_speed)
+                    generate_styled_ass(srt_target, ass_target, cur_out_w, cur_out_h, effective_sub_style, geometry=output_geometry, speed=video_speed)
                     escaped_ass = ass_target.replace('\\', '/').replace(':', '\\:')
                     fonts_dir = os.path.join(ROOT_DIR, 'resources', 'fonts')
                     escaped_fonts = fonts_dir.replace('\\', '/').replace(':', '\\:')
@@ -1316,7 +1426,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                 except Exception as e_ass:
                     # Fallback nếu gặp lỗi sinh ASS
                     escaped_srt = srt_target.replace('\\', '/').replace(':', '\\:')
-                    v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}'[v_sub]")
+                    v_filters.append(f"[{curr_v}]subtitles='{escaped_srt}':force_style='Fontname=Montserrat,Fontsize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=60'[v_sub]")
                     curr_v = "v_sub"
         else:
             emit("ℹ️ [Phụ đề] Tùy chọn chèn phụ đề đang TẮT -> Video xuất ra hoàn toàn KHÔNG có phụ đề (không burn-in, không gắn filter subtitles/ass).")
@@ -1654,10 +1764,11 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         has_bgm_mix = (bgm_input_idx is not None)
 
         if has_orig_mix:
+            pan_clause = "pan=stereo|c0=c0|c1=c0," if src_audio_channels == 1 else "pan=stereo|c0=c0|c1=c1,"
             if abs(video_speed - 1.0) > 0.01:
-                orig_tempo_fmt = f"{orig_src}atempo={video_speed:.4f},aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000"
+                orig_tempo_fmt = f"{orig_src}{pan_clause}atempo={video_speed:.4f},aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000"
             else:
-                orig_tempo_fmt = f"{orig_src}aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000"
+                orig_tempo_fmt = f"{orig_src}{pan_clause}aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000"
 
         if has_dub_mix:
             a_filters.append(f"[{dub_input_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1000,volume={voice_vol:.2f}[a_voice_fmt]")
@@ -1794,7 +1905,10 @@ def execute_export_pipeline(job: ExportJob, data: dict):
         decoder_label = f"NVIDIA NVDEC (CUDA)" if can_hw_decode else "CPU Native"
 
         # Base FFmpeg command structure
-        cmd_base = [ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info']
+        cmd_base = [
+            ffmpeg_path, '-y', '-hide_banner', '-loglevel', 'info',
+            '-err_detect', 'ignore_err', '-max_error_rate', '1.0'
+        ]
         if trim_enabled and trim_start:
             cmd_base.extend(['-ss', trim_start])
         if trim_enabled and trim_end:
@@ -1953,6 +2067,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
 
             time_regex = re.compile(r'time=(\d+):(\d+):([0-9.]+)')
             log_buffer.clear()
+            suppressed_stream_corrupt_count = 0
 
             for line in iter(process.stdout.readline, ''):
                 if job.is_stopped() or STOP_EXPORT_FLAG:
@@ -1981,8 +2096,24 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                         else:
                             emit(f"⏳ [{hw_badge}] {l_str}")
                     elif any(kw in l_str.lower() for kw in diagnostic_keywords):
-                        if 'fontconfig error' not in l_str.lower():
-                            emit(f"ℹ️ [{hw_badge}] {l_str}")
+                        l_lower = l_str.lower()
+                        if 'fontconfig error' in l_lower:
+                            continue
+                        is_stream_drop_notice = any(n in l_lower for n in (
+                            'error submitting packet to decoder',
+                            'invalid band type',
+                            'pulse data corrupt',
+                            'exceeds limit',
+                            'is not allocated',
+                            'channel element',
+                            'decode error rate'
+                        ))
+                        if is_stream_drop_notice:
+                            suppressed_stream_corrupt_count += 1
+                            if suppressed_stream_corrupt_count == 1:
+                                emit(f"⚠️ [{hw_badge}] Phát hiện một số gói tin âm thanh/video nguồn bị lỗi nhẹ (corrupted packets). FFmpeg đang tự động bỏ qua để bảo toàn tiến trình xuất...")
+                            continue
+                        emit(f"ℹ️ [{hw_badge}] {l_str}")
 
             process.stdout.close()
             return_code = process.wait()
@@ -1991,6 +2122,7 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             # Phân loại nguyên nhân lỗi chính xác từ stderr FFmpeg (Ưu tiên 2)
             log_text = "\n".join(log_buffer).lower()
             is_oom = ('cannot allocate memory' in log_text or 'out of memory' in log_text or return_code == -1073741571)
+            is_audio_corrupt = ('rematrix is needed' in log_text or 'changing audio frame properties' in log_text or 'sbr was found before the first channel element' in log_text)
             is_filter_err = ('error initializing filter' in log_text or 'no such filter' in log_text or ('invalid argument' in log_text and 'filter' in log_text))
             is_disk_full = ('no space left on device' in log_text or 'disk full' in log_text)
             is_perm_denied = ('permission denied' in log_text or 'access is denied' in log_text)
@@ -2051,6 +2183,10 @@ def execute_export_pipeline(job: ExportJob, data: dict):
                     emit(f"📋 Chi tiết: Hệ thống thiếu RAM vật lý hoặc bộ nhớ ảo Windows (Pagefile commit limit) bị đầy.")
                     emit(f"💡 Gợi ý: Hãy tăng kích thước Pagefile trong Windows Settings, đóng bớt ứng dụng nặng hoặc giảm độ phân giải xuất.")
                     break
+                elif is_audio_corrupt:
+                    emit(f"🛑 [LỖI GIẢI MÃ ÂM THANH] File video nguồn có các gói dữ liệu âm thanh bị hỏng hoặc lỗi cấu trúc AAC (rematrix/channel error).")
+                    emit(f"💡 Gợi ý: Đã tự động kích hoạt bộ lọc chuẩn hóa kênh âm thanh (pan stereo) để bảo vệ luồng xuất.")
+                    break
                 elif is_filter_err:
                     emit(f"🛑 [LỖI BỘ LỌC] Khởi tạo đồ thị bộ lọc FFmpeg (filter graph) thất bại.")
                     emit(f"💡 Gợi ý: Kiểm tra lại các tùy chọn làm mờ, lồng phụ đề hoặc lớp phủ overlay.")
@@ -2085,6 +2221,8 @@ def execute_export_pipeline(job: ExportJob, data: dict):
             # Gợi ý ngữ cảnh chính xác
             if is_oom:
                 emit(f"💡 Gợi ý: Lỗi tràn bộ nhớ (RAM/Pagefile). Vui lòng cấu hình lại Windows Virtual Memory.")
+            elif is_audio_corrupt:
+                emit(f"💡 Gợi ý: Luồng âm thanh gốc bị hỏng gói tin hoặc thay đổi kênh giữa chừng (AAC packet corruption).")
             elif is_disk_full:
                 emit(f"💡 Gợi ý: Ổ đĩa đã đầy. Vui lòng dọn dẹp dung lượng ổ đĩa.")
             elif is_perm_denied:

@@ -497,7 +497,13 @@ def api_download_douyin_scan_channel_stream():
         try:
             crawler = douyin_browser_downloader.DouyinBrowserDownloader()
             mix_id = douyin_browser_downloader.extract_mix_id(channel_url)
-            if source_type == 'collection' or mix_id:
+            is_collection = (
+                source_type == 'collection' or
+                bool(mix_id) or
+                'showsubtab=compilation' in channel_url.lower() or
+                '/collection/' in channel_url.lower()
+            )
+            if is_collection:
                 result = crawler.scan_collection_videos(channel_url, limit=limit, progress_cb=progress_callback)
             else:
                 result = crawler.scan_channel_videos(channel_url, limit=limit, progress_cb=progress_callback)
@@ -567,7 +573,13 @@ def api_download_douyin_scan_channel():
     try:
         crawler = douyin_browser_downloader.DouyinBrowserDownloader()
         mix_id = douyin_browser_downloader.extract_mix_id(channel_url)
-        if source_type == 'collection' or mix_id:
+        is_collection = (
+            source_type == 'collection' or
+            bool(mix_id) or
+            'showsubtab=compilation' in channel_url.lower() or
+            '/collection/' in channel_url.lower()
+        )
+        if is_collection:
             result = crawler.scan_collection_videos(channel_url, limit=limit)
         else:
             result = crawler.scan_channel_videos(channel_url, limit=limit)

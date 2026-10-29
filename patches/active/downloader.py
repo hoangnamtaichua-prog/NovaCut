@@ -1831,7 +1831,7 @@ def merge_collection_episodes(file_list, output_path, merge_mode="auto", progres
         filter_chunks.append(
             f"[{idx}:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{idx}];"
-            f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{idx}]"
+            f"[{idx}:a]pan=stereo|c0=c0|c1=c1,aformat=sample_rates=44100:channel_layouts=stereo[a{idx}]"
         )
         concat_inputs += f"[v{idx}][a{idx}]"
 
