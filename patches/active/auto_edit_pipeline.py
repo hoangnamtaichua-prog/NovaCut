@@ -67,11 +67,14 @@ def is_api_voice(voice_id):
     if not voice_id:
         return False
     vid = str(voice_id).strip().lower()
+    # 0. Nếu bắt đầu bằng các tiền tố rõ ràng của Cloud API (OpenSpeaker / VBee)
+    if vid.startswith(('openspeaker_', 'api_', 'os_', 'vbee_')):
+        return True
     # 1. Các giọng Kokoro Offline chuẩn
-    if vid in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc'] or vid.startswith('kokoro'):
+    if vid in ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat', 'en_heart', 'en_michael', 'en_nicole', 'en_adam', 'kokoro', 'adam', 'local_adam'] or vid.startswith(('kokoro', 'kokoro_')):
         return False
     # 2. Các giọng Local Voice Clone, RVC Model Clone, Edge-TTS
-    if vid.startswith(('local_', 'rvc_', 'edge_', 'vi-vn-')):
+    if vid.startswith(('local_', 'rvc_', 'edge_', 'vi-vn-', 'vi-')) or 'neural' in vid:
         return False
     # 3. Tra cứu profile trong custom_voices.json
     try:
@@ -81,10 +84,27 @@ def is_api_voice(voice_id):
             provider = v_prof.get('provider', '').lower()
             if provider in ['local_voice', 'rvc', 'kokoro', 'edge', 'local']:
                 return False
+            if provider in ['openspeaker', 'api', 'online']:
+                return True
     except Exception:
         pass
-    # 4. Chỉ coi là OpenSpeaker API khi có tiền tố hoặc được cấu hình rõ ràng là cloud API
-    return vid.startswith(('openspeaker_', 'api_', 'os_'))
+    # 4. Tra cứu danh sách OpenSpeaker cached voices
+    try:
+        root_dir = os.path.dirname(os.path.abspath(__file__))
+        cand_files = [
+            os.path.join(root_dir, 'user_data', 'openspeaker_voices.json'),
+            os.path.join(root_dir, 'web', 'openspeaker_voices.json')
+        ]
+        for p in cand_files:
+            if os.path.exists(p):
+                with open(p, 'r', encoding='utf-8') as f:
+                    for av in json.load(f):
+                        if isinstance(av, dict) and av.get('id') == voice_id:
+                            return True
+    except Exception:
+        pass
+    return False
+
 
 def parse_bool(value, default=False):
     if isinstance(value, bool):
@@ -1143,8 +1163,8 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
             pass
     os.makedirs(sentence_dir, exist_ok=True)
     
-    is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh']
-    tts_url = "http://127.0.0.1:5000/api/tts/kokoro" if is_kokoro else "http://127.0.0.1:5000/api/tts/openspeaker"
+    is_cloud_api = is_api_voice(voice_id) and bool(api_key_openspeaker)
+    is_audio_wav = not is_cloud_api
     
     total = len(sentences)
     if total == 0:
@@ -1159,7 +1179,8 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
         if check_stop_func and check_stop_func():
             return None
             
-        filename = f"sent_{idx}.wav" if is_kokoro else f"sent_{idx}.mp3"
+        filename = f"sent_{idx}.wav" if is_audio_wav else f"sent_{idx}.mp3"
+        audio_path = os.path.join(sentence_dir, filename)
         wav_path = os.path.join(sentence_dir, f"sent_{idx}_pcm.wav")
         
         # Nếu đã có file WAV hợp lệ (từ cache/lần chạy trước) VÀ use_cache=True thì tái sử dụng
@@ -1177,26 +1198,43 @@ def generate_tts_per_sentence_stream(sentences, voice_id, speed, temp_dir, api_k
                 if dur <= 0: dur = 2.0
             return idx, wav_path, dur, sentence
 
-        tts_payload = {
-            "text": sentence,
-            "voice_id": voice_id,
-            "speed": speed,
-            "output_dir": sentence_dir,
-            "filename": filename,
-            "skip_notify": True
-        }
-        if not is_kokoro and api_key_openspeaker:
-            tts_payload['api_key'] = api_key_openspeaker
-            
+        # 1. Ưu tiên gọi trực tiếp in-process bằng ai_dubbing.synthesize_sentence (tối ưu tốc độ, resident GPU/CPU, zero-overhead)
+        direct_success = False
         try:
-            res = requests.post(tts_url, json=tts_payload, timeout=120)
-            if res.status_code != 200:
-                raise Exception(f"Lỗi TTS câu {idx+1}: {res.text}")
-        except Exception as e:
-            raise Exception(f"Lỗi gọi API TTS câu {idx+1}: {str(e)}")
+            ai_dubbing.synthesize_sentence(
+                text=sentence,
+                voice_id=voice_id,
+                speed=speed,
+                output_path=audio_path,
+                open_speaker_key=api_key_openspeaker if is_cloud_api else None
+            )
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
+                direct_success = True
+        except Exception as e_direct:
+            pass
+
+        # 2. Fallback sang HTTP endpoint nội bộ nếu in-process gặp sự cố
+        if not direct_success:
+            tts_url = "http://127.0.0.1:5000/api/tts/openspeaker" if is_cloud_api else "http://127.0.0.1:5000/api/tts/kokoro"
+            tts_payload = {
+                "text": sentence,
+                "voice_id": voice_id,
+                "speed": speed,
+                "output_dir": sentence_dir,
+                "filename": filename,
+                "skip_notify": True
+            }
+            if is_cloud_api and api_key_openspeaker:
+                tts_payload['api_key'] = api_key_openspeaker
+                
+            try:
+                res = requests.post(tts_url, json=tts_payload, timeout=120)
+                if res.status_code != 200:
+                    raise Exception(f"Lỗi TTS câu {idx+1}: {res.text}")
+            except Exception as e:
+                raise Exception(f"Lỗi gọi API TTS câu {idx+1}: {str(e)}")
             
-        audio_path = os.path.join(sentence_dir, filename)
-        if not os.path.exists(audio_path):
+        if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 100:
             raise Exception(f"Không tìm thấy file audio câu {idx+1}")
             
         try:

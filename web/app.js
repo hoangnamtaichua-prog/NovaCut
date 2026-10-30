@@ -14635,7 +14635,9 @@ if (btnSelectReviewSrt) {
 let reviewAbortController = null;
 
 function checkLocalVoiceWarning(voiceId) {
-    const isLocal = ['ngoc_huyen', 'diem_trinh', 'mai_linh'].includes(voiceId) ||
+    const isLocal = ['ngoc_huyen', 'diem_trinh', 'mai_linh', 'nam_khoa', 'minh_duc', 'manh_dung', 'thanh_dat'].includes(voiceId) ||
+                    voiceId.startsWith('local_') ||
+                    voiceId.startsWith('kokoro_') ||
                     voiceId.startsWith('rvc_') ||
                     voiceId.startsWith('edge_');
     if (!isLocal) return Promise.resolve('proceed');

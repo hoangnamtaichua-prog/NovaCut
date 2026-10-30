@@ -165,21 +165,37 @@ def build_video_workflow(video_path, script_json, voice_id, output_dir, output_n
                     tts_cached = False
 
             if not tts_cached:
+                direct_tts_ok = False
                 try:
-                    res = requests.post("http://127.0.0.1:5000/api/tts/kokoro", json={
-                        "text": narration,
-                        "voice_id": voice_id,
-                        "speed": 1.0,
-                        "output_dir": os.path.abspath(os.path.join('clips', 'audio')),
-                        "filename": f'narration_{i}.wav',
-                        "skip_notify": True
-                    })
-                    if res.status_code != 200:
-                        yield f"data: 🛑 Lỗi tạo TTS: {res.text}\n\n"
+                    import ai_dubbing
+                    os.makedirs(os.path.dirname(audio_out_path), exist_ok=True)
+                    ai_dubbing.synthesize_sentence(
+                        text=narration,
+                        voice_id=voice_id,
+                        speed=1.0,
+                        output_path=audio_out_path
+                    )
+                    if os.path.exists(audio_out_path) and os.path.getsize(audio_out_path) > 100:
+                        direct_tts_ok = True
+                except Exception:
+                    direct_tts_ok = False
+
+                if not direct_tts_ok:
+                    try:
+                        res = requests.post("http://127.0.0.1:5000/api/tts/kokoro", json={
+                            "text": narration,
+                            "voice_id": voice_id,
+                            "speed": 1.0,
+                            "output_dir": os.path.abspath(os.path.join('clips', 'audio')),
+                            "filename": f'narration_{i}.wav',
+                            "skip_notify": True
+                        })
+                        if res.status_code != 200:
+                            yield f"data: 🛑 Lỗi tạo TTS: {res.text}\n\n"
+                            return
+                    except Exception as e:
+                        yield f"data: 🛑 Lỗi gọi API TTS: {str(e)}. (Máy chủ Flask có đang chạy không?)\n\n"
                         return
-                except Exception as e:
-                    yield f"data: 🛑 Lỗi gọi API TTS: {str(e)}. (Máy chủ Flask có đang chạy không?)\n\n"
-                    return
                 
                 # Check audio duration using ffprobe
                 ffprobe_path = os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe.exe') if os.name == 'nt' else 'ffprobe'

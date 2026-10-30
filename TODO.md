@@ -9,7 +9,27 @@
 
 ## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
 
-*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.7)*
+*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.8)*
+
+---
+
+## 📦 ĐÃ PHÁT HÀNH TRONG BẢN v1.3.8 (30/10/2026)
+
+- **Khắc phục lỗi khi chọn Giọng Đọc Local Voice (Ngọc Huyền Local, Minh Đức Local, v.v.) bị báo lỗi thiếu OpenSpeaker API Key (30/10/2026) (`auto_edit_pipeline.py`, `patches/active/auto_edit_pipeline.py`, `release/NovaCut/auto_edit_pipeline.py`, `review_phim.py`, `patches/active/review_phim.py`, `web/app.js`, `patches/active/web/app.js`):**
+  - **Triệu chứng & Nguyên nhân gốc (Root Cause):**
+    - Khi người dùng tạo video Review Phim (hoặc Narration) với kịch bản dài (ví dụ: 763 câu) và chọn giọng đọc Local Voice trên máy như "Ngọc Huyền (Local Voice)" (`local_ngoc_huyen`) hoặc các giọng Local khác, tiến trình bị dừng ngay từ câu đầu tiên với thông báo:
+      `🛑 Lỗi gọi API TTS câu 1: Lỗi TTS câu 1: {"error":"Vui lòng cung cấp OpenSpeaker API Key","success":false}`.
+    - **Nguyên nhân cốt lõi:**
+      1. Trong hàm `generate_tts_per_sentence_stream` của `auto_edit_pipeline.py`, điều kiện kiểm tra giọng offline bị hardcode cũ kỹ: `is_kokoro = voice_id in ['ngoc_huyen', 'diem_trinh', 'mai_linh']`. Do các giọng Local Voice mới sử dụng ID có tiền tố `local_` (ví dụ `local_ngoc_huyen`, `local_minh_duc`) hoặc các giọng Edge/RVC/Kokoro khác, điều kiện này trả về `False`.
+      2. Dẫn đến việc hệ thống thiết lập sai endpoint `tts_url = "http://127.0.0.1:5000/api/tts/openspeaker"` và cố tình gửi từng câu thoại lên API Cloud OpenSpeaker thay vì sử dụng bộ máy tổng hợp offline trên máy.
+      3. Endpoint `/api/tts/openspeaker` từ chối yêu cầu do người dùng không cài đặt API Key cho OpenSpeaker, gây lỗi sập tiến trình.
+      4. Ngoài ra, việc các worker luồng gọi lặp lại qua HTTP localhost (`127.0.0.1:5000`) gây thêm độ trễ mạng và nguy cơ nghẽn kết nối nội bộ khi số lượng câu lớn.
+  - **Giải pháp xử lý triệt để:**
+    1. *Cập nhật hàm phân loại giọng `is_api_voice(voice_id)`:* Nhận diện chuẩn xác 100% các tiền tố Local (`local_`), Kokoro (`kokoro_`, `manh_dung`, `thanh_dat`, v.v.), Edge-TTS (`edge_`, `neural`), RVC (`rvc_`) là giọng offline không cần API Key; chỉ xác định là API Voice khi bắt đầu bằng tiền tố `openspeaker_`, `vbee_`, `os_`, `api_` hoặc nằm trong danh mục cache của OpenSpeaker.
+    2. *Tối ưu hóa tổng hợp in-process trực tiếp qua `ai_dubbing.synthesize_sentence`:* Thay vì gọi vòng qua HTTP endpoint localhost, hàm sinh giọng từng câu gọi trực tiếp engine in-process với đầy đủ hỗ trợ resident GPU/CPU (VieNeu GPU worker IPC, ONNX Lite, Kokoro, Edge-TTS).
+    3. *Cơ chế dự phòng an toàn (Failover):* Nếu in-process gặp sự cố ngoài dự kiến, hệ thống tự động fallback sang endpoint HTTP đúng mục tiêu (`/api/tts/kokoro` cho giọng offline/local, `/api/tts/openspeaker` chỉ khi là giọng cloud API có kèm Key).
+    4. *Cập nhật cảnh báo giao diện `checkLocalVoiceWarning`:* Bổ sung đầy đủ các tiền tố `local_`, `kokoro_` để giao diện đồng bộ chính xác.
+    5. *Đã kiểm thử & xác minh:* Chạy kiểm thử thành công tạo giọng đa luồng với `local_ngoc_huyen` không cần OpenSpeaker Key, tạo file WAV PCM 24kHz và file SRT chính xác tuyệt đối.
 
 ---
 
