@@ -9,7 +9,25 @@
 
 ## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
 
-*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.10)*
+*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.11)*
+
+---
+
+## 📦 ĐÃ PHÁT HÀNH TRONG BẢN v1.3.11 (31/10/2026)
+
+- **Khắc phục triệt để lỗi "Lỗi khởi tạo hoặc kết nối xuất video: File stem đã xử lý không hợp lệ" khi xuất video (31/10/2026) (`routes/video_edit.py`, `routes/audio.py`, `audio_separator.py`, `mdx_separator.py`, `web/app.js`, `patches/active/...`, `release/NovaCut/...`):**
+  - **Triệu chứng & Báo cáo người dùng:**
+    - Người dùng bấm xuất video (lồng tiếng AI TTS) thì tiến trình dừng khẩn cấp ngay từ bước khởi tạo với thông báo: `Lỗi khởi tạo hoặc kết nối xuất video: File stem đã xử lý không hợp lệ`.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    1. Trong `routes/video_edit.py` (`validate_export_payload`), tham số cache âm thanh `precomputed_cleaned_path` bị kiểm tra cứng bằng `is_path_allowed(precomputed_path, must_exist=True, extensions=_AUDIO_EXTENSIONS)`.
+    2. Khi người dùng chọn preset "Tách Đa Luồng" (hoặc chưa chọn lọc vocal/bgm), hàm `_separate_stems_dsp_turbo` trong `audio_separator.py` gán nhầm `clean_path = input_media_path` (file video `.mp4`), khiến điều kiện đuôi mở rộng âm thanh `_AUDIO_EXTENSIONS` bị từ chối trả về 400.
+    3. Nếu file stem đã tách tạm thời bị xóa, người dùng đổi video khác, hoặc frontend gửi URL `/api/file?path=...`, việc ném lỗi 400 đã chặn đứng toàn bộ quá trình xuất video một cách không cần thiết, trong khi đây chỉ là một file cache tùy chọn (nếu thiếu hoàn toàn có thể tự động tách mới).
+    4. Trong `web/app.js`, khi nạp video mới vào trình biên tập, trạng thái `window._appliedStemCleanedPath` và `window._isStemAudioAppliedToEdited` không được giải phóng tự động, khiến file cache của video trước vẫn bị gửi kèm khi xuất video sau.
+  - **Giải pháp xử lý triệt để:**
+    1. *Cơ chế tự phục hồi và cấp quyền thông minh tại `validate_export_payload`:* Tự động giải mã URL nếu có tiền tố `/api/file?path=`, tự động cấp quyền `register_user_path` nếu file tồn tại trên máy. Nếu file cache không hợp lệ hoặc đã bị dọn dẹp, hệ thống không bao giờ chặn xuất video (không throw 400), mà tự động đặt về rỗng `stem_cfg['precomputed_cleaned_path'] = ''` để export pipeline tự động tách mới an toàn.
+    2. *Tự động đăng ký quyền tại `routes/audio.py`:* Sau khi tách stem hoàn tất, tự động đăng ký toàn bộ file output (`cleaned_path`, `vocals_path`, `instrumental_path`, `bgm_path`) vào hệ thống bảo mật để luôn hợp lệ.
+    3. *Chuẩn hóa định dạng file sạch tại `audio_separator.py` & `mdx_separator.py`:* Đảm bảo `clean_path` và `clean_bg_path` luôn là file âm thanh WAV thực thụ (`instrumental_path`), không bao giờ trỏ ngược vào file video `.mp4`.
+    4. *Tự động dọn dẹp cache stem tại `web/app.js`:* Bổ sung cơ chế giải phóng trạng thái stem cũ khi tải video mới vào trình biên tập, và lọc sạch URL trước khi gửi cấu hình xuất.
 
 ---
 

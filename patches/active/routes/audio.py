@@ -14,7 +14,7 @@ import copy
 import logging
 from flask import Blueprint, jsonify, request
 from routes.state import ROOT_DIR
-from routes.security import is_path_allowed, parse_bool
+from routes.security import is_path_allowed, parse_bool, register_user_path
 import audio_separator
 import license_manager
 
@@ -87,6 +87,13 @@ def _run_separation_worker(media_path, mode, device, remove_vocals, remove_bgm, 
         vocals_path = res.get('vocals_path', '')
         inst_path = res.get('instrumental_path', '')
         bgm_path = res.get('bgm_path', inst_path)
+
+        for p in (cleaned_path, vocals_path, inst_path, bgm_path):
+            if p and os.path.exists(p):
+                try:
+                    register_user_path(p)
+                except Exception:
+                    pass
 
         result_payload = {
             "success": True,

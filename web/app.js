@@ -2082,9 +2082,19 @@ window.buildEditorExportConfig = function(overrides = {}) {
             keep_sfx: overrides.dubbing?.stem_separation?.keep_sfx ?? (document.getElementById('editorKeepSfx')?.checked ?? true),
             separate_bgm: overrides.dubbing?.stem_separation?.separate_bgm ?? (document.getElementById('editorSeparateBgm')?.checked ?? true),
             keep_bgm: overrides.dubbing?.stem_separation?.keep_bgm ?? (document.getElementById('editorSeparateBgm')?.checked ?? true),
-            remove_bgm: overrides.dubbing?.stem_separation?.remove_bgm ?? (!(document.getElementById('editorSeparateBgm')?.checked ?? true)),
-            precomputed_cleaned_path: overrides.dubbing?.stem_separation?.precomputed_cleaned_path || ((window._isStemAudioAppliedToEdited && window._appliedStemCleanedPath) ? window._appliedStemCleanedPath : '')
-        },
+            precomputed_cleaned_path: (() => {
+                let p = overrides.dubbing?.stem_separation?.precomputed_cleaned_path || ((window._isStemAudioAppliedToEdited && window._appliedStemCleanedPath) ? window._appliedStemCleanedPath : '');
+                if (typeof p === 'string' && (p.startsWith('/api/') || p.startsWith('http://') || p.startsWith('blob:'))) {
+                    if (p.includes('path=')) {
+                        try {
+                            p = decodeURIComponent(p.split('path=')[1].split('&')[0]);
+                        } catch (e) {}
+                    } else {
+                        p = '';
+                    }
+                }
+                return (typeof p === 'string') ? p.trim() : '';
+            })()
         manual_audio: overrides.dubbing?.manual_audio || document.getElementById('manualAudioPath')?.value || '',
         precomputed_audio_path: overrides.dubbing?.precomputed_audio_path || ((window._pregeneratedVoice && window._pregeneratedVoice.ready) ? window._pregeneratedVoice.master_track_path : ''),
         manual_voice_volume: (overrides.dubbing?.manual_voice_volume !== undefined) ? Number(overrides.dubbing.manual_voice_volume) : (parseInt(document.getElementById('dubbingManualVol')?.value || 100) / 100),
@@ -8019,6 +8029,19 @@ window.loadVideoToEditor = async function(videoPath, srtPath = null) {
     }
 
     if (editorInputVideoPath) editorInputVideoPath.value = videoPath;
+
+    // Tự động giải phóng kết quả tách stem cũ khi đổi sang video khác
+    window._isStemAudioAppliedToEdited = false;
+    window._appliedStemAudioUrl = null;
+    window._appliedStemCleanedPath = null;
+    const stemAppliedBadge = document.getElementById('editorStemAppliedBadge');
+    if (stemAppliedBadge) {
+        stemAppliedBadge.textContent = 'Chưa áp dụng vào video';
+        stemAppliedBadge.style.color = '#94a3b8';
+    }
+    const stemResBox = document.getElementById('editorStemResultBox');
+    if (stemResBox) stemResBox.style.display = 'none';
+
     if (videoPlayer) {
         videoPlayer.src = `/api/video?path=${encodeURIComponent(videoPath)}`;
         videoPlayer.style.display = 'block';

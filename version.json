@@ -1,8 +1,8 @@
 {
-  "version": "1.3.10",
-  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.3.10/patch.zip",
-  "sha256": "a994772fa613fbb8ea6aa956f38e927923522d125415fcdab0eaec6afbc23e3e",
-  "changelog": "✨ Bản Cập Nhật NovaCut v1.3.10 (Tái Thiết Kế Trực Quan Hóa Tách & Lọc Âm Gốc AI, Bổ Sung Nút Tách Lại / Khôi Phục & Sửa Triệt Để Lỗi Audio Player 0:00/0:00):\n1. 🎴 Trực Quan Hóa Giao Diện Lựa Chọn Tách Âm Gốc AI: Thay thế các checkbox khó hiểu bằng 3 thẻ Preset trực quan nêu rõ Bỏ cái gì - Giữ cái gì (Xóa Giọng Cũ Giữ SFX & Nhạc, Chỉ Giữ Lời Thoại, Tách Đa Luồng).\n2. 🔄 Bổ Sung Nút [Tách Lại] & [Xóa Kết Quả & Khôi Phục Âm Gốc]: Cho phép người dùng làm lại dễ dàng khi kết quả tách chưa như ý hoặc khôi phục âm thanh gốc nguyên bản của video chỉ với 1 click.\n3. 🔊 Sửa Triệt Để Lỗi Thanh Phát Hiển Thị 0:00 / 0:00: Chuẩn hóa xuất âm thanh từ 32-bit Float sang 16-bit PCM (PCM_S16), tương thích hoàn hảo 100% với HTML5 Player trên trình duyệt và WebView2.\n4. 🎚️ Rút Gọn Bộ Chọn 2 Track Nghe Thử Chuẩn Xác: 'Track Âm Nền & SFX' vs 'Track Lời Thoại Gốc' kèm huy hiệu trạng thái áp dụng vào video.",
+  "version": "1.3.11",
+  "download_url": "https://github.com/hoangnamtaichua-prog/NovaCut/releases/download/v1.3.11/patch.zip",
+  "sha256": "6fc61c04a8bce2bd982b054dad9bd1d264548c109e0770f0b3f69834cb1c07a2",
+  "changelog": "✨ Bản Cập Nhật NovaCut v1.3.11 (Khắc Phục Triệt Để Lỗi Khởi Tạo Xuất Video: File stem đã xử lý không hợp lệ & Tự Phục Hồi Cache An Toàn):\n1. 🛡️ Khắc Phục Lỗi 'File stem đã xử lý không hợp lệ': Tự động cấp quyền an ninh register_user_path và giải mã URL đường dẫn file tách.\n2. 🔄 Cơ Chế Tự Phục Hồi Cache Thông Minh: Tuyệt đối không chặn đứng tiến trình xuất video nếu file cache stem không tồn tại; tự động reset để pipeline tách mới an toàn.\n3. 🎵 Chuẩn Hóa File Âm Thanh Stem: Đảm bảo luồng âm sạch luôn là file WAV thực thụ (instrumental_path), không trỏ nhầm sang file video .mp4.\n4. 🧹 Tự Động Giải Phóng Cache: Xóa bỏ dữ liệu stem cũ khi người dùng nạp video mới vào trình biên tập.",
   "is_mandatory": false,
-  "updated_at": "2026-10-31 10:13:00"
+  "updated_at": "2026-10-31 11:34:58"
 }

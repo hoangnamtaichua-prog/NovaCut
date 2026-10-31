@@ -806,7 +806,7 @@ def _separate_stems_dsp_turbo(
     elif remove_vocals:
         clean_path = instrumental_path
     else:
-        clean_path = input_media_path
+        clean_path = instrumental_path
 
     total_el = time.time() - t_start
     avg_speed = duration / max(total_el, 0.001)

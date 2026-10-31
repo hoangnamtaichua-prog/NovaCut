@@ -444,8 +444,24 @@ def validate_export_payload(data: dict):
         if stem_cfg and not isinstance(stem_cfg, dict):
             return jsonify({'success': False, 'error': 'Cấu hình tách âm thanh không hợp lệ'}), 400
         precomputed_path = str(stem_cfg.get('precomputed_cleaned_path') or '').strip()
-        if precomputed_path and not is_path_allowed(precomputed_path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
-            return jsonify({'success': False, 'error': 'File stem đã xử lý không hợp lệ'}), 400
+        if precomputed_path:
+            import urllib.parse
+            if '/api/file?path=' in precomputed_path:
+                try:
+                    precomputed_path = urllib.parse.unquote(precomputed_path.split('/api/file?path=')[-1].split('&')[0])
+                except Exception:
+                    pass
+            precomputed_path = os.path.normpath(precomputed_path)
+            if os.path.exists(precomputed_path):
+                register_user_path(precomputed_path)
+
+            if os.path.exists(precomputed_path) and is_path_allowed(precomputed_path, must_exist=True, extensions=_AUDIO_EXTENSIONS):
+                stem_cfg['precomputed_cleaned_path'] = precomputed_path
+            else:
+                # Không được chặn tiến trình xuất video nếu file cache stem không tồn tại/không hợp lệ.
+                # Thay vào đó đặt về rỗng để export pipeline tự động tách mới an toàn nếu stem separation được bật.
+                logger.warning(f"[Export] File stem cache '{precomputed_path}' không tồn tại hoặc không hợp lệ. Đặt lại để tách mới an toàn.")
+                stem_cfg['precomputed_cleaned_path'] = ''
         logo_data = data.get('logo') or {}
         if logo_data and not isinstance(logo_data, dict):
             return jsonify({'success': False, 'error': 'Cấu hình logo không hợp lệ'}), 400

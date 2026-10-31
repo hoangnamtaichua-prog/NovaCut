@@ -479,17 +479,18 @@ def separate_stems_mdx(
     elif remove_vocals:
         clean_bg_path = instrumental_path
     else:
-        clean_bg_path = input_audio_path
+        clean_bg_path = instrumental_path
 
     if progress_cb:
         progress_cb(100, "Hoàn tất tách âm thanh bằng UVR5 MDX-NET!")
     log(f"[UVR-MDX] ✅ Tách âm hoàn tất:\n  - Nhạc nền / SFX: {instrumental_path}\n  - Lời thoại Vocal: {vocals_path}")
 
     return {
+        "cleaned_path": clean_bg_path,
+        "clean_background_path": clean_bg_path,
         "vocals_path": vocals_path,
         "instrumental_path": instrumental_path,
         "bgm_path": instrumental_path,
-        "clean_background_path": clean_bg_path,
     }
 
 
