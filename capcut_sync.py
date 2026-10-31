@@ -4,6 +4,7 @@ import uuid
 import time
 import shutil
 import subprocess
+import re
 from datetime import timedelta
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))

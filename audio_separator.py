@@ -10,6 +10,7 @@ import sys
 import time
 import subprocess
 import shutil
+import threading
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 try:

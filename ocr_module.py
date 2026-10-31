@@ -5,6 +5,9 @@ import numpy as np
 import time
 import re
 import hashlib
+import shutil
+
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def get_editor_temp_dir(output_dir, video_path):
     """

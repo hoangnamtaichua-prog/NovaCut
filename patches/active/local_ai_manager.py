@@ -11,6 +11,7 @@ import time
 import shutil
 import subprocess
 import threading
+import re
 import urllib.request
 import urllib.error
 

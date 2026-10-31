@@ -58,6 +58,7 @@ PROCESSED_TX_FILE = os.path.join(DATA_DIR, '.processed_txs.dat')
 TOKEN_CACHE_FILE = os.path.join(DATA_DIR, '.token_quota.dat')
 # Lưu trạng thái (tier, expire_epoch, status) của lần sync cloud gần nhất đã thành công.
 # Dùng để phát hiện nâng gói / gia hạn khi check bản quyền lần đầu mỗi phiên.
+LAST_SYNC_STATE_FILE = os.path.join(DATA_DIR, '.last_sync_state.json')
 MAX_PROMPT_TOKENS = 1_000_000_000_000      # Không giới hạn (Unlimited)
 MAX_COMPLETION_TOKENS = 1_000_000_000_000  # Không giới hạn (Unlimited)
 

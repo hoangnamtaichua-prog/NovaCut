@@ -9,7 +9,34 @@
 
 ## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
 
-*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.8)*
+*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.9)*
+
+---
+
+## 📦 ĐÃ PHÁT HÀNH TRONG BẢN v1.3.9 (31/10/2026)
+
+- **Khắc phục lỗi sập tính năng Tách & Lọc Âm Gốc AI (Stem Separator) do thiếu import threading & vá toàn diện các lỗi NameError (31/10/2026) (`audio_separator.py`, `routes/audio.py`, `capcut_sync.py`, `local_ai_manager.py`, `routes/batch_queue.py`, `routes/social_publish.py`, `routes/video_edit.py`, `auto_edit_pipeline.py`, `routes/comic_review.py`, `comic_review_engine.py`, `license_manager.py`, `ocr_module.py`):**
+  - **Triệu chứng & Báo cáo người dùng:**
+    - Người dùng nhấn nút "⚡ Tách & Nghe Thử Âm SFX" ở chế độ Siêu Tốc (DSP Turbo) thì tiến trình dừng khẩn cấp ở 10% với thông báo lỗi: `❌ Lỗi: name 'threading' is not defined`.
+  - **Nguyên nhân cốt lõi (Root Cause):**
+    - Trong hàm `_separate_stems_dsp_turbo` tại [audio_separator.py](file:///d:/Tool/AI-Movie-Shorts/AI-Movie-Shorts/audio_separator.py#L753), hệ thống khởi tạo luồng ngầm `err_thread = threading.Thread(target=_drain_stderr, daemon=True)` để đọc dữ liệu stderr từ tiến trình FFmpeg tránh nghẽn pipe buffer.
+    - Tuy nhiên, tệp `audio_separator.py` không khai báo `import threading` ở đầu tệp, khiến Python ném ra ngoại lệ `NameError: name 'threading' is not defined`. Luồng worker bắt lỗi và trả về lỗi qua endpoint `/api/audio/separate/progress`.
+    - Đồng thời, quét rà soát toàn diện hệ thống phát hiện một số tệp backend khác có import thiếu hoặc biến chưa định nghĩa trong các trường hợp rẽ nhánh:
+      1. `routes/audio.py`: Thiếu `import logging` khi ghi log lỗi gửi thông báo Telegram.
+      2. `capcut_sync.py`: Thiếu `import re` trong hàm `parse_srt_file`.
+      3. `local_ai_manager.py`: Thiếu `import re` khi làm sạch và dịch phụ đề AI ngoại tuyến.
+      4. `routes/batch_queue.py`: Thiếu `import sys` khi mở hộp thoại chọn tệp hàng loạt trên Windows.
+      5. `routes/social_publish.py`: Thiếu `import time` khi tính toán thời hạn OAuth token (`time.time()`).
+      6. `routes/video_edit.py`: Thiếu `import random` khi chọn ngẫu nhiên nhạc nền BGM preset.
+      7. `auto_edit_pipeline.py`: Thiếu `import logging` và import `seconds_to_srt_time` từ `subtitle_postprocessor`.
+      8. `routes/comic_review.py`: Thiếu `import logging`, `import cv2` và sửa nhầm tên biến `proj_folder_name` thành `project_folder_name` trong thông báo Telegram.
+      9. `comic_review_engine.py`: Thiếu khai báo `logger` khi bắt lỗi inpaint panel.
+      10. `license_manager.py`: Khai báo thiếu hằng số `LAST_SYNC_STATE_FILE`.
+      11. `ocr_module.py`: Thiếu `import shutil` và khai báo `ROOT_DIR`.
+  - **Giải pháp xử lý:**
+    - Bổ sung `import threading` vào `audio_separator.py` và sửa toàn bộ các lỗi import / biến thiếu ở tất cả các mô-đun liên quan.
+    - Đồng bộ mã nguồn đã sửa sang `patches/active` và `release/NovaCut`.
+    - Đã kiểm tra tĩnh AST/symtable và chạy import thành công 100% tất cả các mô-đun không còn bất kỳ cảnh báo lỗi biến nào.
 
 ---
 

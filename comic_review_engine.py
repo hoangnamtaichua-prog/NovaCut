@@ -8,6 +8,9 @@ import requests
 import numpy as np
 import cv2
 import ffmpeg_installer
+import logging
+
+logger = logging.getLogger("comic_review_engine")
 
 # Load RapidOCR an toàn nếu có
 _ocr_engine = None

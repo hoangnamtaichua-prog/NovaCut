@@ -15,8 +15,11 @@ import comic_crawler
 import comic_panel_detector
 import comic_review_engine
 import comic_video_renderer
+import logging
+import cv2
 
 comic_review_bp = Blueprint('comic_review', __name__)
+logger = logging.getLogger("comic_review")
 
 _active_stops = {}
 _session_dirs = {}
@@ -878,7 +881,7 @@ def render_comic_video_stream():
                     notifier.notify_task_success(
                         task_type='comic',
                         task_title='Review Truyện Tranh AI',
-                        video_title=proj_folder_name or f"Truyện Tranh ({session_id})",
+                        video_title=project_folder_name or f"Truyện Tranh ({session_id})",
                         output_path=final_output_path,
                         file_size_mb=file_sz,
                         extra_info={'Số phân đoạn': len(segments), 'Tỷ lệ': aspect_ratio}
@@ -903,7 +906,7 @@ def render_comic_video_stream():
                         notifier.notify_task_failure(
                             task_type='comic',
                             task_title='Review Truyện Tranh AI',
-                            video_title=proj_folder_name or f"Truyện Tranh ({session_id})",
+                            video_title=project_folder_name or f"Truyện Tranh ({session_id})",
                             error_message="Không tạo được tệp video kết quả (file không tồn tại hoặc rỗng)"
                         )
                 except Exception:
