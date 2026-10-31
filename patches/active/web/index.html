@@ -803,42 +803,83 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     <span class="slider-toggle round"></span>
                                 </label>
                             </div>
-                            <div id="editorStemConfig" style="display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: #cbd5e1; opacity: 0.4; pointer-events: none;">
-                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
-                                    <span>🎙️ Loại bỏ lời thoại cũ (Xóa Vocal gốc)</span>
-                                    <input type="checkbox" id="editorRemoveVocals" class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
-                                </label>
-                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
-                                    <span>💥 Giữ lại tiếng động môi trường & hiệu ứng (Keep SFX)</span>
-                                    <input type="checkbox" id="editorKeepSfx" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
-                                </label>
-                                <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
-                                    <span>🎵 Tách nhạc nền (BGM)</span>
-                                    <input type="checkbox" id="editorSeparateBgm" checked class="custom-checkbox-circle" style="width: 15px; height: 15px; accent-color: #38bdf8;">
-                                </label>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
+                            <div id="editorStemConfig" style="display: flex; flex-direction: column; gap: 8px; font-size: 11.5px; color: #cbd5e1; opacity: 0.4; pointer-events: none;">
+                                <!-- 1. TRỰC QUAN HÓA: BỘ CHỌN MỤC ĐÍCH LỌC ÂM THANH (PRESETS RÕ RÀNG) -->
+                                <div>
+                                    <div style="color: #94a3b8; font-size: 11px; margin-bottom: 5px; font-weight: 600;">🎯 Bạn muốn giữ lại & loại bỏ âm thanh nào?</div>
+                                    <div style="display: flex; flex-direction: column; gap: 5px;" id="stemTargetPresetList">
+                                        <!-- Thẻ 1: Khuyên dùng cho lồng tiếng / Review phim -->
+                                        <label class="stem-preset-card" id="stemCardRemoveVocal" style="display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px; background: rgba(14, 165, 233, 0.12); border: 1.5px solid #0284c7; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;">
+                                            <input type="radio" name="stemTargetPreset" value="remove_vocal_keep_sfx" checked style="margin-top: 2px; accent-color: #38bdf8;">
+                                            <div style="flex: 1;">
+                                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                                                    <span style="font-weight: 700; color: #38bdf8; font-size: 11.5px;">🎬 Xóa Giọng Thoại Cũ — Giữ SFX & Nhạc Nền</span>
+                                                    <span style="font-size: 9px; background: rgba(14, 165, 233, 0.25); color: #7dd3fc; padding: 1px 5px; border-radius: 8px; font-weight: 700;">Khuyên Dùng</span>
+                                                </div>
+                                                <div style="font-size: 10px; color: #cbd5e1; margin-top: 2px; line-height: 1.35;">
+                                                    ❌ <b>Bỏ:</b> Tiếng nói / lời thoại cũ (lọc sạch 99.5%)<br>
+                                                    ✅ <b>Giữ:</b> Tiếng động SFX (đánh nhau, tiếng bước chân, nổ...) & Nhạc nền
+                                                </div>
+                                            </div>
+                                        </label>
+
+                                        <!-- Thẻ 2: Trích xuất riêng lời thoại -->
+                                        <label class="stem-preset-card" id="stemCardExtractVocal" style="display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px; background: rgba(30, 41, 59, 0.6); border: 1px solid #334155; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;">
+                                            <input type="radio" name="stemTargetPreset" value="extract_vocal_only" style="margin-top: 2px; accent-color: #38bdf8;">
+                                            <div style="flex: 1;">
+                                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                                                    <span style="font-weight: 700; color: #e2e8f0; font-size: 11.5px;">🎙️ Chỉ Giữ Lời Thoại — Xóa Nhạc & SFX</span>
+                                                </div>
+                                                <div style="font-size: 10px; color: #94a3b8; margin-top: 2px; line-height: 1.35;">
+                                                    ✅ <b>Giữ:</b> Riêng giọng nói / lời thoại nhân vật trong trẻo (Vocal)<br>
+                                                    ❌ <b>Bỏ:</b> Nhạc nền, âm thanh môi trường và tiếng ồn
+                                                </div>
+                                            </div>
+                                        </label>
+
+                                        <!-- Thẻ 3: Tách cả 2 để tự chọn -->
+                                        <label class="stem-preset-card" id="stemCardSplitBoth" style="display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px; background: rgba(30, 41, 59, 0.6); border: 1px solid #334155; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;">
+                                            <input type="radio" name="stemTargetPreset" value="split_both" style="margin-top: 2px; accent-color: #38bdf8;">
+                                            <div style="flex: 1;">
+                                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                                                    <span style="font-weight: 700; color: #e2e8f0; font-size: 11.5px;">🎛️ Tách Đa Luồng (Tách cả 2 để tự nghe & chọn)</span>
+                                                </div>
+                                                <div style="font-size: 10px; color: #94a3b8; margin-top: 2px; line-height: 1.35;">
+                                                    🔄 Xuất cả <b>Track Âm Nền SFX</b> và <b>Track Lời Thoại</b> để bạn nghe thử từng track và chọn track nào muốn áp dụng.
+                                                </div>
+                                            </div>
+                                        </label>
+                                    </div>
+
+                                    <!-- Hidden Checkboxes tương thích ngược với API backend -->
+                                    <input type="checkbox" id="editorRemoveVocals" checked style="display: none;">
+                                    <input type="checkbox" id="editorKeepSfx" checked style="display: none;">
+                                    <input type="checkbox" id="editorSeparateBgm" checked style="display: none;">
+                                </div>
+
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 2px; padding-top: 6px; border-top: 1px solid rgba(51, 65, 85, 0.5);">
                                     <div>
-                                        <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Chế độ tách:</div>
-                                        <select id="editorStemMode" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px; outline: none;">
+                                        <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px; font-weight: 600;">Mô hình xử lý AI:</div>
+                                        <select id="editorStemMode" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 4px 6px; font-size: 11px; outline: none;">
                                             <option value="dsp_turbo" selected>⚡ Siêu Tốc (DSP Turbo - Phim 2h chỉ ~40s) [Khuyên dùng]</option>
                                             <option value="ai_neural">🤖 AI Neural Fast (Lọc phổ thông minh - Phim 2h ~2p)</option>
-                                            <option value="mdx_net_hq4">⭐ MDX-NET Inst HQ4 (AI Studio - Rất chậm, clip &lt; 10p)</option>
+                                            <option value="mdx_net_hq4">⭐ MDX-NET Inst HQ4 (AI Studio - Rất kỹ, sạch thoại 99.5%)</option>
                                             <option value="mdx_net_hq5">🛡️ MDX-NET Inst HQ5 (Chống vang Reverb/Echo)</option>
-                                            <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal)</option>
+                                            <option value="mdx_net_voc_ft">🎙️ MDX-NET Vocals FT (Trích xuất Vocal trong trẻo)</option>
                                         </select>
                                     </div>
                                     <div>
-                                        <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px;">Phần cứng xử lý:</div>
-                                        <select id="editorStemDevice" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; font-size: 11px; outline: none;">
+                                        <div style="color: #94a3b8; font-size: 10.5px; margin-bottom: 2px; font-weight: 600;">Phần cứng xử lý:</div>
+                                        <select id="editorStemDevice" style="width: 100%; background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 4px; padding: 4px 6px; font-size: 11px; outline: none;">
                                             <option value="auto" selected>✨ Tự động (Ưu tiên GPU)</option>
                                             <option value="cuda">⚡ GPU (NVIDIA CUDA)</option>
                                             <option value="cpu">💻 CPU (Đa luồng Multithread)</option>
                                         </select>
                                     </div>
                                 </div>
-                                <div style="display: flex; gap: 6px; margin-top: 6px;">
-                                    <button type="button" id="btnRunStemSeparationEditor" class="btn secondary small" style="flex: 1; padding: 5px 8px; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; background: rgba(56, 189, 248, 0.1);">
-                                        <span>⚡</span> Tách & Nghe Thử Âm SFX
+                                <div style="display: flex; gap: 6px; margin-top: 4px;">
+                                    <button type="button" id="btnRunStemSeparationEditor" class="btn secondary small" style="flex: 1; padding: 6px 10px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; background: rgba(56, 189, 248, 0.12);">
+                                        <span>⚡</span> Tách & Nghe Thử Âm Thanh
                                     </button>
                                     <button type="button" id="btnCancelStemSeparationEditor" class="btn secondary small" style="display: none; padding: 5px 10px; font-size: 11px; border-color: rgba(239, 68, 68, 0.5); color: #ef4444; background: rgba(239, 68, 68, 0.15); font-weight: 700;" title="Dừng khẩn cấp tiến trình tách âm">
                                         <span>🛑 Dừng khẩn cấp</span>
@@ -869,26 +910,44 @@ input:checked + .slider-toggle:before { transform: translateX(20px); }
                                     </div>
                                 </div>
 
-                                <div id="editorStemResultAudio" style="display: none; margin-top: 6px; padding: 8px 10px; background: rgba(15, 23, 42, 0.95); border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.3); box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-                                    <div style="font-size: 11px; color: #34d399; font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
-                                        <span style="display: inline-flex; align-items: center; gap: 5px;">
+                                <!-- KHU VỰC KẾT QUẢ ĐÃ TÁCH & BỘ ĐIỀU KHIỂN LÀM LẠI TRỰC QUAN -->
+                                <div id="editorStemResultAudio" style="display: none; margin-top: 6px; padding: 10px 12px; background: rgba(15, 23, 42, 0.95); border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.35); box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                                    <div style="font-size: 11px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="display: inline-flex; align-items: center; gap: 5px; color: #34d399; font-weight: 700;">
                                             <span>🎧 Kết quả âm thanh đã tách:</span>
                                         </span>
-                                        <span id="editorStemResultStatus" style="font-size: 10px; background: rgba(52, 211, 153, 0.15); color: #34d399; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(52, 211, 153, 0.3);">Sẵn sàng</span>
+                                        <div style="display: inline-flex; align-items: center; gap: 6px;">
+                                            <button type="button" id="btnStemRedo" style="background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.4); color: #c084fc; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 3px;" title="Tách lại nếu kết quả chưa ưng ý">
+                                                <span>🔄 Tách Lại</span>
+                                            </button>
+                                            <span id="editorStemResultStatus" style="font-size: 10px; background: rgba(52, 211, 153, 0.15); color: #34d399; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(52, 211, 153, 0.3);">Sẵn sàng</span>
+                                        </div>
                                     </div>
-                                    <div id="editorStemTrackSwitcher" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px;">
-                                        <button type="button" id="btnStemTrackClean" class="btn small" style="padding: 3px 4px; font-size: 10.5px; border-radius: 4px; border: 1px solid #38bdf8; color: #38bdf8; background: rgba(56, 189, 248, 0.2); cursor: pointer;" title="Nghe thử âm thanh SFX và nhạc nền đã lọc sạch lời thoại">💥 Đã lọc (SFX)</button>
-                                        <button type="button" id="btnStemTrackBgm" class="btn small" style="padding: 3px 4px; font-size: 10.5px; border-radius: 4px; border: 1px solid #334155; color: #94a3b8; background: #1e293b; cursor: pointer;" title="Nghe thử tệp nhạc nền đã trích xuất">🎵 Nhạc nền (BGM)</button>
-                                        <button type="button" id="btnStemTrackVocal" class="btn small" style="padding: 3px 4px; font-size: 10.5px; border-radius: 4px; border: 1px solid #334155; color: #94a3b8; background: #1e293b; cursor: pointer;" title="Nghe thử tệp giọng thoại đã trích xuất">🎙️ Vocal thoại</button>
+                                    <div id="editorStemTrackSwitcher" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
+                                        <button type="button" id="btnStemTrackClean" class="btn small" style="padding: 5px 6px; font-size: 10.5px; font-weight: 600; border-radius: 4px; border: 1.5px solid #38bdf8; color: #38bdf8; background: rgba(56, 189, 248, 0.2); cursor: pointer;" title="Nghe thử âm thanh SFX và nhạc nền đã lọc sạch lời thoại cũ">💥 Track Âm Nền & SFX (Đã Sạch Thoại)</button>
+                                        <button type="button" id="btnStemTrackVocal" class="btn small" style="padding: 5px 6px; font-size: 10.5px; font-weight: 600; border-radius: 4px; border: 1px solid #334155; color: #94a3b8; background: #1e293b; cursor: pointer;" title="Nghe thử tệp giọng thoại đã trích xuất">🎙️ Track Lời Thoại Gốc (Vocals)</button>
+                                        <button type="button" id="btnStemTrackBgm" style="display: none;"></button>
                                     </div>
-                                    <audio id="editorStemAudioPlayer" controls style="width: 100%; height: 28px; outline: none; margin-bottom: 6px;"></audio>
-                                    <div style="display: flex; gap: 6px;">
-                                        <button type="button" id="btnApplyStemToEditedPreview" class="btn primary small" style="flex: 1; padding: 6px 10px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #10b981); border: none; border-radius: 5px; color: #ffffff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);">
-                                            <span>✨ Áp dụng vào "Bản sau khi sửa"</span>
-                                        </button>
-                                        <button type="button" id="btnRemoveStemFromEditedPreview" class="btn secondary small" style="display: none; padding: 6px 10px; font-size: 11px; border-color: rgba(239, 68, 68, 0.4); color: #ef4444; background: rgba(239, 68, 68, 0.1);" title="Hủy áp dụng và nghe lại âm thanh gốc của video">
-                                            <span>Khôi phục âm gốc</span>
-                                        </button>
+                                    <div id="editorStemTrackDesc" style="font-size: 10px; color: #7dd3fc; margin-bottom: 6px; line-height: 1.35; padding: 4px 8px; background: rgba(14, 165, 233, 0.08); border-radius: 4px;">
+                                        👉 Đang chọn: <b>Track Âm Nền & SFX</b> (đã lọc sạch giọng thoại cũ, bảo lưu tiếng động hiện trường). Nhấn nút bên dưới để áp dụng vào video.
+                                    </div>
+                                    <audio id="editorStemAudioPlayer" controls style="width: 100%; height: 28px; outline: none; margin-bottom: 8px;"></audio>
+                                    
+                                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                                        <div style="display: flex; gap: 6px;">
+                                            <button type="button" id="btnApplyStemToEditedPreview" class="btn primary small" style="flex: 1; padding: 6px 10px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #0ea5e9, #10b981); border: none; border-radius: 5px; color: #ffffff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);">
+                                                <span>✨ Áp dụng Track Này vào "Bản sau khi sửa"</span>
+                                            </button>
+                                            <button type="button" id="btnRemoveStemFromEditedPreview" class="btn secondary small" style="display: none; padding: 6px 10px; font-size: 11px; border-color: rgba(239, 68, 68, 0.4); color: #ef4444; background: rgba(239, 68, 68, 0.1);" title="Hủy áp dụng và khôi phục âm thanh gốc nguyên bản của video">
+                                                <span>Khôi phục âm gốc</span>
+                                            </button>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 4px; border-top: 1px dashed rgba(51, 65, 85, 0.6);">
+                                            <span id="editorStemAppliedBadge" style="font-size: 10px; color: #94a3b8;">Chưa áp dụng vào video</span>
+                                            <button type="button" id="btnStemResetResults" style="background: none; border: none; color: #ef4444; font-size: 10px; cursor: pointer; padding: 2px 4px; text-decoration: underline;" title="Xóa kết quả này và làm lại">
+                                                🗑️ Xóa kết quả & Khôi phục âm gốc
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

@@ -1227,6 +1227,52 @@ if (editorStemSeparationEnabled && editorStemConfig) {
     });
 }
 
+// AI Stem & Vocal Separation Preset Selector & Handlers
+const stemPresetRadios = document.querySelectorAll('input[name="stemTargetPreset"]');
+const stemCards = {
+    'remove_vocal_keep_sfx': document.getElementById('stemCardRemoveVocal'),
+    'extract_vocal_only': document.getElementById('stemCardExtractVocal'),
+    'split_both': document.getElementById('stemCardSplitBoth')
+};
+
+function updateStemPresetUI(selectedVal) {
+    Object.keys(stemCards).forEach(key => {
+        const card = stemCards[key];
+        if (!card) return;
+        if (key === selectedVal) {
+            card.style.background = 'rgba(14, 165, 233, 0.16)';
+            card.style.borderColor = '#0284c7';
+        } else {
+            card.style.background = 'rgba(30, 41, 59, 0.6)';
+            card.style.borderColor = '#334155';
+        }
+    });
+
+    const hiddenRemoveVocals = document.getElementById('editorRemoveVocals');
+    const hiddenKeepSfx = document.getElementById('editorKeepSfx');
+    const hiddenSeparateBgm = document.getElementById('editorSeparateBgm');
+
+    if (selectedVal === 'remove_vocal_keep_sfx') {
+        if (hiddenRemoveVocals) hiddenRemoveVocals.checked = true;
+        if (hiddenKeepSfx) hiddenKeepSfx.checked = true;
+        if (hiddenSeparateBgm) hiddenSeparateBgm.checked = true;
+    } else if (selectedVal === 'extract_vocal_only') {
+        if (hiddenRemoveVocals) hiddenRemoveVocals.checked = false;
+        if (hiddenKeepSfx) hiddenKeepSfx.checked = false;
+        if (hiddenSeparateBgm) hiddenSeparateBgm.checked = false;
+    } else { // split_both
+        if (hiddenRemoveVocals) hiddenRemoveVocals.checked = true;
+        if (hiddenKeepSfx) hiddenKeepSfx.checked = true;
+        if (hiddenSeparateBgm) hiddenSeparateBgm.checked = true;
+    }
+}
+
+stemPresetRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        updateStemPresetUI(e.target.value);
+    });
+});
+
 const btnRunStemSeparationEditor = document.getElementById('btnRunStemSeparationEditor');
 const btnCancelStemSeparationEditor = document.getElementById('btnCancelStemSeparationEditor');
 const btnToggleStemLogEditor = document.getElementById('btnToggleStemLogEditor');
@@ -1276,6 +1322,14 @@ if (btnRunStemSeparationEditor) {
         const logBox = document.getElementById('editorStemLogContainer');
         const logCount = document.getElementById('editorStemLogCount');
         const hwBadge = document.getElementById('editorStemHardwareBadge');
+        const resultBox = document.getElementById('editorStemResultAudio');
+        const player = document.getElementById('editorStemAudioPlayer');
+
+        // Tạm dừng player cũ và ẩn kết quả cũ khi bắt đầu lượt tách mới
+        if (player) {
+            try { player.pause(); player.src = ''; } catch (_) {}
+        }
+        if (resultBox) resultBox.style.display = 'none';
 
         if (progressBox) progressBox.style.display = 'block';
         if (progressBarFill) progressBarFill.style.width = '5%';
@@ -1292,7 +1346,7 @@ if (btnRunStemSeparationEditor) {
             btnCancelStemSeparationEditor.innerHTML = '<span>🛑 Dừng khẩn cấp</span>';
         }
 
-        showToast('🎛️ Đang chạy tách lời thoại cũ và bảo lưu tiếng động SFX...', 'info');
+        showToast('🎛️ Đang phân tích và tách các dải âm thanh AI...', 'info');
 
         let pollTimer = null;
         try {
@@ -1315,7 +1369,7 @@ if (btnRunStemSeparationEditor) {
             if (!data.success) {
                 showToast(`❌ Lỗi: ${data.error || 'Không thể khởi động'}`, 'error');
                 btnRunStemSeparationEditor.disabled = false;
-                btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm SFX';
+                btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm Thanh';
                 if (btnCancelStemSeparationEditor) btnCancelStemSeparationEditor.style.display = 'none';
                 return;
             }
@@ -1352,64 +1406,124 @@ if (btnRunStemSeparationEditor) {
                             if (progressPercent) progressPercent.textContent = '100%';
                             if (progressStatus) progressStatus.textContent = '✅ Đã hoàn tất tách âm thanh!';
                             appendLog('✅ Đã hoàn tất tách và lọc âm thanh AI!', 'success');
-                            showToast('🎉 Đã tách và lọc âm thanh AI thành công!', 'success');
+                            showToast('🎉 Đã tách âm thanh thành công! Bạn có thể nghe thử và áp dụng.', 'success');
 
-                            const resultBox = document.getElementById('editorStemResultAudio');
-                            const player = document.getElementById('editorStemAudioPlayer');
                             const btnApplyStem = document.getElementById('btnApplyStemToEditedPreview');
                             const btnRemoveStem = document.getElementById('btnRemoveStemFromEditedPreview');
-                            if (resultBox && player && pData.result && (pData.result.cleaned_url || pData.result.instrumental_url || pData.result.bgm_url)) {
+                            const btnClean = document.getElementById('btnStemTrackClean');
+                            const btnVocal = document.getElementById('btnStemTrackVocal');
+                            const trackDesc = document.getElementById('editorStemTrackDesc');
+                            const appliedBadge = document.getElementById('editorStemAppliedBadge');
+                            const btnStemRedo = document.getElementById('btnStemRedo');
+                            const btnStemResetResults = document.getElementById('btnStemResetResults');
+
+                            if (resultBox && player && pData.result && (pData.result.cleaned_url || pData.result.instrumental_url || pData.result.vocals_url)) {
                                 window._stemSeparationResult = pData.result;
-                                window._appliedStemAudioUrl = pData.result.cleaned_url || pData.result.instrumental_url;
-                                window._appliedStemCleanedPath = pData.result.cleaned_path || pData.result.instrumental_path;
                                 resultBox.style.display = 'block';
 
-                                const btnClean = document.getElementById('btnStemTrackClean');
-                                const btnBgm = document.getElementById('btnStemTrackBgm');
-                                const btnVocal = document.getElementById('btnStemTrackVocal');
+                                const cleanUrl = pData.result.cleaned_url || pData.result.instrumental_url;
+                                const cleanPath = pData.result.cleaned_path || pData.result.instrumental_path;
+                                const vocalUrl = pData.result.vocals_url;
+                                const vocalPath = pData.result.vocals_path;
 
-                                const setTrackActive = (btnActive, url, path) => {
-                                    [btnClean, btnBgm, btnVocal].forEach(b => {
-                                        if (b) {
-                                            b.style.borderColor = '#334155';
-                                            b.style.color = '#94a3b8';
-                                            b.style.background = '#1e293b';
-                                        }
-                                    });
-                                    if (btnActive) {
-                                        btnActive.style.borderColor = '#38bdf8';
-                                        btnActive.style.color = '#38bdf8';
-                                        btnActive.style.background = 'rgba(56, 189, 248, 0.2)';
+                                let currentActiveTrackName = 'Track Âm Nền & SFX';
+
+                                const setTrackActive = (activeType) => {
+                                    const isClean = activeType === 'clean';
+                                    currentActiveTrackName = isClean ? 'Track Âm Nền & SFX' : 'Track Lời Thoại Gốc';
+                                    const targetUrl = isClean ? cleanUrl : vocalUrl;
+                                    const targetPath = isClean ? cleanPath : vocalPath;
+
+                                    if (btnClean) {
+                                        btnClean.style.borderColor = isClean ? '#38bdf8' : '#334155';
+                                        btnClean.style.color = isClean ? '#38bdf8' : '#94a3b8';
+                                        btnClean.style.background = isClean ? 'rgba(56, 189, 248, 0.2)' : '#1e293b';
                                     }
-                                    if (player && url) {
-                                        player.src = url;
+                                    if (btnVocal) {
+                                        btnVocal.style.borderColor = !isClean ? '#38bdf8' : '#334155';
+                                        btnVocal.style.color = !isClean ? '#38bdf8' : '#94a3b8';
+                                        btnVocal.style.background = !isClean ? 'rgba(56, 189, 248, 0.2)' : '#1e293b';
+                                    }
+
+                                    if (trackDesc) {
+                                        trackDesc.innerHTML = isClean
+                                            ? '👉 Đang chọn: <b>Track Âm Nền & SFX</b> (đã lọc sạch giọng thoại cũ, bảo lưu tiếng động hiện trường). Nhấn nút bên dưới để áp dụng vào video.'
+                                            : '👉 Đang chọn: <b>Track Lời Thoại Gốc</b> (giọng nói / lời thoại đã trích xuất sạch sẽ).';
+                                    }
+
+                                    if (player && targetUrl) {
+                                        player.src = targetUrl;
                                         player.load();
                                         player.play().catch(() => {});
                                     }
-                                    window._appliedStemAudioUrl = url;
-                                    window._appliedStemCleanedPath = path;
-                                    if (window._syncedStemAudioPlayer && url) {
-                                        window._syncedStemAudioPlayer.src = url;
+
+                                    window._appliedStemAudioUrl = targetUrl;
+                                    window._appliedStemCleanedPath = targetPath;
+                                    if (window._syncedStemAudioPlayer && targetUrl) {
+                                        window._syncedStemAudioPlayer.src = targetUrl;
                                         window._syncedStemAudioPlayer.load();
                                     }
+
                                     if (btnApplyStem) {
-                                        btnApplyStem.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
+                                        btnApplyStem.innerHTML = `<span>✨ Áp dụng ${currentActiveTrackName} vào Video</span>`;
                                         btnApplyStem.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
                                     }
-                                    if (btnRemoveStem) btnRemoveStem.style.display = 'none';
                                 };
 
                                 if (btnClean) {
-                                    btnClean.onclick = () => setTrackActive(btnClean, pData.result.cleaned_url || pData.result.instrumental_url, pData.result.cleaned_path || pData.result.instrumental_path);
-                                }
-                                if (btnBgm) {
-                                    btnBgm.onclick = () => setTrackActive(btnBgm, pData.result.bgm_url || pData.result.instrumental_url, pData.result.bgm_path || pData.result.instrumental_path);
+                                    btnClean.onclick = () => setTrackActive('clean');
                                 }
                                 if (btnVocal) {
-                                    btnVocal.onclick = () => setTrackActive(btnVocal, pData.result.vocals_url, pData.result.vocals_path);
+                                    btnVocal.onclick = () => setTrackActive('vocal');
                                 }
 
-                                setTrackActive(btnClean, pData.result.cleaned_url || pData.result.instrumental_url, pData.result.cleaned_path || pData.result.instrumental_path);
+                                // Mặc định chọn track theo Preset
+                                const currentPreset = document.querySelector('input[name="stemTargetPreset"]:checked')?.value;
+                                if (currentPreset === 'extract_vocal_only') {
+                                    setTrackActive('vocal');
+                                } else {
+                                    setTrackActive('clean');
+                                }
+
+                                // Nút [🔄 Tách Lại]
+                                if (btnStemRedo) {
+                                    btnStemRedo.onclick = () => {
+                                        if (player) {
+                                            try { player.pause(); } catch (_) {}
+                                        }
+                                        resultBox.style.display = 'none';
+                                        if (progressBox) progressBox.style.display = 'none';
+                                        btnRunStemSeparationEditor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                        showToast('ℹ️ Đã mở lại thiết lập. Bạn có thể đổi mô hình hoặc mục đích lọc rồi bấm Tách lại bất cứ lúc nào!', 'info');
+                                    };
+                                }
+
+                                // Nút [🗑️ Xóa kết quả & Khôi phục âm gốc]
+                                if (btnStemResetResults) {
+                                    btnStemResetResults.onclick = () => {
+                                        if (player) {
+                                            try { player.pause(); player.src = ''; } catch (_) {}
+                                        }
+                                        window._isStemAudioAppliedToEdited = false;
+                                        window._appliedStemAudioUrl = null;
+                                        window._appliedStemCleanedPath = null;
+                                        if (window._syncedStemAudioPlayer) {
+                                            window._syncedStemAudioPlayer.pause();
+                                            window._syncedStemAudioPlayer.src = '';
+                                        }
+                                        if (videoPlayer) {
+                                            videoPlayer.muted = false;
+                                        }
+                                        resultBox.style.display = 'none';
+                                        if (progressBox) progressBox.style.display = 'none';
+                                        if (appliedBadge) {
+                                            appliedBadge.textContent = 'Đang dùng âm thanh gốc của video';
+                                            appliedBadge.style.color = '#94a3b8';
+                                        }
+                                        if (btnRemoveStem) btnRemoveStem.style.display = 'none';
+                                        showToast('🗑️ Đã xóa kết quả tách và khôi phục âm thanh gốc nguyên bản của video!', 'info');
+                                    };
+                                }
                             }
                             resolve();
                         } else if (pData.status === 'cancelled') {
@@ -1434,7 +1548,7 @@ if (btnRunStemSeparationEditor) {
         } finally {
             if (pollTimer) clearInterval(pollTimer);
             btnRunStemSeparationEditor.disabled = false;
-            btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm SFX';
+            btnRunStemSeparationEditor.innerHTML = '<span>⚡</span> Tách & Nghe Thử Âm Thanh';
             if (btnCancelStemSeparationEditor) btnCancelStemSeparationEditor.style.display = 'none';
         }
     });
@@ -3553,6 +3667,12 @@ if (btnApplyStemToEdited) {
         btnApplyStemToEdited.style.background = '#059669';
         if (btnRemoveStemFromEdited) btnRemoveStemFromEdited.style.display = 'inline-flex';
 
+        const appliedBadge = document.getElementById('editorStemAppliedBadge');
+        if (appliedBadge) {
+            appliedBadge.textContent = '✅ Đang áp dụng vào video';
+            appliedBadge.style.color = '#34d399';
+        }
+
         // Tự động chuyển sang xem tab "Bản sau khi sửa"
         if (btnPreviewEdited) {
             btnPreviewEdited.click();
@@ -3584,6 +3704,11 @@ if (btnRemoveStemFromEdited) {
         if (btnApplyStemToEdited) {
             btnApplyStemToEdited.innerHTML = '<span>✨ Áp dụng vào "Bản sau khi sửa"</span>';
             btnApplyStemToEdited.style.background = 'linear-gradient(135deg, #0ea5e9, #10b981)';
+        }
+        const appliedBadge = document.getElementById('editorStemAppliedBadge');
+        if (appliedBadge) {
+            appliedBadge.textContent = 'Đang dùng âm thanh gốc của video';
+            appliedBadge.style.color = '#94a3b8';
         }
         btnRemoveStemFromEdited.style.display = 'none';
         showToast('ℹ️ Đã khôi phục âm thanh gốc của video khi xem Bản sau khi sửa.', 'info');

@@ -9,7 +9,34 @@
 
 ## 🚀 CÁC THAY ĐỔI ĐANG CHỜ PHÁT HÀNH
 
-*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.9)*
+*(Hiện tại chưa có thay đổi mới nào đang chờ. Mọi tính năng và bản sửa lỗi đã được đóng gói và phát hành trong bản v1.3.10)*
+
+---
+
+## 📦 ĐÃ PHÁT HÀNH TRONG BẢN v1.3.10 (31/10/2026)
+
+- **Tái thiết kế giao diện Trực Quan Hóa Tách & Lọc Âm Gốc AI (Stem Separator), bổ sung nút Tách Lại / Xóa Kết Quả và sửa triệt để lỗi Player 0:00/0:00 (31/10/2026) (`mdx_separator.py`, `web/index.html`, `web/app.js`, `patches/active/...`, `release/NovaCut/...`):**
+  - **Triệu chứng & Vấn đề người dùng phản ánh:**
+    1. Khi người dùng tách âm nhưng kết quả không theo ý muốn, giao diện không có nút làm lại hoặc khôi phục âm thanh gốc, gây bế tắc trong quá trình biên tập.
+    2. Các hộp kiểm (checkbox) trước đây ghi nhiều câu từ phủ định/khẳng định chồng chéo ("Loại bỏ lời thoại cũ", "Giữ lại tiếng động môi trường", "Tách nhạc nền") khiến người dùng bối rối không biết chọn bỏ cái gì và giữ lại cái gì.
+    3. Trình phát nghe thử hiển thị `0:00 / 0:00` và không thể phát hoặc tua thời gian trên trình duyệt đối với các tệp tách ra.
+    4. Giao diện hiển thị tới 3 nút track nghe thử gây hiểu lầm trong khi mô hình AI tách 2-stem chỉ tạo ra 2 luồng âm (Nhạc nền/SFX vs Giọng thoại).
+  - **Giải pháp & Cải tiến đã triển khai:**
+    1. *Thiết kế lại giao diện lựa chọn dạng thẻ Preset trực quan (Interactive Preset Cards):*
+       - Thay thế toàn bộ checkbox khó hiểu bằng 3 thẻ chọn lớn có viền sáng neon, biểu tượng minh họa rõ ràng:
+         - **Thẻ 1 (Khuyên Dùng):** 🎬 *Xóa Giọng Thoại Cũ — Giữ SFX & Nhạc Nền* (❌ Bỏ: Giọng nói cũ | ✅ Giữ: Tiếng động hành động, súng đạn, bước chân, nhạc nền).
+         - **Thẻ 2:** 🎙️ *Chỉ Giữ Lời Thoại — Xóa Nhạc & SFX* (✅ Giữ: Giọng nói nhân vật sạch sẽ | ❌ Bỏ: Mọi nhạc nền và tiếng ồn môi trường).
+         - **Thẻ 3:** 🎛️ *Tách Đa Luồng (Tách cả 2 để tự nghe & chọn)* (Xuất đồng thời cả track Âm Nền & SFX và track Lời Thoại để linh hoạt chuyển đổi).
+    2. *Bổ sung đầy đủ nút thao tác Làm Lại & Khôi Phục:*
+       - Thêm nút **"🔄 Tách Lại"**: Tự động đưa giao diện về trạng thái thiết lập để người dùng có thể đổi mô hình (Deep Learning UVR-MDX hoặc Siêu Tốc DSP Turbo) và chọn lại preset tách mà không cần tải lại video hay thao tác lại từ đầu.
+       - Thêm nút **"🗑️ Xóa kết quả & Khôi phục âm gốc"**: Hủy bỏ kết quả tách, đặt lại toàn bộ trạng thái âm thanh về video gốc nguyên bản, tắt đồng bộ âm thanh tách rời.
+    3. *Khắc phục triệt để lỗi trình phát hiển thị `0:00 / 0:00`:*
+       - Trong `mdx_separator.py`, sửa đổi hàm lưu âm thanh từ định dạng 32-bit Float (`WAVE_FORMAT_IEEE_FLOAT` - format 3) vốn không được trình phát HTML5 `<audio>` của WebView2/Chromium hỗ trợ đầy đủ về định dạng chuẩn **16-bit PCM** (`PCM_S16` - format 1).
+       - File xuất ra chuẩn hóa `sampwidth=2`, tương thích 100% với mọi trình duyệt, cho phép kéo tua thời gian mượt mà, đồng thời giảm 50% dung lượng tệp bộ nhớ đệm.
+    4. *Tối ưu hóa bảng kết quả & đồng bộ trạng thái:*
+       - Tinh gọn thành 2 track nghe thử rõ ràng: **"Track Âm Nền & SFX"** và **"Track Lời Thoại Gốc"**, kèm dòng giải thích trực quan track đang chọn dùng để làm gì.
+       - Cập nhật huy hiệu trạng thái `editorStemAppliedBadge` theo thời gian thực (hiển thị rõ đang dùng âm thanh gốc hay đang áp dụng âm SFX vào video).
+    5. *Đồng bộ toàn diện:* Đã kiểm tra và đồng bộ toàn bộ thay đổi sang thư mục `patches/active/` và `release/NovaCut/`.
 
 ---
 

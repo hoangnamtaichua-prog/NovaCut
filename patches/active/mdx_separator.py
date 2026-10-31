@@ -466,10 +466,13 @@ def separate_stems_mdx(
         inst_np   = orig_wav_np - vocals_np
 
     if progress_cb:
-        progress_cb(92, "Đang xuất âm thanh PCM 16-bit...")
+        progress_cb(92, "Đang xuất âm thanh chuẩn PCM 16-bit...")
 
-    torchaudio.save(vocals_path, torch.from_numpy(np.ascontiguousarray(vocals_np, dtype=np.float32)), sr)
-    torchaudio.save(instrumental_path, torch.from_numpy(np.ascontiguousarray(inst_np, dtype=np.float32)), sr)
+    # Chuẩn hóa về PCM 16-bit (WAVE Format 1) tương thích 100% với trình duyệt HTML5 Audio Player
+    inst_16 = np.clip(inst_np * 32767.0, -32768.0, 32767.0).astype(np.int16)
+    voc_16 = np.clip(vocals_np * 32767.0, -32768.0, 32767.0).astype(np.int16)
+    torchaudio.save(vocals_path, torch.from_numpy(voc_16), sr, encoding="PCM_S", bits_per_sample=16)
+    torchaudio.save(instrumental_path, torch.from_numpy(inst_16), sr, encoding="PCM_S", bits_per_sample=16)
 
     if remove_bgm and not remove_vocals:
         clean_bg_path = vocals_path
